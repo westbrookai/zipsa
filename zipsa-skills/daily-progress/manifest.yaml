@@ -1,0 +1,71 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: daily-progress
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Summarize today's Claude Code sessions across all projects
+    and log them to a Notion daily progress database.
+  tags: [productivity, notion, claude-code]
+
+spec:
+  purpose: |
+    For the current date, find all Claude Code sessions that had activity today,
+    summarize what was worked on per project, and write a structured entry to
+    the Westbrook AI HQ Notion workspace.
+
+  instructions: ./SKILL.md
+
+  model:
+    name: claude-opus-4-7
+
+  # MCP servers used by this skill
+  mcp:
+    # Local stdio: read Claude Code session logs
+    - name: sessions
+      type: stdio
+      runtime: node
+      package: "@modelcontextprotocol/server-filesystem"
+      version: ^0.5.0
+      args: ["/host-claude-projects"]
+      mount:
+        host: "~/.claude/projects"
+        container: "/host-claude-projects"
+        mode: ro
+
+    # Remote http: write to Notion
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      connection: notion
+
+    - name: githubcopilot
+      type: http
+      url: https://api.githubcopilot.com/mcp
+      connection: githubcopilot
+
+  # Tools whitelist — only these are allowed
+  tools:
+    builtin: []
+    mcp:
+      - sessions:read_file
+      - sessions:list_directory
+      - sessions:directory_tree
+      - notion:notion-search
+      - notion:notion-create-database
+      - notion:notion-create-pages
+      - notion:notion-update-page
+      - notion:notion-fetch
+
+  # Skill-specific configuration
+  config:
+    workspace_name: "Westbrook AI HQ"
+    db_name: "zipsa-daily-log"
+    db_search_strategy: notion_search
+    timezone: "Australia/Sydney"
+
+  limits:
+    max_turns: 20
+    max_cost_usd: 0.50
+    timeout_seconds: 180

@@ -1,0 +1,82 @@
+"""Pydantic models for skill manifest parsing and validation."""
+
+from pydantic import BaseModel, Field
+from typing import Literal, Optional
+
+
+class SkillMetadata(BaseModel):
+    """Skill metadata section."""
+
+    name: str
+    version: str
+    author: Optional[str] = None
+    description: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class VolumeMount(BaseModel):
+    """Volume mount configuration for containers."""
+
+    host: str  # Host path (e.g., ~/.claude/projects)
+    container: str  # Container path (e.g., /host-claude-projects)
+    mode: Literal["ro", "rw"] = "ro"  # Mount mode
+
+
+class MCPServerStdio(BaseModel):
+    """Stdio MCP server configuration."""
+
+    name: str
+    type: Literal["stdio"]
+    command: str  # Command to run (npx, uvx, python, etc.)
+    args: list[str]  # Command arguments
+    mount: Optional[VolumeMount] = None
+
+
+class MCPServerHTTP(BaseModel):
+    """HTTP MCP server configuration."""
+
+    name: str
+    type: Literal["http"]
+    url: str  # HTTP endpoint URL
+    connection: Optional[str] = None  # Connection name
+
+
+# Union type for MCP servers
+MCPServer = MCPServerStdio | MCPServerHTTP
+
+
+class SkillTools(BaseModel):
+    """Tool whitelist configuration."""
+
+    builtin: list[str] = Field(default_factory=list)  # Built-in tools
+    mcp: list[str] = Field(default_factory=list)  # MCP tools (server:method)
+
+
+class SkillLimits(BaseModel):
+    """Resource limits for skill execution."""
+
+    max_turns: Optional[int] = None
+    max_cost_usd: Optional[float] = None
+    timeout_seconds: Optional[int] = None
+
+
+class SkillSpec(BaseModel):
+    """Skill specification."""
+
+    purpose: str  # Skill purpose description
+    instructions: str  # Path to SKILL.md
+    model: Optional[dict] = None  # Model configuration
+    tools: SkillTools = Field(default_factory=SkillTools)
+    mcp: list[MCPServer] = Field(default_factory=list)
+    limits: Optional[SkillLimits] = None
+    config: dict = Field(default_factory=dict)  # Skill-specific config
+    network: Optional[dict] = None  # Network allow list
+
+
+class SkillManifest(BaseModel):
+    """Complete skill manifest."""
+
+    apiVersion: str
+    kind: Literal["Skill"]
+    metadata: SkillMetadata
+    spec: SkillSpec

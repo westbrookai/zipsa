@@ -1,0 +1,31 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: weather
+  version: 0.1.0
+  author: westbrookai
+  description: Reports current weather conditions for any location worldwide.
+  tags: [weather, utility]
+
+spec:
+  purpose: |
+    Answer current weather queries for any location.
+    Refuse anything not directly weather-related.
+
+  instructions: ./SKILL.md
+
+  model:
+    name: claude-opus-4-7
+
+  tools:
+    builtin:
+      - WebFetch
+
+  network:
+    allow:
+      - wttr.in
+
+  limits:
+    max_turns: 5
+    max_cost_usd: 0.05
+    timeout_seconds: 30
