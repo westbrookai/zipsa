@@ -97,10 +97,13 @@ class Skill:
                     "args": server.args,
                 }
             elif server.type == "http":
-                config["mcpServers"][server.name] = {
+                server_config = {
                     "type": "http",
                     "url": server.url,
                 }
+                if server.connection:
+                    server_config["connection"] = server.connection
+                config["mcpServers"][server.name] = server_config
 
         return config
 
