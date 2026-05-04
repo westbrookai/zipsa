@@ -2,7 +2,9 @@
 
 import json
 import subprocess
+import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -57,6 +59,13 @@ class DockerExecutor:
         temp_dir = self.workspace / ".zipsa"
         temp_dir.mkdir(exist_ok=True)
 
+        # Create run directory for logging (skip for dry-run)
+        run_dir = None
+        if not dry_run:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
+            run_dir = skill.skill_dir / ".zipsa" / "runs" / timestamp
+            run_dir.mkdir(parents=True, exist_ok=True)
+
         # Create temp MCP config file
         mcp_config_path = temp_dir / f"mcp-config-{id(self)}.json"
         mcp_config = skill.build_mcp_config()
@@ -73,7 +82,7 @@ class DockerExecutor:
                 return None
 
             # Execute and return generator
-            return self._execute_skill(docker_cmd, mcp_config_path)
+            return self._execute_skill(docker_cmd, mcp_config_path, skill, run_dir)
 
         except Exception:
             # Cleanup on error
@@ -85,13 +94,15 @@ class DockerExecutor:
                 mcp_config_path.unlink(missing_ok=True)
 
     def _execute_skill(
-        self, docker_cmd: list[str], mcp_config_path: Path
+        self, docker_cmd: list[str], mcp_config_path: Path, skill: Skill, run_dir: Optional[Path]
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
         Args:
             docker_cmd: Docker command array
             mcp_config_path: Path to temp MCP config file
+            skill: Skill being executed
+            run_dir: Directory to save run logs (None to skip logging)
 
         Yields:
             Parsed output events
