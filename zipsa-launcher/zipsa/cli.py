@@ -24,12 +24,17 @@ app = typer.Typer(
 GRAY = "\033[90m"
 RESET = "\033[0m"
 
+# Global turn counter
+_current_turn = 0
+
 
 def format_event(event: dict) -> Optional[str]:
     """Format important events for user-friendly display.
 
     Returns formatted string or None if event should be skipped.
     """
+    global _current_turn
+
     event_type = event.get("type")
 
     # Skip system and rate_limit events
@@ -47,44 +52,40 @@ def format_event(event: dict) -> Optional[str]:
         first_content = content[0]
         content_type = first_content.get("type")
 
-        # Thinking
+        # Thinking - indicates new turn
         if content_type == "thinking":
+            _current_turn += 1
             thinking = first_content.get("thinking", "")
-            return f"\n{GRAY}Thinking:{RESET} {thinking}"
+            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Thinking:{RESET} {thinking}"
 
-        # Tool use
+        # Tool use (same turn, no turn increment)
         elif content_type == "tool_use":
             tool_name = first_content.get("name", "Unknown")
             tool_input = first_content.get("input", {})
 
             # Format input nicely
             if "url" in tool_input:
-                detail = f"url={tool_input['url'][:60]}..."
+                detail = f"url={tool_input['url']}"
             elif "query" in tool_input:
                 detail = f"query=\"{tool_input['query']}\""
             elif "prompt" in tool_input:
-                prompt = tool_input["prompt"]
-                if len(prompt) > 50:
-                    prompt = prompt[:50] + "..."
-                detail = f"prompt=\"{prompt}\""
+                detail = f"prompt=\"{tool_input['prompt']}\""
             else:
                 # Show first key-value pair
                 items = list(tool_input.items())
                 if items:
                     key, val = items[0]
-                    val_str = str(val)
-                    if len(val_str) > 40:
-                        val_str = val_str[:40] + "..."
-                    detail = f"{key}={val_str}"
+                    detail = f"{key}={val}"
                 else:
                     detail = ""
 
             return f"\n{GRAY}Tool:{RESET} {tool_name}\n  {detail}"
 
-        # Final text response
+        # Final text response (new turn if no thinking)
         elif content_type == "text":
+            _current_turn += 1
             text = first_content.get("text", "")
-            return f"\n{GRAY}Answer:{RESET} {text}"
+            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Answer:{RESET} {text}"
 
     # Tool results (user role)
     elif event_type == "user":
@@ -105,8 +106,6 @@ def format_event(event: dict) -> Optional[str]:
                 return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
             elif "result" in tool_result:
                 result = tool_result["result"]
-                if len(result) > 80:
-                    result = result[:80] + "..."
                 return f"{GRAY}Result:{RESET} {result}"
             elif "code" in tool_result:
                 code = tool_result.get("code")
@@ -116,8 +115,6 @@ def format_event(event: dict) -> Optional[str]:
                 # Generic result
                 content_result = first_content.get("content", "")
                 if isinstance(content_result, str):
-                    if len(content_result) > 80:
-                        content_result = content_result[:80] + "..."
                     return f"{GRAY}Result:{RESET} {content_result}"
                 else:
                     return f"{GRAY}Result:{RESET} Success"
@@ -202,6 +199,10 @@ def run(
         if output is None:
             # Dry run mode
             return
+
+        # Reset turn counter for new execution
+        global _current_turn
+        _current_turn = 0
 
         # Stream output
         for event in output:
