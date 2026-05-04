@@ -108,11 +108,16 @@ class DockerExecutor:
             Parsed output events
 
         Raises:
-            RuntimeError: If Docker execution fails
+            RuntimeError: If Docker execution fails or limits exceeded
         """
         output_file = None
         if run_dir:
             output_file = run_dir / "output.jsonl"
+
+        # Get limits from skill manifest
+        limits = skill.manifest.spec.limits
+        turn_count = 0
+        cost_exceeded = False
 
         try:
             # Execute Docker
@@ -123,7 +128,7 @@ class DockerExecutor:
                 text=True,
             )
 
-            # Stream output through runtime parser
+            # Stream output through runtime parser with limits checking
             raw_stream = iter(process.stdout.readline, "")
 
             # Save to file while parsing
@@ -136,13 +141,73 @@ class DockerExecutor:
 
                             # Parse and yield
                             parsed_events = self.runtime.parse_output([line])
-                            yield from parsed_events
-            else:
-                # No logging - just parse and yield
-                parsed_stream = self.runtime.parse_output(raw_stream)
-                yield from parsed_stream
+                            for event in parsed_events:
+                                # Check max_turns limit
+                                if limits and limits.max_turns:
+                                    if event.get("type") == "assistant":
+                                        message = event.get("message", {})
+                                        content = message.get("content", [])
+                                        if content and content[0].get("type") == "thinking":
+                                            turn_count += 1
+                                            if turn_count > limits.max_turns:
+                                                process.terminate()
+                                                raise RuntimeError(
+                                                    f"Exceeded max_turns: {limits.max_turns}"
+                                                )
 
-            process.wait()
+                                # Check max_cost limit (post-execution validation)
+                                if limits and limits.max_cost_usd:
+                                    if event.get("type") == "result":
+                                        actual_cost = event.get("total_cost_usd", 0)
+                                        if actual_cost > limits.max_cost_usd:
+                                            cost_exceeded = True
+                                            print(
+                                                f"Warning: Cost ${actual_cost:.4f} exceeded limit ${limits.max_cost_usd:.4f}",
+                                                file=sys.stderr
+                                            )
+
+                                yield event
+            else:
+                # No logging - just parse and yield with limits checking
+                for line in raw_stream:
+                    if line:
+                        parsed_events = self.runtime.parse_output([line])
+                        for event in parsed_events:
+                            # Check max_turns limit
+                            if limits and limits.max_turns:
+                                if event.get("type") == "assistant":
+                                    message = event.get("message", {})
+                                    content = message.get("content", [])
+                                    if content and content[0].get("type") == "thinking":
+                                        turn_count += 1
+                                        if turn_count > limits.max_turns:
+                                            process.terminate()
+                                            raise RuntimeError(
+                                                f"Exceeded max_turns: {limits.max_turns}"
+                                            )
+
+                            # Check max_cost limit
+                            if limits and limits.max_cost_usd:
+                                if event.get("type") == "result":
+                                    actual_cost = event.get("total_cost_usd", 0)
+                                    if actual_cost > limits.max_cost_usd:
+                                        cost_exceeded = True
+                                        print(
+                                            f"Warning: Cost ${actual_cost:.4f} exceeded limit ${limits.max_cost_usd:.4f}",
+                                            file=sys.stderr
+                                        )
+
+                            yield event
+
+            # Wait for process with timeout
+            timeout = limits.timeout_seconds if limits else None
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                raise RuntimeError(
+                    f"Execution timed out after {timeout} seconds"
+                )
 
             if process.returncode != 0:
                 raise RuntimeError(
@@ -154,7 +219,7 @@ class DockerExecutor:
             if run_dir:
                 try:
                     self._save_summary(run_dir)
-                    self._save_metadata(run_dir, skill)
+                    self._save_metadata(run_dir, skill, cost_exceeded, limits)
                 except Exception as e:
                     # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
@@ -205,7 +270,7 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
-    def _save_metadata(self, run_dir: Path, skill: Skill) -> None:
+    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits = None) -> None:
         """Extract metrics from output.jsonl and save to metadata.json.
 
         Extracts execution metrics from the result event.
@@ -213,6 +278,8 @@ class DockerExecutor:
         Args:
             run_dir: Run directory containing output.jsonl
             skill: Skill that was executed
+            cost_exceeded: Whether cost limit was exceeded
+            limits: Skill limits configuration
         """
         output_file = run_dir / "output.jsonl"
         metadata_file = run_dir / "metadata.json"
@@ -259,6 +326,11 @@ class DockerExecutor:
                 "usage": result_event.get("usage", {}),
                 "model_usage": result_event.get("modelUsage", {})
             }
+
+        # Add limit information if applicable
+        if limits and limits.max_cost_usd:
+            metadata["cost_exceeded"] = cost_exceeded
+            metadata["cost_limit_usd"] = limits.max_cost_usd
 
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
