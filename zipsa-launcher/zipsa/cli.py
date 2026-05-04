@@ -20,6 +20,10 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# ANSI color codes
+GRAY = "\033[90m"
+RESET = "\033[0m"
+
 
 def format_event(event: dict) -> Optional[str]:
     """Format important events for user-friendly display.
@@ -46,7 +50,7 @@ def format_event(event: dict) -> Optional[str]:
         # Thinking
         if content_type == "thinking":
             thinking = first_content.get("thinking", "")
-            return f"\nThinking: {thinking}"
+            return f"\n{GRAY}Thinking:{RESET} {thinking}"
 
         # Tool use
         elif content_type == "tool_use":
@@ -75,12 +79,12 @@ def format_event(event: dict) -> Optional[str]:
                 else:
                     detail = ""
 
-            return f"\nTool: {tool_name}\n  {detail}"
+            return f"\n{GRAY}Tool:{RESET} {tool_name}\n  {detail}"
 
         # Final text response
         elif content_type == "text":
             text = first_content.get("text", "")
-            return f"\nAnswer: {text}"
+            return f"\n{GRAY}Answer:{RESET} {text}"
 
     # Tool results (user role)
     elif event_type == "user":
@@ -98,25 +102,25 @@ def format_event(event: dict) -> Optional[str]:
             # Extract meaningful result info
             if "matches" in tool_result:
                 matches = tool_result["matches"]
-                return f"Result: Found {', '.join(matches)}"
+                return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
             elif "result" in tool_result:
                 result = tool_result["result"]
                 if len(result) > 80:
                     result = result[:80] + "..."
-                return f"Result: {result}"
+                return f"{GRAY}Result:{RESET} {result}"
             elif "code" in tool_result:
                 code = tool_result.get("code")
                 code_text = tool_result.get("codeText", "")
-                return f"Result: HTTP {code} {code_text}"
+                return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
             else:
                 # Generic result
                 content_result = first_content.get("content", "")
                 if isinstance(content_result, str):
                     if len(content_result) > 80:
                         content_result = content_result[:80] + "..."
-                    return f"Result: {content_result}"
+                    return f"{GRAY}Result:{RESET} {content_result}"
                 else:
-                    return "Result: Success"
+                    return f"{GRAY}Result:{RESET} Success"
 
     # Final result summary
     elif event_type == "result":
