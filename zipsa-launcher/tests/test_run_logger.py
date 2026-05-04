@@ -89,3 +89,41 @@ class TestRunLogging:
         # Cleanup
         import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
+
+    def test_summary_filtering(self):
+        """Summary should contain only important events."""
+        # Create test run directory
+        run_dir = Path(__file__).parent / "test_runs" / "test-summary"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create test output.jsonl
+        output_file = run_dir / "output.jsonl"
+        output_file.write_text(
+            '{"type":"system","subtype":"init","tools":["WebFetch"]}\n'
+            '{"type":"rate_limit_event","status":"ok"}\n'
+            '{"type":"assistant","message":{"content":[{"type":"thinking"}]}}\n'
+            '{"type":"user","message":{"content":[{"type":"tool_result"}]}}\n'
+            '{"type":"result","num_turns":1,"is_error":false}\n'
+        )
+
+        # Call _save_summary
+        from zipsa.core.executor import DockerExecutor
+        executor = DockerExecutor()
+        executor._save_summary(run_dir)
+
+        # Verify summary.jsonl
+        summary_file = run_dir / "summary.jsonl"
+        assert summary_file.exists()
+
+        lines = summary_file.read_text().strip().split('\n')
+        assert len(lines) == 4  # system init, assistant, user, result (no rate_limit)
+
+        # Verify content
+        assert '"type":"system"' in lines[0]
+        assert '"type":"assistant"' in lines[1]
+        assert '"type":"user"' in lines[2]
+        assert '"type":"result"' in lines[3]
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(Path(__file__).parent / "test_runs")

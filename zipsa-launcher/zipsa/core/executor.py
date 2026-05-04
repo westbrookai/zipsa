@@ -150,8 +150,59 @@ class DockerExecutor:
                 )
 
         finally:
+            # Generate summary if logging enabled
+            if run_dir:
+                try:
+                    self._save_summary(run_dir)
+                except Exception as e:
+                    # Don't fail execution due to logging errors
+                    print(f"Warning: Failed to save summary: {e}", file=sys.stderr)
+
             # Cleanup temp MCP config file
             mcp_config_path.unlink(missing_ok=True)
+
+    def _save_summary(self, run_dir: Path) -> None:
+        """Generate summary.jsonl from output.jsonl.
+
+        Filters for important events only:
+        - system (init only)
+        - assistant (all)
+        - user (all)
+        - result (all)
+        - any event with "error" in type
+
+        Args:
+            run_dir: Run directory containing output.jsonl
+        """
+        output_file = run_dir / "output.jsonl"
+        summary_file = run_dir / "summary.jsonl"
+
+        if not output_file.exists():
+            return
+
+        important_types = {"system", "assistant", "user", "result"}
+
+        with open(output_file, 'r') as inf, open(summary_file, 'w') as outf:
+            for line in inf:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                    event_type = event.get("type", "")
+
+                    # Include important events
+                    if event_type in important_types or "error" in event_type.lower():
+                        # For system events, only keep init
+                        if event_type == "system":
+                            if event.get("subtype") == "init":
+                                outf.write(line + '\n')
+                        else:
+                            outf.write(line + '\n')
+                except json.JSONDecodeError:
+                    # Skip malformed lines
+                    continue
 
     def _build_docker_command(
         self,
