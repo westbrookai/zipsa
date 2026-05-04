@@ -1,0 +1,8 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: minimal
+  version: 1.0.0
+spec:
+  purpose: Minimal test skill
+  instructions: ./SKILL.md

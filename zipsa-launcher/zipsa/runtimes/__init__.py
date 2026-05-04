@@ -27,3 +27,7 @@ def get_runtime(name: str) -> AgentRuntime:
 def list_runtimes() -> list[str]:
     """List available runtimes."""
     return list(_RUNTIMES.keys())
+
+
+# Import runtimes to populate registry
+from . import claude  # noqa: E402, F401
