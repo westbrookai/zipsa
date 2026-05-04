@@ -20,9 +20,14 @@ class TestLimits:
 
         mock_process = Mock()
         mock_process.stdout = mock_stdout
-        mock_process.wait.side_effect = subprocess.TimeoutExpired(cmd="docker", timeout=1)
+        # First wait() times out, subsequent wait() succeeds (process terminated)
+        mock_process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="docker", timeout=1),  # Initial timeout
+            None,  # After terminate(), wait succeeds
+        ]
         mock_process.returncode = 1
         mock_process.terminate = Mock()
+        mock_process.kill = Mock()
         mock_popen.return_value = mock_process
 
         # Load skill with timeout limit

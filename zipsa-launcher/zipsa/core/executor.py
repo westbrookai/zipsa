@@ -151,7 +151,13 @@ class DockerExecutor:
                                         if content and content[0].get("type") == "thinking":
                                             turn_count += 1
                                             if turn_count > limits.max_turns:
+                                                # Gracefully terminate, then force kill if needed
                                                 process.terminate()
+                                                try:
+                                                    process.wait(timeout=5)
+                                                except subprocess.TimeoutExpired:
+                                                    process.kill()
+                                                    process.wait()
                                                 raise RuntimeError(
                                                     f"Exceeded max_turns: {limits.max_turns}"
                                                 )
@@ -182,7 +188,13 @@ class DockerExecutor:
                                     if content and content[0].get("type") == "thinking":
                                         turn_count += 1
                                         if turn_count > limits.max_turns:
+                                            # Gracefully terminate, then force kill if needed
                                             process.terminate()
+                                            try:
+                                                process.wait(timeout=5)
+                                            except subprocess.TimeoutExpired:
+                                                process.kill()
+                                                process.wait()
                                             raise RuntimeError(
                                                 f"Exceeded max_turns: {limits.max_turns}"
                                             )
@@ -205,7 +217,13 @@ class DockerExecutor:
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
+                # Gracefully terminate, then force kill if needed
                 process.terminate()
+                try:
+                    process.wait(timeout=5)  # Wait up to 5 seconds for graceful shutdown
+                except subprocess.TimeoutExpired:
+                    process.kill()  # Force kill if it doesn't terminate
+                    process.wait()
                 raise RuntimeError(
                     f"Execution timed out after {timeout} seconds"
                 )
