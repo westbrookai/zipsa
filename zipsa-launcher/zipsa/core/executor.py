@@ -150,13 +150,14 @@ class DockerExecutor:
                 )
 
         finally:
-            # Generate summary if logging enabled
+            # Generate summary and metadata if logging enabled
             if run_dir:
                 try:
                     self._save_summary(run_dir)
+                    self._save_metadata(run_dir, skill)
                 except Exception as e:
                     # Don't fail execution due to logging errors
-                    print(f"Warning: Failed to save summary: {e}", file=sys.stderr)
+                    print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
 
             # Cleanup temp MCP config file
             mcp_config_path.unlink(missing_ok=True)
@@ -203,6 +204,64 @@ class DockerExecutor:
                 except json.JSONDecodeError:
                     # Skip malformed lines
                     continue
+
+    def _save_metadata(self, run_dir: Path, skill: Skill) -> None:
+        """Extract metrics from output.jsonl and save to metadata.json.
+
+        Extracts execution metrics from the result event.
+
+        Args:
+            run_dir: Run directory containing output.jsonl
+            skill: Skill that was executed
+        """
+        output_file = run_dir / "output.jsonl"
+        metadata_file = run_dir / "metadata.json"
+
+        if not output_file.exists():
+            return
+
+        # Find result event
+        result_event = None
+        with open(output_file, 'r') as f:
+            for line in f:
+                try:
+                    event = json.loads(line.strip())
+                    if event.get("type") == "result":
+                        result_event = event
+                        break
+                except json.JSONDecodeError:
+                    continue
+
+        if not result_event:
+            # Execution failed before result
+            metadata = {
+                "run_id": run_dir.name,
+                "skill_name": skill.name,
+                "skill_version": skill.manifest.metadata.version,
+                "timestamp": datetime.now().isoformat(),
+                "is_error": True,
+                "error": "No result event found - execution may have failed"
+            }
+        else:
+            # Extract from result event
+            metadata = {
+                "run_id": run_dir.name,
+                "skill_name": skill.name,
+                "skill_version": skill.manifest.metadata.version,
+                "timestamp": datetime.now().isoformat(),
+                "duration_ms": result_event.get("duration_ms"),
+                "duration_api_ms": result_event.get("duration_api_ms"),
+                "num_turns": result_event.get("num_turns"),
+                "total_cost_usd": result_event.get("total_cost_usd"),
+                "is_error": result_event.get("is_error", False),
+                "stop_reason": result_event.get("stop_reason"),
+                "terminal_reason": result_event.get("terminal_reason"),
+                "usage": result_event.get("usage", {}),
+                "model_usage": result_event.get("modelUsage", {})
+            }
+
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
 
     def _build_docker_command(
         self,
