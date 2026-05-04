@@ -25,10 +25,10 @@ spec:
     # Local stdio: read Claude Code session logs
     - name: sessions
       type: stdio
-      runtime: node
-      package: "@modelcontextprotocol/server-filesystem"
-      version: ^0.5.0
-      args: ["/host-claude-projects"]
+      command: npx
+      args:
+        - "@modelcontextprotocol/server-filesystem@^0.5.0"
+        - "/host-claude-projects"
       mount:
         host: "~/.claude/projects"
         container: "/host-claude-projects"

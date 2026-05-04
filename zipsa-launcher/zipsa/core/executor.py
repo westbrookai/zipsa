@@ -1,6 +1,7 @@
 """Docker executor for skill execution."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -404,6 +405,10 @@ class DockerExecutor:
         ]
 
         # Environment variables
+        # Auto-pass Claude Code OAuth token if available
+        if "CLAUDE_CODE_OAUTH_TOKEN" in os.environ:
+            env.setdefault("CLAUDE_CODE_OAUTH_TOKEN", os.environ["CLAUDE_CODE_OAUTH_TOKEN"])
+
         for key, value in env.items():
             cmd.extend(["-e", f"{key}={value}"])
 
