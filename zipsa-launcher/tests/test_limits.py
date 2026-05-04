@@ -152,3 +152,34 @@ class TestLimits:
         # Cleanup
         import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_keyboard_interrupt_terminates_process(self, mock_popen):
+        """Should terminate Docker process on KeyboardInterrupt (Ctrl+C)."""
+        # Mock process that simulates user interruption
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init"}\n',
+            KeyboardInterrupt("User pressed Ctrl+C"),
+        ]
+
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None  # Process still running
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock()
+        mock_process.kill = Mock()
+        mock_popen.return_value = mock_process
+
+        # Load skill
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        # Execute - should catch KeyboardInterrupt and terminate process
+        with pytest.raises(KeyboardInterrupt):
+            list(executor.run(skill, "Test", env={}))
+
+        # Verify process was terminated
+        mock_process.terminate.assert_called()
+        mock_process.wait.assert_called()

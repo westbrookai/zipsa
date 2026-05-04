@@ -118,6 +118,7 @@ class DockerExecutor:
         limits = skill.manifest.spec.limits
         turn_count = 0
         cost_exceeded = False
+        process = None
 
         try:
             # Execute Docker
@@ -214,7 +215,30 @@ class DockerExecutor:
                     f"Docker execution failed with code {process.returncode}"
                 )
 
+        except KeyboardInterrupt:
+            # User pressed Ctrl+C - terminate Docker process
+            if process:
+                print("\nInterrupted by user - terminating execution...", file=sys.stderr)
+                process.terminate()
+                try:
+                    process.wait(timeout=5)  # Wait up to 5 seconds for graceful shutdown
+                except subprocess.TimeoutExpired:
+                    process.kill()  # Force kill if it doesn't terminate
+                    process.wait()
+            raise
+
         finally:
+            # Ensure Docker process is terminated
+            if process and process.poll() is None:  # Process still running
+                try:
+                    process.terminate()
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                except Exception:
+                    pass  # Best effort cleanup
+
             # Generate summary and metadata if logging enabled
             if run_dir:
                 try:
