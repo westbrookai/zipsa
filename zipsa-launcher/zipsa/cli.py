@@ -1,5 +1,6 @@
 """CLI for zipsa launcher."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -18,6 +19,123 @@ app = typer.Typer(
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
     add_completion=False,
 )
+
+
+def format_event(event: dict) -> Optional[str]:
+    """Format important events for user-friendly display.
+
+    Returns formatted string or None if event should be skipped.
+    """
+    event_type = event.get("type")
+
+    # Skip system and rate_limit events
+    if event_type in ("system", "rate_limit_event"):
+        return None
+
+    # Assistant messages
+    if event_type == "assistant":
+        message = event.get("message", {})
+        content = message.get("content", [])
+
+        if not content:
+            return None
+
+        first_content = content[0]
+        content_type = first_content.get("type")
+
+        # Thinking
+        if content_type == "thinking":
+            thinking = first_content.get("thinking", "")
+            return f"\nThinking: {thinking}"
+
+        # Tool use
+        elif content_type == "tool_use":
+            tool_name = first_content.get("name", "Unknown")
+            tool_input = first_content.get("input", {})
+
+            # Format input nicely
+            if "url" in tool_input:
+                detail = f"url={tool_input['url'][:60]}..."
+            elif "query" in tool_input:
+                detail = f"query=\"{tool_input['query']}\""
+            elif "prompt" in tool_input:
+                prompt = tool_input["prompt"]
+                if len(prompt) > 50:
+                    prompt = prompt[:50] + "..."
+                detail = f"prompt=\"{prompt}\""
+            else:
+                # Show first key-value pair
+                items = list(tool_input.items())
+                if items:
+                    key, val = items[0]
+                    val_str = str(val)
+                    if len(val_str) > 40:
+                        val_str = val_str[:40] + "..."
+                    detail = f"{key}={val_str}"
+                else:
+                    detail = ""
+
+            return f"\nTool: {tool_name}\n  {detail}"
+
+        # Final text response
+        elif content_type == "text":
+            text = first_content.get("text", "")
+            return f"\nAnswer: {text}"
+
+    # Tool results (user role)
+    elif event_type == "user":
+        message = event.get("message", {})
+        content = message.get("content", [])
+
+        if not content:
+            return None
+
+        first_content = content[0]
+        if first_content.get("type") == "tool_result":
+            # Get result from tool_use_result if available
+            tool_result = event.get("tool_use_result", {})
+
+            # Extract meaningful result info
+            if "matches" in tool_result:
+                matches = tool_result["matches"]
+                return f"Result: Found {', '.join(matches)}"
+            elif "result" in tool_result:
+                result = tool_result["result"]
+                if len(result) > 80:
+                    result = result[:80] + "..."
+                return f"Result: {result}"
+            elif "code" in tool_result:
+                code = tool_result.get("code")
+                code_text = tool_result.get("codeText", "")
+                return f"Result: HTTP {code} {code_text}"
+            else:
+                # Generic result
+                content_result = first_content.get("content", "")
+                if isinstance(content_result, str):
+                    if len(content_result) > 80:
+                        content_result = content_result[:80] + "..."
+                    return f"Result: {content_result}"
+                else:
+                    return "Result: Success"
+
+    # Final result summary
+    elif event_type == "result":
+        is_error = event.get("is_error", False)
+        duration_ms = event.get("duration_ms", 0)
+        num_turns = event.get("num_turns", 0)
+        cost = event.get("total_cost_usd", 0)
+
+        status = "Error" if is_error else "Success"
+        duration_s = duration_ms / 1000
+
+        summary = f"\n{'='*50}\n"
+        summary += f"{status}\n"
+        summary += f"Duration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n"
+        summary += f"{'='*50}"
+
+        return summary
+
+    return None
 
 
 @app.command()
@@ -83,12 +201,9 @@ def run(
 
         # Stream output
         for event in output:
-            if event.get("type") == "text":
-                typer.echo(event.get("content", ""))
-            else:
-                # For other event types, print raw JSON for debugging
-                import json
-                typer.echo(json.dumps(event))
+            formatted = format_event(event)
+            if formatted:
+                typer.echo(formatted)
 
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
