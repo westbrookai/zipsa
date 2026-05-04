@@ -46,3 +46,46 @@ class TestRunLogging:
         # Cleanup
         import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_output_jsonl_saved(self, mock_popen):
+        """Output should be saved to output.jsonl in real-time."""
+        # Mock process with JSON output
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init"}\n',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}\n',
+            '{"type":"result","num_turns":1}\n',
+            ""
+        ]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        # Execute
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        list(executor.run(skill, "Test input", env={}))
+
+        # Verify output.jsonl exists and contains events
+        runs_dir = skill_dir / ".zipsa" / "runs"
+        run_dirs = list(runs_dir.iterdir())
+        run_dir = run_dirs[0]
+        output_file = run_dir / "output.jsonl"
+
+        assert output_file.exists()
+
+        # Read and verify content
+        lines = output_file.read_text().strip().split('\n')
+        assert len(lines) == 3
+        assert '"type":"system"' in lines[0]
+        assert '"type":"assistant"' in lines[1]
+        assert '"type":"result"' in lines[2]
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(skill_dir / ".zipsa" / "runs")

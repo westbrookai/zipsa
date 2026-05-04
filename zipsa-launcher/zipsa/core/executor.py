@@ -110,6 +110,10 @@ class DockerExecutor:
         Raises:
             RuntimeError: If Docker execution fails
         """
+        output_file = None
+        if run_dir:
+            output_file = run_dir / "output.jsonl"
+
         try:
             # Execute Docker
             process = subprocess.Popen(
@@ -121,9 +125,22 @@ class DockerExecutor:
 
             # Stream output through runtime parser
             raw_stream = iter(process.stdout.readline, "")
-            parsed_stream = self.runtime.parse_output(raw_stream)
 
-            yield from parsed_stream
+            # Save to file while parsing
+            if output_file:
+                with open(output_file, 'w', buffering=1) as f:  # Line buffering
+                    for line in raw_stream:
+                        if line:
+                            # Write to file
+                            f.write(line)
+
+                            # Parse and yield
+                            parsed_events = self.runtime.parse_output([line])
+                            yield from parsed_events
+            else:
+                # No logging - just parse and yield
+                parsed_stream = self.runtime.parse_output(raw_stream)
+                yield from parsed_stream
 
             process.wait()
 
