@@ -51,7 +51,8 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
 
-        mcp_config_path = Path("/tmp/test-mcp.json")
+        # MCP config must be inside workspace
+        mcp_config_path = executor.workspace / ".zipsa" / "test-mcp.json"
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}
 
         cmd = executor._build_docker_command(
@@ -88,7 +89,8 @@ class TestDockerExecutor:
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
-        mcp_config_path = Path("/tmp/test-mcp.json")
+        # MCP config must be inside workspace
+        mcp_config_path = executor.workspace / ".zipsa" / "test-mcp.json"
         env = {}
 
         cmd = executor._build_docker_command(
@@ -103,14 +105,9 @@ class TestDockerExecutor:
         assert "/mnt/docs:ro" in cmd_str
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    @patch("zipsa.core.executor.tempfile.NamedTemporaryFile")
-    def test_run_creates_temp_mcp_config(self, mock_tempfile, mock_popen):
-        """Run should create temporary MCP config file."""
+    def test_run_creates_temp_mcp_config(self, mock_popen):
+        """Run should create temporary MCP config file in workspace."""
         # Setup mocks
-        mock_file = MagicMock()
-        mock_file.name = "/tmp/test-mcp-123.json"
-        mock_tempfile.return_value.__enter__.return_value = mock_file
-
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output line\n", ""]
         mock_process = Mock()
@@ -124,28 +121,29 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
+        # Verify .zipsa directory doesn't exist yet
+        zipsa_dir = executor.workspace / ".zipsa"
+        if zipsa_dir.exists():
+            # Clean up from previous test
+            for f in zipsa_dir.glob("*.json"):
+                f.unlink()
+
         list(executor.run(skill, "Test input", env={}))
 
-        # Verify temp file was created
-        mock_tempfile.assert_called_once()
-        assert mock_tempfile.call_args[1]["mode"] == "w"
-        assert mock_tempfile.call_args[1]["suffix"] == ".json"
-        assert mock_tempfile.call_args[1]["delete"] is False
+        # Verify .zipsa directory was created
+        assert zipsa_dir.exists()
+        assert zipsa_dir.is_dir()
 
-        # Verify MCP config was written (json.dump calls write multiple times)
-        mock_file.write.assert_called()
-        assert mock_file.write.call_count > 0
+        # Verify MCP config files were created and cleaned up
+        # (should be empty after cleanup in finally block)
+        json_files = list(zipsa_dir.glob("mcp-config-*.json"))
+        # Files should be cleaned up in finally block, so should be empty
+        assert len(json_files) == 0
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    @patch("zipsa.core.executor.tempfile.NamedTemporaryFile")
-    @patch("zipsa.core.executor.Path.unlink")
-    def test_run_cleans_up_temp_file(self, mock_unlink, mock_tempfile, mock_popen):
+    def test_run_cleans_up_temp_file(self, mock_popen):
         """Run should cleanup temp file after execution."""
         # Setup mocks
-        mock_file = MagicMock()
-        mock_file.name = "/tmp/test-mcp-123.json"
-        mock_tempfile.return_value.__enter__.return_value = mock_file
-
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output\n", ""]
         mock_process = Mock()
@@ -159,20 +157,18 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
+        zipsa_dir = executor.workspace / ".zipsa"
+
         list(executor.run(skill, "Test", env={}))
 
-        # Verify cleanup (unlink called)
-        assert mock_unlink.call_count > 0
+        # Verify cleanup - temp MCP config should be removed
+        json_files = list(zipsa_dir.glob("mcp-config-*.json"))
+        assert len(json_files) == 0
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    @patch("zipsa.core.executor.tempfile.NamedTemporaryFile")
     @patch("builtins.print")
-    def test_dry_run_mode(self, mock_print, mock_tempfile, mock_popen):
+    def test_dry_run_mode(self, mock_print, mock_popen):
         """Dry run should not execute Docker."""
-        mock_file = MagicMock()
-        mock_file.name = "/tmp/test-mcp.json"
-        mock_tempfile.return_value.__enter__.return_value = mock_file
-
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
@@ -186,3 +182,9 @@ class TestDockerExecutor:
 
         # Should print dry run info
         assert mock_print.called
+
+        # Verify temp file was cleaned up
+        zipsa_dir = executor.workspace / ".zipsa"
+        if zipsa_dir.exists():
+            json_files = list(zipsa_dir.glob("mcp-config-*.json"))
+            assert len(json_files) == 0

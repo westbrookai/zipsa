@@ -122,7 +122,11 @@ class TestValidateCommand:
         mock_skill.manifest.metadata.version = "1.0.0"
         mock_skill.manifest.spec.purpose = "Test purpose"
         mock_skill.manifest.spec.mcp = []
-        mock_skill.manifest.spec.tools = []
+        # tools is a SkillTools object with builtin and mcp lists
+        mock_tools = Mock()
+        mock_tools.builtin = ["WebFetch"]
+        mock_tools.mcp = []
+        mock_skill.manifest.spec.tools = mock_tools
         mock_skill_cls.load.return_value = mock_skill
 
         result = runner.invoke(app, ["validate", "test-skill"])

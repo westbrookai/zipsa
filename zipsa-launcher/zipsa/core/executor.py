@@ -79,6 +79,10 @@ class DockerExecutor:
             # Cleanup on error
             mcp_config_path.unlink(missing_ok=True)
             raise
+        finally:
+            # Cleanup temp file for dry_run (non-dry_run cleanup is in _execute_skill)
+            if dry_run:
+                mcp_config_path.unlink(missing_ok=True)
 
     def _execute_skill(
         self, docker_cmd: list[str], mcp_config_path: Path
