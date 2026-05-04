@@ -53,13 +53,14 @@ class DockerExecutor:
         """
         env = env or {}
 
+        # Create temp directory in workspace for MCP config
+        temp_dir = self.workspace / ".zipsa"
+        temp_dir.mkdir(exist_ok=True)
+
         # Create temp MCP config file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            mcp_config = skill.build_mcp_config()
-            json.dump(mcp_config, f)
-            mcp_config_path = Path(f.name)
+        mcp_config_path = temp_dir / f"mcp-config-{id(self)}.json"
+        mcp_config = skill.build_mcp_config()
+        mcp_config_path.write_text(json.dumps(mcp_config))
 
         try:
             # Build Docker command
@@ -117,7 +118,7 @@ class DockerExecutor:
                 )
 
         finally:
-            # Cleanup temp file
+            # Cleanup temp MCP config file
             mcp_config_path.unlink(missing_ok=True)
 
     def _build_docker_command(
@@ -155,10 +156,19 @@ class DockerExecutor:
             [
                 "-v",
                 f"{self.workspace}:/workspace",
-                "-v",
-                f"{mcp_config_path}:/tmp/mcp.json:ro",
             ]
         )
+        # NOTE: MCP config is now inside workspace, so no separate mount needed
+
+        # Mount Claude credentials if they exist
+        credentials_path = self.workspace / "credentials.json"
+        claude_json_path = self.workspace / "claude.json"
+
+        if credentials_path.exists():
+            cmd.extend(["-v", f"{credentials_path}:/home/agent/.claude/.credentials.json"])
+
+        if claude_json_path.exists():
+            cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json:ro"])
 
         # MCP stdio mounts (from manifest)
         for server in skill.manifest.spec.mcp:
@@ -175,12 +185,16 @@ class DockerExecutor:
         system_prompt = self._build_system_prompt(skill)
         allowed_tools = skill.get_allowed_tools()
 
+        # MCP config is inside workspace
+        relative_config_path = mcp_config_path.relative_to(self.workspace)
+        container_config_path = Path("/workspace") / relative_config_path
+
         runtime_cmd = self.runtime.build_command(
             skill_name=skill.name,
             user_input=user_input,
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
-            mcp_config_path=Path("/tmp/mcp.json"),  # Container path
+            mcp_config_path=container_config_path,  # Container path inside /workspace
             workspace=Path("/workspace"),
             env=env,
         )

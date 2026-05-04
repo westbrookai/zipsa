@@ -115,7 +115,8 @@ def validate(
         typer.echo(f"  Version: {skill.manifest.metadata.version}")
         typer.echo(f"  Purpose: {skill.manifest.spec.purpose}")
         typer.echo(f"  MCP Servers: {len(skill.manifest.spec.mcp)}")
-        typer.echo(f"  Tools: {len(skill.manifest.spec.tools)}")
+        tool_count = len(skill.manifest.spec.tools.builtin) + len(skill.manifest.spec.tools.mcp)
+        typer.echo(f"  Tools: {tool_count}")
 
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
