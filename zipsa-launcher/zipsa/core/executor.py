@@ -416,15 +416,10 @@ class DockerExecutor:
         )
         # NOTE: MCP config is now inside workspace, so no separate mount needed
 
-        # Mount Claude credentials if they exist
-        credentials_path = self.workspace / "credentials.json"
-        claude_json_path = self.workspace / "claude.json"
-
-        if credentials_path.exists():
-            cmd.extend(["-v", f"{credentials_path}:/home/agent/.claude/.credentials.json"])
-
-        if claude_json_path.exists():
-            cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json:ro"])
+        # Mount global credentials if they exist
+        global_creds = Path.home() / ".zipsa" / ".credentials.json"
+        if global_creds.exists():
+            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json:ro"])
 
         # MCP stdio mounts (from manifest)
         for server in skill.manifest.spec.mcp:

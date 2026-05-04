@@ -66,6 +66,6 @@ spec:
     timezone: "Australia/Sydney"
 
   limits:
-    max_turns: 20
+    max_turns: 30
     max_cost_usd: 0.50
-    timeout_seconds: 180
+    timeout_seconds: 60
