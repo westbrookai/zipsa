@@ -100,19 +100,27 @@ def format_event(event: dict) -> Optional[str]:
             # Get result from tool_use_result if available
             tool_result = event.get("tool_use_result", {})
 
-            # Extract meaningful result info
-            if "matches" in tool_result:
-                matches = tool_result["matches"]
-                return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
-            elif "result" in tool_result:
-                result = tool_result["result"]
-                return f"{GRAY}Result:{RESET} {result}"
-            elif "code" in tool_result:
-                code = tool_result.get("code")
-                code_text = tool_result.get("codeText", "")
-                return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
+            # tool_use_result can be a string (error messages) or dict (structured data)
+            if isinstance(tool_result, str):
+                # String result (often error messages)
+                return f"{GRAY}Result:{RESET} {tool_result}"
+            elif isinstance(tool_result, dict):
+                # Structured result - extract meaningful info
+                if "matches" in tool_result:
+                    matches = tool_result["matches"]
+                    return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
+                elif "result" in tool_result:
+                    result = tool_result["result"]
+                    return f"{GRAY}Result:{RESET} {result}"
+                elif "code" in tool_result:
+                    code = tool_result.get("code")
+                    code_text = tool_result.get("codeText", "")
+                    return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
+                else:
+                    # Generic dict result
+                    return f"{GRAY}Result:{RESET} Success"
             else:
-                # Generic result
+                # Fallback to content field
                 content_result = first_content.get("content", "")
                 if isinstance(content_result, str):
                     return f"{GRAY}Result:{RESET} {content_result}"
