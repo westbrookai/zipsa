@@ -39,6 +39,7 @@ class DockerExecutor:
         user_input: str,
         env: Optional[dict[str, str]] = None,
         dry_run: bool = False,
+        shell: bool = False,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -47,9 +48,10 @@ class DockerExecutor:
             user_input: User's input/query
             env: Environment variables
             dry_run: If True, print command without executing
+            shell: If True, start interactive bash instead of running skill
 
         Returns:
-            Iterator of parsed output events (None for dry_run)
+            Iterator of parsed output events (None for dry_run or shell)
 
         Raises:
             RuntimeError: If Docker execution fails
@@ -60,9 +62,9 @@ class DockerExecutor:
         temp_dir = self.workspace / ".zipsa"
         temp_dir.mkdir(exist_ok=True)
 
-        # Create run directory for logging (skip for dry-run)
+        # Create run directory for logging (skip for dry-run and shell mode)
         run_dir = None
-        if not dry_run:
+        if not dry_run and not shell:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
             run_dir = skill.skill_dir / ".zipsa" / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -75,11 +77,16 @@ class DockerExecutor:
         try:
             # Build Docker command
             docker_cmd = self._build_docker_command(
-                skill, user_input, mcp_config_path, env
+                skill, user_input, mcp_config_path, env, shell=shell
             )
 
             if dry_run:
                 self._print_dry_run(skill, docker_cmd, mcp_config)
+                return None
+
+            if shell:
+                # Interactive shell mode - run directly
+                self._run_shell(docker_cmd, mcp_config_path)
                 return None
 
             # Execute and return generator
@@ -270,6 +277,23 @@ class DockerExecutor:
             # Cleanup temp MCP config file
             mcp_config_path.unlink(missing_ok=True)
 
+    def _run_shell(self, docker_cmd: list[str], mcp_config_path: Path) -> None:
+        """Run interactive bash shell in Docker container.
+
+        Args:
+            docker_cmd: Docker command array (with -it and bash)
+            mcp_config_path: Path to temp MCP config file
+        """
+        try:
+            # Execute Docker with interactive shell
+            print("Starting interactive bash shell in container...")
+            print("MCP config and mounts are ready. Type 'exit' to quit.")
+            print()
+            subprocess.run(docker_cmd)
+        finally:
+            # Cleanup temp MCP config file
+            mcp_config_path.unlink(missing_ok=True)
+
     def _save_summary(self, run_dir: Path) -> None:
         """Generate summary.jsonl from output.jsonl.
 
@@ -384,6 +408,7 @@ class DockerExecutor:
         user_input: str,
         mcp_config_path: Path,
         env: dict[str, str],
+        shell: bool = False,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -392,6 +417,7 @@ class DockerExecutor:
             user_input: User input
             mcp_config_path: Path to temp MCP config (on host)
             env: Environment variables
+            shell: If True, build command for interactive shell
 
         Returns:
             Command array for subprocess
@@ -400,9 +426,16 @@ class DockerExecutor:
             "docker",
             "run",
             "--rm",
+        ]
+
+        # Add interactive TTY flags for shell mode
+        if shell:
+            cmd.extend(["-it"])
+
+        cmd.extend([
             "--name",
             f"zipsa-{skill.name}-{id(self)}",
-        ]
+        ])
 
         # Environment variables
         # Auto-pass Claude Code OAuth token if available
@@ -437,25 +470,29 @@ class DockerExecutor:
         # Image
         cmd.append(self.image)
 
-        # Runtime-specific command (from plugin)
-        system_prompt = self._build_system_prompt(skill)
-        allowed_tools = skill.get_allowed_tools()
+        # Shell mode: just run bash
+        if shell:
+            cmd.append("bash")
+        else:
+            # Runtime-specific command (from plugin)
+            system_prompt = self._build_system_prompt(skill)
+            allowed_tools = skill.get_allowed_tools()
 
-        # MCP config is inside workspace
-        relative_config_path = mcp_config_path.relative_to(self.workspace)
-        container_config_path = Path("/workspace") / relative_config_path
+            # MCP config is inside workspace
+            relative_config_path = mcp_config_path.relative_to(self.workspace)
+            container_config_path = Path("/workspace") / relative_config_path
 
-        runtime_cmd = self.runtime.build_command(
-            skill_name=skill.name,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            allowed_tools=allowed_tools,
-            mcp_config_path=container_config_path,  # Container path inside /workspace
-            workspace=Path("/workspace"),
-            env=env,
-        )
+            runtime_cmd = self.runtime.build_command(
+                skill_name=skill.name,
+                user_input=user_input,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                mcp_config_path=container_config_path,  # Container path inside /workspace
+                workspace=Path("/workspace"),
+                env=env,
+            )
 
-        cmd.extend(runtime_cmd)
+            cmd.extend(runtime_cmd)
 
         return cmd
 

@@ -154,9 +154,9 @@ def run(
         typer.Argument(help="Path to skill directory or manifest.yaml"),
     ],
     user_input: Annotated[
-        str,
+        Optional[str],
         typer.Argument(help="User input/query for the skill"),
-    ],
+    ] = None,
     runtime: Annotated[
         str,
         typer.Option("--runtime", "-r", help="Runtime to use (claude, codex, gemini)"),
@@ -177,12 +177,21 @@ def run(
         bool,
         typer.Option("--dry-run", help="Print command without executing"),
     ] = False,
+    shell: Annotated[
+        bool,
+        typer.Option("--shell", help="Start interactive bash shell instead of running skill"),
+    ] = False,
 ):
     """Execute a skill with the specified runtime."""
     try:
         # Load skill
         skill = Skill.load(skill_dir)
         typer.echo(f"Loaded skill: {skill.name}")
+
+        # Validate input
+        if not shell and not user_input:
+            typer.echo("Error: user_input is required unless --shell is specified", err=True)
+            raise typer.Exit(1)
 
         # Parse environment variables
         env_dict = {}
@@ -201,8 +210,8 @@ def run(
             workspace=workspace or Path.cwd(),
         )
 
-        # Execute skill
-        output = executor.run(skill, user_input, env=env_dict, dry_run=dry_run)
+        # Execute skill or start shell
+        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell)
 
         if output is None:
             # Dry run mode
