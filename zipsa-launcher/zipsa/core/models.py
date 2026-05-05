@@ -30,6 +30,7 @@ class MCPServerStdio(BaseModel):
     command: str  # Command to run (npx, uvx, python, etc.)
     args: list[str]  # Command arguments
     mount: Optional[VolumeMount] = None
+    env: list[str] = Field(default_factory=list)  # Required environment variables
 
 
 class MCPServerHTTP(BaseModel):
@@ -39,6 +40,8 @@ class MCPServerHTTP(BaseModel):
     type: Literal["http"]
     url: str  # HTTP endpoint URL
     connection: Optional[str] = None  # Connection name
+    headersHelper: Optional[str] = None  # Shell command to generate headers
+    env: list[str] = Field(default_factory=list)  # Required environment variables
 
 
 # Union type for MCP servers
@@ -80,3 +83,15 @@ class SkillManifest(BaseModel):
     kind: Literal["Skill"]
     metadata: SkillMetadata
     spec: SkillSpec
+
+
+class RuntimeSettings(BaseModel):
+    """Runtime-specific settings."""
+
+    auto_inject_env: list[str] = Field(default_factory=list)
+
+
+class RuntimeConfig(BaseModel):
+    """Runtime configuration file structure."""
+
+    runtimes: dict[str, RuntimeSettings] = Field(default_factory=dict)

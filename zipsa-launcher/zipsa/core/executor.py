@@ -8,8 +8,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
+import yaml
 
 from .skill import Skill
+from .models import RuntimeConfig
 from ..runtimes import get_runtime
 
 
@@ -21,6 +23,7 @@ class DockerExecutor:
         runtime: str = "claude",
         image: str = "ghcr.io/westbrookai/zipsa-runtime:latest",
         workspace: Optional[Path] = None,
+        runtime_config_path: Optional[Path] = None,
     ):
         """Initialize Docker executor.
 
@@ -28,10 +31,41 @@ class DockerExecutor:
             runtime: Runtime to use (claude, codex, gemini)
             image: Docker image to run
             workspace: Workspace directory (defaults to current directory)
+            runtime_config_path: Path to runtime config file (defaults to ~/.zipsa/runtime-config.yaml)
         """
         self.runtime = get_runtime(runtime)
         self.image = image
         self.workspace = workspace or Path.cwd()
+
+        # Load runtime config
+        if runtime_config_path is None:
+            runtime_config_path = Path.home() / ".zipsa" / "runtime-config.yaml"
+
+        self.runtime_config = self._load_runtime_config(runtime_config_path)
+
+    def _load_runtime_config(self, config_path: Path) -> Optional[RuntimeConfig]:
+        """Load runtime configuration from YAML file.
+
+        Args:
+            config_path: Path to runtime-config.yaml
+
+        Returns:
+            RuntimeConfig object or None if file doesn't exist
+        """
+        if not config_path.exists():
+            return None
+
+        try:
+            with open(config_path) as f:
+                data = yaml.safe_load(f)
+
+            if not data:
+                return None
+
+            return RuntimeConfig.model_validate(data)
+        except Exception as e:
+            print(f"Warning: Failed to load runtime config from {config_path}: {e}")
+            return None
 
     def run(
         self,
@@ -57,6 +91,17 @@ class DockerExecutor:
             RuntimeError: If Docker execution fails
         """
         env = env or {}
+
+        # Auto-extract environment variables from MCP servers
+        for server in skill.manifest.spec.mcp:
+            for env_var in server.env:
+                # Only add if not already set and exists in host environment
+                if env_var not in env:
+                    import os
+                    if env_var in os.environ:
+                        env[env_var] = os.environ[env_var]
+                    else:
+                        print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
 
         # Create run directory for logging (skip for dry-run and shell mode)
         run_dir = None
@@ -421,9 +466,18 @@ class DockerExecutor:
         ])
 
         # Environment variables
-        # Auto-pass Claude Code OAuth token if available
-        if "CLAUDE_CODE_OAUTH_TOKEN" in os.environ:
-            env.setdefault("CLAUDE_CODE_OAUTH_TOKEN", os.environ["CLAUDE_CODE_OAUTH_TOKEN"])
+        # Auto-inject env vars from runtime config (if configured)
+        if self.runtime_config:
+            runtime_name = self.runtime.name
+            if runtime_name in self.runtime_config.runtimes:
+                runtime_settings = self.runtime_config.runtimes[runtime_name]
+                for env_var in runtime_settings.auto_inject_env:
+                    # Only add if not already set by user and exists in host environment
+                    if env_var not in env:
+                        if env_var in os.environ:
+                            env[env_var] = os.environ[env_var]
+                        else:
+                            print(f"Warning: Runtime config specifies auto-inject for '{env_var}' but it's not set in host environment")
 
         for key, value in env.items():
             cmd.extend(["-e", f"{key}={value}"])

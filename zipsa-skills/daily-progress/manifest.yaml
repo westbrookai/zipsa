@@ -39,9 +39,13 @@ spec:
       type: http
       url: https://mcp.notion.com/mcp
 
+
     - name: githubcopilot
       type: http
       url: https://api.githubcopilot.com/mcp
+      headersHelper: "echo \"{\\\"Authorization\\\": \\\"Bearer $GITHUB_PERSONAL_ACCESS_TOKEN\\\"}\""
+      env:
+        - GITHUB_PERSONAL_ACCESS_TOKEN
 
   # Tools whitelist — only these are allowed
   tools:

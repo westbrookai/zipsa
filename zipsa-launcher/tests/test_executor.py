@@ -188,3 +188,143 @@ class TestDockerExecutor:
         if zipsa_dir.exists():
             json_files = list(zipsa_dir.glob("mcp-config-*.json"))
             assert len(json_files) == 0
+
+
+class TestRuntimeConfig:
+    """Test runtime config file handling."""
+
+    def test_auto_inject_env_from_config(self, tmp_path):
+        """Should auto-inject env vars specified in runtime config."""
+        # Create runtime config
+        config_path = tmp_path / "runtime-config.yaml"
+        config_path.write_text("""
+runtimes:
+  claude:
+    auto_inject_env:
+      - CLAUDE_CODE_OAUTH_TOKEN
+""")
+
+        executor = DockerExecutor(runtime_config_path=config_path)
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        # Set env var in host environment
+        with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        # Should auto-inject token
+        cmd_str = " ".join(cmd)
+        assert "CLAUDE_CODE_OAUTH_TOKEN=test-token" in cmd_str
+
+    def test_no_auto_inject_without_config(self):
+        """Should not auto-inject if runtime config doesn't exist."""
+        executor = DockerExecutor(runtime_config_path=Path("/nonexistent/config.yaml"))
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        # Should not auto-inject token
+        cmd_str = " ".join(cmd)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in cmd_str
+
+    def test_no_auto_inject_if_runtime_not_in_config(self, tmp_path):
+        """Should not auto-inject if runtime not specified in config."""
+        # Create config with only codex
+        config_path = tmp_path / "runtime-config.yaml"
+        config_path.write_text("""
+runtimes:
+  codex:
+    auto_inject_env:
+      - CODEX_API_KEY
+""")
+
+        executor = DockerExecutor(runtime="claude", runtime_config_path=config_path)
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        # Should not auto-inject token
+        cmd_str = " ".join(cmd)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in cmd_str
+
+    def test_user_env_overrides_config(self, tmp_path):
+        """User-provided env should override runtime config."""
+        config_path = tmp_path / "runtime-config.yaml"
+        config_path.write_text("""
+runtimes:
+  claude:
+    auto_inject_env:
+      - CLAUDE_CODE_OAUTH_TOKEN
+""")
+
+        executor = DockerExecutor(runtime_config_path=config_path)
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        # User explicitly provides different value
+        with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "host-token"}):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={"CLAUDE_CODE_OAUTH_TOKEN": "user-token"},
+            )
+
+        # Should use user-provided value
+        cmd_str = " ".join(cmd)
+        assert "CLAUDE_CODE_OAUTH_TOKEN=user-token" in cmd_str
+        assert "host-token" not in cmd_str
+
+    @patch("builtins.print")
+    def test_warning_if_env_not_in_host(self, mock_print, tmp_path):
+        """Should warn if auto_inject env var not set in host."""
+        config_path = tmp_path / "runtime-config.yaml"
+        config_path.write_text("""
+runtimes:
+  claude:
+    auto_inject_env:
+      - CLAUDE_CODE_OAUTH_TOKEN
+""")
+
+        executor = DockerExecutor(runtime_config_path=config_path)
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        # Env var not set in host
+        with patch.dict("os.environ", {}, clear=True):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        # Should warn and not inject
+        cmd_str = " ".join(cmd)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in cmd_str
+        # Should have printed warning
+        assert any("CLAUDE_CODE_OAUTH_TOKEN" in str(call) for call in mock_print.call_args_list)

@@ -303,3 +303,44 @@ class TestClaudeJson:
         assert "notion" in mcp_servers
         assert mcp_servers["notion"]["type"] == "http"
         assert mcp_servers["notion"]["url"] == "https://mcp.notion.com/mcp"
+
+    def test_build_claude_json_with_headers_helper(self, tmp_path):
+        """HTTP MCP server with headersHelper should include it in config."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "github",
+                        "type": "http",
+                        "url": "https://api.githubcopilot.com/mcp",
+                        "headersHelper": "echo \"{\\\"Authorization\\\": \\\"Bearer $TOKEN\\\"}\"",
+                        "env": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+                    }
+                ],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        config = json.loads(claude_json_path.read_text())
+        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+
+        assert "github" in mcp_servers
+        assert mcp_servers["github"]["type"] == "http"
+        assert mcp_servers["github"]["url"] == "https://api.githubcopilot.com/mcp"
+        assert "headersHelper" in mcp_servers["github"]
+        assert mcp_servers["github"]["headersHelper"] == "echo \"{\\\"Authorization\\\": \\\"Bearer $TOKEN\\\"}\""

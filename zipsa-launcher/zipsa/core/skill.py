@@ -163,6 +163,8 @@ class Skill:
                 # connection = f"{server.name}|{sha256(config)[:16]}"
                 if server.connection:
                     server_config["connection"] = server.connection
+                if server.headersHelper:
+                    server_config["headersHelper"] = server.headersHelper
                 mcp_servers[server.name] = server_config
 
         # Build full .claude.json structure
