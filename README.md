@@ -1,304 +1,209 @@
-# Zipsa Runtime
+# Zipsa
 
-[![CI](https://github.com/westbrookai/zipsa-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/westbrookai/zipsa-runtime/actions/workflows/ci.yml)
+> Runtime-agnostic SKILL execution system for AI agents
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Lightweight Docker runtime for executing SKILLs with Claude Code, Codex, and Gemini CLI
+Zipsa is a complete ecosystem for developing and executing SKILL-based AI agents. It provides isolated Docker runtime, multi-runtime launcher, and a skill library.
 
-## Overview
+## Architecture
 
-This Docker image provides a ready-to-use environment for running SKILL-based agents without worrying about complex dependency installation. It includes:
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Zipsa Ecosystem                      │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐   ┌──────────────┐   ┌───────────┐  │
+│  │   Runtime    │   │   Launcher   │   │  Skills   │  │
+│  │  (Docker)    │   │   (Python)   │   │  Library  │  │
+│  │              │   │              │   │           │  │
+│  │ • Claude Code│◄──│ • CLI Tool   │◄──│ • Manifests│ │
+│  │ • Codex      │   │ • Executor   │   │ • SKILL.md│  │
+│  │ • Gemini     │   │ • MCP Config │   │ • Examples│  │
+│  └──────────────┘   └──────────────┘   └───────────┘  │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
 
-- **Claude Code**: Official Anthropic CLI
-- **Codex**: Alternative agent runtime
-- **Gemini CLI**: Google's Gemini agent
-- **MCP Support**: Pre-configured MCP server support (`npx`, `uvx`, `pipx`)
+## Components
 
-**Base Image:** Debian Slim (Multi-stage Build)
-**Image Size:** ~1.9GB (54.9% reduction from initial 4.2GB)
-**Use Case:** Runtime-agnostic SKILL execution
+### 1. Runtime ([runtime/](./runtime/))
 
----
+Lightweight Docker image providing isolated execution environment:
+- Pre-installed: Claude Code, Codex, Gemini CLI
+- MCP server support (npx, uvx, pipx)
+- Multi-architecture (amd64, arm64)
+- 1.9GB image size (54.9% reduction)
 
-## Quick Start
-
-### Pull and Run
-
+**Quick Start:**
 ```bash
-# Pull from GitHub Container Registry
 docker pull ghcr.io/westbrookai/zipsa-runtime:latest
-
-# Run Claude Code interactively
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude
-
-# Run with MCP config
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -v $(pwd)/servers.json:/app/servers.json \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude --mcp-config /app/servers.json
+docker run -it --rm -v $(pwd):/workspace ghcr.io/westbrookai/zipsa-runtime:latest claude
 ```
 
-### Build Locally
-
-```bash
-# Clone repository
-git clone https://github.com/westbrookai/zipsa-runtime.git
-cd zipsa-runtime
-
-# Build image
-docker build -t zipsa-runtime:latest .
-
-# Verify installation
-docker run --rm skill-runtime:latest claude --version
-docker run --rm skill-runtime:latest npx --version
-docker run --rm skill-runtime:latest uvx --version
-```
+📚 [Runtime Documentation](./runtime/README.md)
 
 ---
 
-## Usage Examples
+### 2. Launcher ([launcher/](./launcher/))
 
-### 1. Claude Code with Local Project
+Python CLI for orchestrating skill execution:
+- Multi-runtime support (claude, codex, gemini)
+- SKILL manifest validation
+- Environment variable management
+- Execution logging and metrics
 
+**Quick Start:**
 ```bash
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude
+cd launcher
+uv pip install -e ".[dev]"
+zipsa run ../skills/daily-progress "summarize today's work"
 ```
 
-### 2. Codex Execution
-
-```bash
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest codex
-```
-
-### 3. Gemini CLI Execution
-
-```bash
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest gemini
-```
-
-### 4. MCP Server Configuration
-
-Create `servers.json`:
-
-```json
-{
-  "mcpServers": {
-    "time": {
-      "command": "uvx",
-      "args": ["mcp-server-time", "--local-timezone=America/New_York"]
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
-    }
-  }
-}
-```
-
-Run with MCP:
-
-```bash
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -v $(pwd)/servers.json:/app/servers.json \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude --mcp-config /app/servers.json
-```
+📚 [Launcher Documentation](./launcher/README.md)
 
 ---
 
-## Docker Compose Deployment
+### 3. Skills ([skills/](./skills/))
 
-For easier setup, use the pre-configured Docker Compose example:
+Collection of reusable SKILL definitions:
+- `daily-progress`: Summarize Claude Code sessions and log to Notion
+- More coming soon...
 
+**Quick Start:**
 ```bash
-cd examples/minimal-agent
-./setup.sh  # One-command setup
+cd skills/daily-progress
+cat manifest.yaml  # View skill definition
 ```
 
-**Features:**
-- Automated environment setup
-- Pre-configured MCP servers
-- Volume mounts for workspace
-- Auto-restart on failures
-
-See [examples/minimal-agent/README.md](./examples/minimal-agent/README.md) for detailed documentation.
+📚 [Skills Documentation](./skills/README.md)
 
 ---
 
-## Configuration
+## Quick Start (Full Stack)
 
-### Environment Variables
+1. **Pull Runtime:**
+   ```bash
+   docker pull ghcr.io/westbrookai/zipsa-runtime:latest
+   ```
 
-Create `env.txt` (add to `.gitignore`):
+2. **Install Launcher:**
+   ```bash
+   cd launcher
+   uv pip install -e ".[dev]"
+   ```
 
-```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
-export GOOGLE_OAUTH_CLIENT_ID="your-client-id"
-export GOOGLE_OAUTH_CLIENT_SECRET="your-client-secret"
-```
+3. **Configure Runtime:**
+   ```bash
+   cp launcher/runtime-config.yaml.example ~/.zipsa/runtime-config.yaml
+   # Edit ~/.zipsa/runtime-config.yaml and add your tokens
+   ```
 
-Load and run:
-
-```bash
-# Load environment variables
-source env.txt
-
-# Run with env vars
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude
-```
-
-### Volume Mounts
-
-| Mount Point | Purpose | Example |
-|-------------|---------|---------|
-| `/workspace` | Your project directory | `-v $(pwd):/workspace` |
-| `/app/servers.json` | MCP server config | `-v $(pwd)/servers.json:/app/servers.json` |
-| `/root/.claude` | Claude Code settings | `-v ~/.claude:/root/.claude` |
-
----
-
-## Building from Source
-
-### Prerequisites
-
-- Docker 20.10+
-- (Optional) hadolint for linting
-
-### Build Steps
-
-```bash
-# 1. Clone repository
-git clone https://github.com/westbrookai/zipsa-runtime.git
-cd zipsa-runtime
-
-# 2. (Optional) Lint Dockerfile
-hadolint Dockerfile
-
-# 3. Build image
-docker build -t zipsa-runtime:latest .
-
-# 4. Test build
-docker run --rm skill-runtime:latest claude --version
-docker run --rm skill-runtime:latest npx --version
-docker run --rm skill-runtime:latest uvx --version
-
-# 5. Check image size
-docker images skill-runtime:latest
-```
-
-### Custom Build Arguments
-
-```bash
-# Specify Node.js version
-docker build --build-arg NODE_VERSION=20.12.0 -t skill-runtime:custom .
-```
-
----
-
-## Troubleshooting
-
-### Issue: "command not found"
-
-**Problem:** Tool not in PATH
-
-**Solution:**
-```bash
-# Verify installation
-docker run --rm skill-runtime:latest which claude
-docker run --rm skill-runtime:latest which npx
-```
-
-### Issue: MCP servers not loading
-
-**Problem:** `servers.json` not mounted or invalid
-
-**Solution:**
-1. Check file exists: `cat servers.json`
-2. Validate JSON: `cat servers.json | jq .`
-3. Mount correctly: `-v $(pwd)/servers.json:/app/servers.json`
-
-### Issue: Permission denied
-
-**Problem:** File permissions in container
-
-**Solution:**
-```bash
-# Run as current user
-docker run --rm --user $(id -u):$(id -g) \
-  -v $(pwd):/workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude
-```
-
-### Issue: Large image size (>600MB)
-
-**Problem:** Unnecessary dependencies
-
-**Solution:**
-- Check Dockerfile for cleanup commands
-- Verify multi-stage builds
-- Remove unused packages
+4. **Run a Skill:**
+   ```bash
+   zipsa run skills/daily-progress "summarize today's work"
+   ```
 
 ---
 
 ## Development
 
-See [CLAUDE.md](./CLAUDE.md) for development guidelines, TDD process, and contribution workflow.
+Each component has its own development guide:
 
-### Quick Development Commands
+- **Runtime:** [runtime/CLAUDE.md](./runtime/CLAUDE.md) - Dockerfile, hadolint, integration tests
+- **Launcher:** [launcher/CLAUDE.md](./launcher/CLAUDE.md) - Python, uv, pytest, TDD
+- **Skills:** [skills/README.md](./skills/README.md) - Manifest format, SKILL.md syntax
 
+**Common Principles (All Components):**
+- ✅ **TDD Required**: Write tests first
+- ✅ **English Only**: All code, comments, docs in English
+- ✅ **Conventional Commits**: `feat:`, `fix:`, `docs:`, etc.
+- ✅ **Branch Strategy**: Feature branches, PR to main
+
+---
+
+## Repository Structure
+
+```
+zipsa/
+├── runtime/              # Docker runtime environment
+│   ├── Dockerfile
+│   ├── CLAUDE.md        # Development guide
+│   └── README.md        # Usage documentation
+│
+├── launcher/            # Python CLI orchestrator
+│   ├── zipsa/           # Python package
+│   ├── tests/
+│   ├── CLAUDE.md        # Development guide
+│   └── README.md        # Usage documentation
+│
+├── skills/              # SKILL library
+│   ├── daily-progress/
+│   └── README.md        # Authoring guide
+│
+├── examples/            # Docker Compose examples
+│   └── minimal-agent/
+│
+└── docs/               # Design documents
+    └── zipsa-python-design.md
+```
+
+---
+
+## Use Cases
+
+### Scenario 1: Daily Progress Logging
 ```bash
-# Run tests
-./test-integration.sh
+# Automatically summarize today's Claude Code work and log to Notion
+zipsa run skills/daily-progress "log today's progress"
+```
 
-# Lint Dockerfile
-hadolint Dockerfile
+### Scenario 2: Custom SKILL Development
+```bash
+# Create new skill
+cd skills
+mkdir my-skill
+# ... create manifest.yaml and SKILL.md
+zipsa validate my-skill
+zipsa run my-skill "test query"
+```
 
-# Build for testing
-docker build -t skill-runtime:test .
-
-# Interactive debugging
-docker run -it --rm skill-runtime:test /bin/bash
+### Scenario 3: Multi-Runtime Testing
+```bash
+# Test skill on different runtimes
+zipsa run my-skill "query" --runtime claude
+zipsa run my-skill "query" --runtime codex
+zipsa run my-skill "query" --runtime gemini
 ```
 
 ---
 
 ## Roadmap
 
-- [x] Basic Debian Slim image
-- [x] Claude Code support
-- [x] Codex integration
-- [x] Gemini CLI integration
-- [x] Multi-architecture builds (amd64, arm64)
-- [x] CI/CD pipeline
-- [x] Multi-stage build optimization
-- [x] Image size optimization (1.9GB, 54.9% reduction)
-- [x] GitHub Container Registry publishing (ghcr.io/westbrookai/zipsa-runtime)
-- [ ] Security hardening
-- [ ] Automated security scanning
-- [ ] Container signing and verification
+- [x] Runtime: Docker image with Claude Code, Codex, Gemini
+- [x] Runtime: Multi-architecture builds (amd64, arm64)
+- [x] Runtime: Image size optimization (1.9GB)
+- [x] Launcher: Python CLI with manifest validation
+- [x] Launcher: Runtime config system
+- [x] Launcher: MCP server environment management
+- [x] Launcher: Execution logging and metrics
+- [x] Skills: daily-progress (Notion integration)
+- [ ] Skills: More example skills
+- [ ] Launcher: Skill dependency management
+- [ ] Runtime: Security hardening (non-root user)
+- [ ] Runtime: Container signing and verification
+
+---
+
+## Contributing
+
+We welcome contributions! Please read the development guide for your target component:
+
+1. Choose component: [runtime/](./runtime/CLAUDE.md), [launcher/](./launcher/CLAUDE.md), or [skills/](./skills/README.md)
+2. Read the development guide
+3. Create feature branch: `dev/your-feature`
+4. Write tests first (TDD)
+5. Submit PR to `main`
 
 ---
 
@@ -306,22 +211,12 @@ docker run -it --rm skill-runtime:test /bin/bash
 
 MIT License - see [LICENSE](./LICENSE) file for details
 
-## Contributing
-
-1. Read [CLAUDE.md](./CLAUDE.md)
-2. Create feature branch: `dev/your-feature`
-3. Write tests first (TDD)
-4. Submit PR to `main`
-
 ---
 
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/westbrookai/zipsa-runtime/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/westbrookai/zipsa-runtime/discussions)
-- **Documentation:** [CLAUDE.md](./CLAUDE.md)
-- **Repository:** https://github.com/westbrookai/zipsa-runtime
-
----
-
-**Note:** This is a runtime environment. For development, install tools locally or use a dedicated development container.
+- **Issues:** [GitHub Issues](https://github.com/westbrookai/zipsa/issues)
+- **Documentation:**
+  - Runtime: [runtime/README.md](./runtime/README.md)
+  - Launcher: [launcher/README.md](./launcher/README.md)
+  - Skills: [skills/README.md](./skills/README.md)

@@ -1,0 +1,395 @@
+# Launcher Development Guide
+
+## Project Purpose
+Python CLI tool for orchestrating SKILL execution across multiple runtimes (Claude Code, Codex, Gemini).
+
+**Goals:**
+- Runtime-agnostic execution
+- Manifest validation
+- Environment variable management
+- Execution logging and metrics
+
+## Technology Stack
+- **Language:** Python 3.12+
+- **Package Manager:** uv
+- **Testing:** pytest with coverage
+- **Validation:** Pydantic models
+- **CLI:** Click framework
+
+---
+
+## Development Workflow
+
+### TDD Process (Required)
+
+**All features must be test-driven:**
+
+1. **Write test first**
+   - Define expected behavior in test
+   - Test should fail initially
+
+2. **Review test before implementation**
+   - Show test code for approval
+   - Confirm: "This is what the feature should do"
+
+3. **Implement feature**
+   - Write minimal code to pass test
+
+4. **Verify**
+   - Run tests until all pass
+   - Check coverage doesn't drop
+
+**Example TDD cycle:**
+```bash
+# 1. Write test
+# tests/test_new_feature.py
+
+# 2. Run test (should fail)
+uv run pytest tests/test_new_feature.py -v
+
+# 3. Implement feature
+# zipsa/core/new_feature.py
+
+# 4. Run test (should pass)
+uv run pytest tests/test_new_feature.py -v
+
+# 5. Run all tests
+uv run pytest --cov=zipsa
+```
+
+### Branch Strategy
+- `main`: Production-ready code only
+- `feat/*`: Feature development branches
+- **Never commit directly to main**
+
+### Work Process
+1. Create branch from main: `feat/feature-name`
+2. Write tests for new feature (TDD)
+3. Implement feature
+4. Verify all tests pass
+5. Ensure coverage ≥ 70%
+6. Create PR to main
+7. Merge after review
+
+---
+
+## Code Guidelines
+
+### Language
+**All source code, comments, commit messages, and documentation must be in English.**
+
+### Project Structure
+```
+launcher/
+├── zipsa/              # Main package
+│   ├── __init__.py
+│   ├── cli.py          # Click commands
+│   ├── core/           # Core logic
+│   │   ├── executor.py # Docker orchestration
+│   │   ├── skill.py    # Skill loading
+│   │   └── models.py   # Pydantic models
+│   └── runtimes/       # Runtime plugins
+│       ├── base.py
+│       ├── claude.py
+│       └── ...
+├── tests/              # Test files
+│   ├── test_cli.py
+│   ├── test_executor.py
+│   └── fixtures/       # Test data
+└── pyproject.toml
+```
+
+### Pydantic Models
+Use Pydantic for all configuration and validation:
+
+```python
+from pydantic import BaseModel, Field
+
+class SkillMetadata(BaseModel):
+    """Skill metadata with validation."""
+    name: str
+    version: str
+    author: str | None = None
+```
+
+### Error Handling
+```python
+# Good - specific exceptions
+try:
+    skill = Skill.load(path)
+except FileNotFoundError:
+    print(f"Error: Manifest not found: {path}")
+    sys.exit(1)
+
+# Bad - generic exceptions
+try:
+    skill = Skill.load(path)
+except Exception as e:
+    print(f"Error: {e}")
+```
+
+---
+
+## Testing Strategy
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_executor.py -v
+
+# Run with coverage
+uv run pytest --cov=zipsa --cov-report=term-missing
+
+# Run only failed tests
+uv run pytest --lf
+```
+
+### Test Structure
+
+```python
+class TestFeatureName:
+    """Test suite for feature."""
+
+    def test_basic_behavior(self):
+        """Test basic expected behavior."""
+        result = function(input)
+        assert result == expected
+
+    def test_edge_case(self):
+        """Test edge case handling."""
+        with pytest.raises(ValueError):
+            function(invalid_input)
+
+    def test_with_fixture(self, tmp_path):
+        """Test using pytest fixture."""
+        file_path = tmp_path / "test.yaml"
+        # ... test implementation
+```
+
+### Coverage Requirements
+- Minimum: 70% overall coverage
+- New code: 80%+ coverage preferred
+- Don't sacrifice test quality for coverage %
+
+---
+
+## Commit Convention
+
+Follow semantic commit messages:
+
+```
+<type>: <short description>
+
+<optional detailed explanation>
+```
+
+**Types:**
+- `feat:` New features or enhancements
+  - `feat: add runtime config system`
+- `fix:` Bug fixes
+  - `fix: handle missing manifest file gracefully`
+- `test:` Test additions or modifications
+  - `test: add coverage for MCP env extraction`
+- `docs:` Documentation only changes
+  - `docs: update README with runtime config example`
+- `refactor:` Code restructuring without behavior change
+  - `refactor: extract MCP config builder to separate method`
+- `deps:` Dependency updates
+  - `deps: upgrade pydantic to 2.6.0`
+
+**Format:**
+```bash
+git commit -m "feat: add headersHelper support for HTTP MCP servers
+
+- Add headersHelper field to MCPServerHTTP model
+- Include in .claude.json generation
+- Add test for headersHelper configuration"
+```
+
+---
+
+## Quality Checklist
+
+Before committing:
+- [ ] All tests pass (`uv run pytest`)
+- [ ] Coverage ≥ 70% (`uv run pytest --cov=zipsa`)
+- [ ] No linting errors (if configured)
+- [ ] Code follows project structure
+- [ ] New features have tests
+- [ ] README.md updated if needed
+- [ ] Commit message follows convention
+
+---
+
+## Common Tasks
+
+### Adding a New Runtime
+
+1. Create runtime plugin:
+   ```python
+   # zipsa/runtimes/newruntime.py
+   from .base import RuntimeBase
+
+   class NewRuntime(RuntimeBase):
+       name = "newruntime"
+       # ... implement methods
+   ```
+
+2. Register in `runtimes/__init__.py`
+
+3. Write tests:
+   ```python
+   # tests/test_runtimes.py
+   class TestNewRuntime:
+       def test_runtime_name(self):
+           runtime = NewRuntime()
+           assert runtime.name == "newruntime"
+   ```
+
+### Adding a New CLI Command
+
+1. Add command in `cli.py`:
+   ```python
+   @click.command()
+   def mycommand():
+       """Description of command."""
+       # implementation
+   ```
+
+2. Add to CLI group
+
+3. Write tests:
+   ```python
+   # tests/test_cli.py
+   def test_mycommand():
+       result = runner.invoke(cli, ["mycommand"])
+       assert result.exit_code == 0
+   ```
+
+### Updating Pydantic Models
+
+1. Write test with new field:
+   ```python
+   def test_new_field():
+       data = {"name": "test", "new_field": "value"}
+       model = MyModel.model_validate(data)
+       assert model.new_field == "value"
+   ```
+
+2. Update model:
+   ```python
+   class MyModel(BaseModel):
+       name: str
+       new_field: str | None = None
+   ```
+
+3. Verify tests pass
+
+---
+
+## Development Commands
+
+```bash
+# Install dependencies
+uv pip install -e ".[dev]"
+
+# Run tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=zipsa --cov-report=html
+open htmlcov/index.html
+
+# Format code (if configured)
+uv run black zipsa/ tests/
+
+# Type checking (if configured)
+uv run mypy zipsa/
+
+# Interactive Python with package
+uv run python
+>>> from zipsa.core.skill import Skill
+>>> skill = Skill.load("../skills/daily-progress")
+```
+
+---
+
+## Debugging Tips
+
+### Dry Run Mode
+```bash
+# See what Docker command would be executed
+zipsa run my-skill "query" --dry-run
+```
+
+### Interactive Shell in Container
+```bash
+# Debug inside container
+zipsa shell ../skills/daily-progress
+```
+
+### Test Specific Scenario
+```bash
+# Run single test with verbose output
+uv run pytest tests/test_executor.py::TestRuntimeConfig::test_auto_inject_env_from_config -vv
+```
+
+### Check Logs
+```bash
+# Execution logs are saved in skill directory
+cat ../skills/daily-progress/.zipsa/runs/*/output.jsonl
+cat ../skills/daily-progress/.zipsa/runs/*/metadata.json
+```
+
+---
+
+## Troubleshooting
+
+### Issue: Tests failing with import errors
+
+**Solution:**
+```bash
+# Reinstall in development mode
+uv pip install -e ".[dev]"
+```
+
+### Issue: Coverage too low
+
+**Solution:**
+- Focus on critical paths first
+- Add tests for error cases
+- Don't skip integration tests
+
+### Issue: Pydantic validation error
+
+**Solution:**
+```bash
+# Check model definition matches test data
+# Use .model_validate() not direct instantiation
+data = {"field": "value"}
+model = MyModel.model_validate(data)  # Good
+model = MyModel(field="value")        # Also works but less explicit
+```
+
+---
+
+## Resources
+
+- **Python Docs:** https://docs.python.org/3.12/
+- **Pydantic:** https://docs.pydantic.dev/
+- **pytest:** https://docs.pytest.org/
+- **Click:** https://click.palletsprojects.com/
+- **uv:** https://github.com/astral-sh/uv
+
+---
+
+## Notes
+
+- This is a **CLI orchestrator**, not a runtime environment
+- Focus on clean interfaces and testability
+- Keep Docker logic isolated in executor
+- Runtime plugins should be minimal and focused
