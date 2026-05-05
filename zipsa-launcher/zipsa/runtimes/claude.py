@@ -23,13 +23,13 @@ class ClaudeRuntime(AgentRuntime):
         user_input: str,
         system_prompt: str,
         allowed_tools: str,
-        mcp_config_path: Path,
         workspace: Path,
         env: dict[str, str],
     ) -> list[str]:
         """Build Claude Code CLI command.
 
         Returns command array for Claude Code with all necessary flags.
+        MCP servers are configured via .claude.json (mounted to /home/agent/.claude.json).
         """
         return [
             "claude",
@@ -39,8 +39,6 @@ class ClaudeRuntime(AgentRuntime):
             system_prompt,
             "--allowedTools",
             allowed_tools,
-            "--mcp-config",
-            str(mcp_config_path),
             "--dangerously-skip-permissions",
             "--output-format=stream-json",
             "--verbose",

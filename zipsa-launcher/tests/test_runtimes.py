@@ -22,7 +22,6 @@ class TestClaudeRuntime:
             user_input="Hello world",
             system_prompt="You are a test agent.",
             allowed_tools="Read,Write",
-            mcp_config_path=Path("/tmp/mcp.json"),
             workspace=Path("/workspace"),
             env={"TEST": "value"},
         )
@@ -35,8 +34,8 @@ class TestClaudeRuntime:
         assert "You are a test agent." in cmd
         assert "--allowedTools" in cmd
         assert "Read,Write" in cmd
-        assert "--mcp-config" in cmd
-        assert "/tmp/mcp.json" in cmd
+        # MCP config is now loaded from .claude.json (not --mcp-config option)
+        assert "--mcp-config" not in cmd
         assert "--dangerously-skip-permissions" in cmd
         assert "--output-format=stream-json" in cmd
 

@@ -1,5 +1,6 @@
 """Tests for Skill loader."""
 
+import json
 import pytest
 from pathlib import Path
 from zipsa.core.skill import Skill
@@ -152,3 +153,147 @@ class TestAllowedTools:
 
         # Rest should be MCP
         assert tools[2].startswith("mcp__")
+
+
+class TestClaudeJson:
+    """Test .claude.json generation."""
+
+    def test_build_claude_json_creates_file(self, tmp_path):
+        """Should create .claude.json file in .zipsa directory."""
+        # Create minimal manifest in tmp directory
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        zipsa_dir = skill_dir / ".zipsa"
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        # File should exist
+        assert claude_json_path.exists()
+        assert claude_json_path == zipsa_dir / ".claude.json"
+
+    def test_build_claude_json_structure(self, tmp_path):
+        """Should have correct structure with onboarding and projects."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        # Parse and check structure
+        config = json.loads(claude_json_path.read_text())
+
+        assert config["hasCompletedOnboarding"] is True
+        assert "/workspace" in config["projects"]
+        assert config["projects"]["/workspace"]["hasTrustDialogAccepted"] is True
+        assert "mcpServers" in config["projects"]["/workspace"]
+
+    def test_build_claude_json_with_stdio_mcp(self, tmp_path):
+        """Stdio MCP servers should be in /workspace project mcpServers."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "filesystem",
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+                    }
+                ],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        config = json.loads(claude_json_path.read_text())
+        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+
+        assert "filesystem" in mcp_servers
+        assert mcp_servers["filesystem"]["command"] == "npx"
+        assert mcp_servers["filesystem"]["args"] == [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+        ]
+
+    def test_build_claude_json_with_http_mcp(self, tmp_path):
+        """HTTP MCP servers should be in /workspace project mcpServers."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "notion",
+                        "type": "http",
+                        "url": "https://mcp.notion.com/mcp",
+                    }
+                ],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        config = json.loads(claude_json_path.read_text())
+        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+
+        assert "notion" in mcp_servers
+        assert mcp_servers["notion"]["type"] == "http"
+        assert mcp_servers["notion"]["url"] == "https://mcp.notion.com/mcp"

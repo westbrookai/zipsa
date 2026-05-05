@@ -25,7 +25,6 @@ class AgentRuntime(ABC):
         user_input: str,
         system_prompt: str,
         allowed_tools: str,
-        mcp_config_path: Path,
         workspace: Path,
         env: dict[str, str],
     ) -> list[str]:
@@ -36,7 +35,6 @@ class AgentRuntime(ABC):
             user_input: User's input/query
             system_prompt: System prompt (purpose + instructions + rules)
             allowed_tools: Comma-separated allowed tools
-            mcp_config_path: Path to MCP config file (in container)
             workspace: Workspace path (in container)
             env: Environment variables
 

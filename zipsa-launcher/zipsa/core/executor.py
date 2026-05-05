@@ -58,10 +58,6 @@ class DockerExecutor:
         """
         env = env or {}
 
-        # Create temp directory in workspace for MCP config
-        temp_dir = self.workspace / ".zipsa"
-        temp_dir.mkdir(exist_ok=True)
-
         # Create run directory for logging (skip for dry-run and shell mode)
         run_dir = None
         if not dry_run and not shell:
@@ -69,46 +65,40 @@ class DockerExecutor:
             run_dir = skill.skill_dir / ".zipsa" / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create temp MCP config file
-        mcp_config_path = temp_dir / f"mcp-config-{id(self)}.json"
-        mcp_config = skill.build_mcp_config()
-        mcp_config_path.write_text(json.dumps(mcp_config))
+        # Generate .claude.json for skill (contains MCP config + onboarding settings)
+        claude_json_path = skill.build_claude_json()
 
         try:
             # Build Docker command
             docker_cmd = self._build_docker_command(
-                skill, user_input, mcp_config_path, env, shell=shell
+                skill, user_input, claude_json_path, env, shell=shell
             )
 
             if dry_run:
+                # Read generated config for dry-run display
+                mcp_config = json.loads(claude_json_path.read_text())
                 self._print_dry_run(skill, docker_cmd, mcp_config)
                 return None
 
             if shell:
                 # Interactive shell mode - run directly
-                self._run_shell(docker_cmd, mcp_config_path)
+                self._run_shell(docker_cmd, claude_json_path)
                 return None
 
             # Execute and return generator
-            return self._execute_skill(docker_cmd, mcp_config_path, skill, run_dir)
+            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir)
 
         except Exception:
-            # Cleanup on error
-            mcp_config_path.unlink(missing_ok=True)
             raise
-        finally:
-            # Cleanup temp file for dry_run (non-dry_run cleanup is in _execute_skill)
-            if dry_run:
-                mcp_config_path.unlink(missing_ok=True)
 
     def _execute_skill(
-        self, docker_cmd: list[str], mcp_config_path: Path, skill: Skill, run_dir: Optional[Path]
+        self, docker_cmd: list[str], claude_json_path: Path, skill: Skill, run_dir: Optional[Path]
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
         Args:
             docker_cmd: Docker command array
-            mcp_config_path: Path to temp MCP config file
+            claude_json_path: Path to .claude.json file (not cleaned up after execution)
             skill: Skill being executed
             run_dir: Directory to save run logs (None to skip logging)
 
@@ -274,25 +264,18 @@ class DockerExecutor:
                     # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
 
-            # Cleanup temp MCP config file
-            mcp_config_path.unlink(missing_ok=True)
-
-    def _run_shell(self, docker_cmd: list[str], mcp_config_path: Path) -> None:
+    def _run_shell(self, docker_cmd: list[str], claude_json_path: Path) -> None:
         """Run interactive bash shell in Docker container.
 
         Args:
             docker_cmd: Docker command array (with -it and bash)
-            mcp_config_path: Path to temp MCP config file
+            claude_json_path: Path to .claude.json file (not cleaned up after execution)
         """
-        try:
-            # Execute Docker with interactive shell
-            print("Starting interactive bash shell in container...")
-            print("MCP config and mounts are ready. Type 'exit' to quit.")
-            print()
-            subprocess.run(docker_cmd)
-        finally:
-            # Cleanup temp MCP config file
-            mcp_config_path.unlink(missing_ok=True)
+        # Execute Docker with interactive shell
+        print("Starting interactive bash shell in container...")
+        print(".claude.json and mounts are ready. Type 'exit' to quit.")
+        print()
+        subprocess.run(docker_cmd)
 
     def _save_summary(self, run_dir: Path) -> None:
         """Generate summary.jsonl from output.jsonl.
@@ -406,7 +389,7 @@ class DockerExecutor:
         self,
         skill: Skill,
         user_input: str,
-        mcp_config_path: Path,
+        claude_json_path: Path,
         env: dict[str, str],
         shell: bool = False,
     ) -> list[str]:
@@ -415,7 +398,7 @@ class DockerExecutor:
         Args:
             skill: Skill being executed
             user_input: User input
-            mcp_config_path: Path to temp MCP config (on host)
+            claude_json_path: Path to .claude.json file (on host)
             env: Environment variables
             shell: If True, build command for interactive shell
 
@@ -452,7 +435,10 @@ class DockerExecutor:
                 f"{self.workspace}:/workspace",
             ]
         )
-        # NOTE: MCP config is now inside workspace, so no separate mount needed
+
+        # Mount .claude.json (contains MCP config + onboarding settings)
+        # Note: Must be writable - claude updates this file during execution
+        cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
 
         # Mount global credentials if they exist
         global_creds = Path.home() / ".zipsa" / ".credentials.json"
@@ -478,16 +464,12 @@ class DockerExecutor:
             system_prompt = self._build_system_prompt(skill)
             allowed_tools = skill.get_allowed_tools()
 
-            # MCP config is inside workspace
-            relative_config_path = mcp_config_path.relative_to(self.workspace)
-            container_config_path = Path("/workspace") / relative_config_path
-
+            # MCP config is now in .claude.json (mounted to /home/agent/.claude.json)
             runtime_cmd = self.runtime.build_command(
                 skill_name=skill.name,
                 user_input=user_input,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                mcp_config_path=container_config_path,  # Container path inside /workspace
                 workspace=Path("/workspace"),
                 env=env,
             )

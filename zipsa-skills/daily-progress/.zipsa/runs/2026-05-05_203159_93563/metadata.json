@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-05-05_203159_93563",
+  "skill_name": "daily-progress",
+  "skill_version": "0.1.0",
+  "timestamp": "2026-05-05T20:32:30.265066",
+  "is_error": true,
+  "error": "No result event found - execution may have failed",
+  "cost_exceeded": false,
+  "cost_limit_usd": 0.5
+}

@@ -1,5 +1,6 @@
 """Skill loader and configuration builder."""
 
+import json
 from pathlib import Path
 from typing import Optional
 import yaml
@@ -129,3 +130,54 @@ class Skill:
             tools.append(f"mcp__{tool_name}")
 
         return ",".join(tools)
+
+    def build_claude_json(self) -> Path:
+        """Generate .claude.json file for skill.
+
+        Creates skill_dir/.zipsa/.claude.json with:
+        - Onboarding completion flag
+        - Trust dialog acceptance
+        - MCP server configuration for /workspace project
+
+        Returns:
+            Path to created .claude.json file
+        """
+        # Create .zipsa directory if not exists
+        zipsa_dir = self.skill_dir / ".zipsa"
+        zipsa_dir.mkdir(exist_ok=True)
+
+        # Build MCP servers config
+        mcp_servers = {}
+        for server in self.manifest.spec.mcp:
+            if server.type == "stdio":
+                mcp_servers[server.name] = {
+                    "command": server.command,
+                    "args": server.args,
+                }
+            elif server.type == "http":
+                server_config = {
+                    "type": "http",
+                    "url": server.url,
+                }
+                # TODO: Auto-generate connection field
+                # connection = f"{server.name}|{sha256(config)[:16]}"
+                if server.connection:
+                    server_config["connection"] = server.connection
+                mcp_servers[server.name] = server_config
+
+        # Build full .claude.json structure
+        claude_config = {
+            "hasCompletedOnboarding": True,
+            "projects": {
+                "/workspace": {
+                    "hasTrustDialogAccepted": True,
+                    "mcpServers": mcp_servers,
+                }
+            }
+        }
+
+        # Write to file
+        claude_json_path = zipsa_dir / ".claude.json"
+        claude_json_path.write_text(json.dumps(claude_config, indent=2))
+
+        return claude_json_path

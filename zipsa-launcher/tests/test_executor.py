@@ -51,14 +51,14 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
 
-        # MCP config must be inside workspace
-        mcp_config_path = executor.workspace / ".zipsa" / "test-mcp.json"
+        # Generate .claude.json file
+        claude_json_path = skill.build_claude_json()
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}
 
         cmd = executor._build_docker_command(
             skill=skill,
             user_input="Test input",
-            mcp_config_path=mcp_config_path,
+            claude_json_path=claude_json_path,
             env=env,
         )
 
@@ -73,9 +73,9 @@ class TestDockerExecutor:
         env_idx = cmd.index("-e")
         assert cmd[env_idx + 1] == "CLAUDE_CODE_OAUTH_TOKEN=test-token"
 
-        # Check volume mounts
-        assert "-v" in cmd
-        # Should have workspace and mcp config mounts
+        # Check volume mounts - should have .claude.json mount (writable)
+        cmd_str = " ".join(cmd)
+        assert "/home/agent/.claude.json" in cmd_str
 
         # Check image
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
@@ -89,14 +89,14 @@ class TestDockerExecutor:
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
-        # MCP config must be inside workspace
-        mcp_config_path = executor.workspace / ".zipsa" / "test-mcp.json"
+        # Generate .claude.json file
+        claude_json_path = skill.build_claude_json()
         env = {}
 
         cmd = executor._build_docker_command(
             skill=skill,
             user_input="Test",
-            mcp_config_path=mcp_config_path,
+            claude_json_path=claude_json_path,
             env=env,
         )
 
