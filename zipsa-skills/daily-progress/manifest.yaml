@@ -38,12 +38,10 @@ spec:
     - name: notion
       type: http
       url: https://mcp.notion.com/mcp
-      connection: notion
 
     - name: githubcopilot
       type: http
       url: https://api.githubcopilot.com/mcp
-      connection: githubcopilot
 
   # Tools whitelist — only these are allowed
   tools:
