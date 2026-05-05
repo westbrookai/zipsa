@@ -1,5 +1,6 @@
 """Tests for run logging functionality."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from zipsa.core.executor import DockerExecutor
@@ -27,6 +28,11 @@ class TestRunLogging:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
+        # Clean up previous runs
+        runs_dir = skill_dir / ".zipsa" / "runs"
+        if runs_dir.exists():
+            shutil.rmtree(runs_dir)
+
         # Execute
         list(executor.run(skill, "Test input", env={}))
 
@@ -44,7 +50,6 @@ class TestRunLogging:
         assert len(run_dir.name) == 23  # YYYY-MM-DD_HHMMSS_microseconds
 
         # Cleanup
-        import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
 
     @patch("zipsa.core.executor.subprocess.Popen")
@@ -87,7 +92,6 @@ class TestRunLogging:
         assert '"type":"result"' in lines[2]
 
         # Cleanup
-        import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
 
     def test_summary_filtering(self):
@@ -125,7 +129,6 @@ class TestRunLogging:
         assert '"type":"result"' in lines[3]
 
         # Cleanup
-        import shutil
         shutil.rmtree(Path(__file__).parent / "test_runs")
 
     def test_metadata_extraction(self):
@@ -169,7 +172,6 @@ class TestRunLogging:
         assert metadata["duration_ms"] == 15562
 
         # Cleanup
-        import shutil
         shutil.rmtree(Path(__file__).parent / "test_runs")
 
     @patch("zipsa.core.executor.subprocess.Popen")
@@ -241,5 +243,4 @@ class TestRunLogging:
         assert "No result event" in metadata["error"]
 
         # Cleanup
-        import shutil
         shutil.rmtree(skill_dir / ".zipsa" / "runs")
