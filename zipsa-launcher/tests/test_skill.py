@@ -184,9 +184,15 @@ class TestClaudeJson:
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json()
 
-        # File should exist
+        # Both files should exist
         assert claude_json_path.exists()
         assert claude_json_path == zipsa_dir / ".claude.json"
+
+        claude_json_org_path = zipsa_dir / ".claude.json.org"
+        assert claude_json_org_path.exists()
+
+        # Both should have same content initially
+        assert claude_json_path.read_text() == claude_json_org_path.read_text()
 
     def test_build_claude_json_structure(self, tmp_path):
         """Should have correct structure with onboarding and projects."""

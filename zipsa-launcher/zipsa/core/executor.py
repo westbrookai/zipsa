@@ -440,10 +440,16 @@ class DockerExecutor:
         # Note: Must be writable - claude updates this file during execution
         cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
 
+        # Mount .claude.json.org (read-only original for comparison)
+        claude_json_org_path = claude_json_path.parent / ".claude.json.org"
+        if claude_json_org_path.exists():
+            cmd.extend(["-v", f"{claude_json_org_path}:/home/agent/.claude.json.org:ro"])
+
         # Mount global credentials if they exist
+        # Note: Must be writable - claude may refresh tokens during execution
         global_creds = Path.home() / ".zipsa" / ".credentials.json"
         if global_creds.exists():
-            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json:ro"])
+            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json"])
 
         # MCP stdio mounts (from manifest)
         for server in skill.manifest.spec.mcp:

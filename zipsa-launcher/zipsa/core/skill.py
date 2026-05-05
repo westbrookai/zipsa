@@ -176,8 +176,13 @@ class Skill:
             }
         }
 
-        # Write to file
+        # Write to files
         claude_json_path = zipsa_dir / ".claude.json"
-        claude_json_path.write_text(json.dumps(claude_config, indent=2))
+        claude_json_org_path = zipsa_dir / ".claude.json.org"
+
+        config_text = json.dumps(claude_config, indent=2)
+        claude_json_path.write_text(config_text)
+        # Also write .org file for comparison after execution
+        claude_json_org_path.write_text(config_text)
 
         return claude_json_path
