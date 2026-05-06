@@ -105,6 +105,45 @@ class TestDockerExecutor:
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
         assert "claude" in cmd
 
+    def test_build_docker_command_includes_global_env_file(self, tmp_path):
+        """Docker command should include ~/.zipsa/.env as second --env-file if it exists."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        global_env_file = tmp_path / ".zipsa" / ".env"
+        global_env_file.parent.mkdir()
+        global_env_file.write_text("GLOBAL_TOKEN=global-value\n")
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert cmd.count("--env-file") == 2
+        assert str(global_env_file) in cmd
+
+    def test_build_docker_command_no_global_env_file_when_missing(self, tmp_path):
+        """Docker command should have only one --env-file if ~/.zipsa/.env doesn't exist."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert cmd.count("--env-file") == 1
+
     def test_build_docker_command_with_mcp_mounts(self):
         """Docker command should include MCP stdio mounts."""
         executor = DockerExecutor()

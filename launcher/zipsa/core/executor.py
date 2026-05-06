@@ -502,6 +502,12 @@ class DockerExecutor:
                         else:
                             print(f"Warning: Runtime config specifies auto-inject for '{env_var}' but it's not set in host environment")
 
+        # Global env file (~/.zipsa/.env) takes lower precedence, added first
+        global_env_file = Path.home() / ".zipsa" / ".env"
+        if global_env_file.exists():
+            cmd.extend(["--env-file", str(global_env_file)])
+
+        # Per-execution env file (skill_dir/.zipsa/.env), added last to take precedence
         env_file = self._write_env_file(skill, env)
         cmd.extend(["--env-file", str(env_file)])
 
