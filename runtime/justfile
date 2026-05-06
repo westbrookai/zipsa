@@ -1,0 +1,27 @@
+ZIPSA_IMAGE := "zipsa-runtime:dev"
+HADOLINT_IMAGE := "hadolint/hadolint:v2.12.0"
+
+# Default: show available recipes
+default:
+    @just --list --unsorted
+
+# Lint Dockerfile with hadolint
+lint:
+    docker run --rm -i {{HADOLINT_IMAGE}} < Dockerfile
+    @echo "✓ Dockerfile lint passed"
+
+# Build the Docker image (runs lint first)
+build: lint
+    docker build -t {{ZIPSA_IMAGE}} .
+
+# Run integration tests
+test: build
+    ./test-integration.sh {{ZIPSA_IMAGE}}
+
+# Show image size after build
+size: build
+    @docker image inspect {{ZIPSA_IMAGE}} --format '{{ "{{.Size}}" }}' | numfmt --to=iec --suffix=B
+
+# Full pipeline: lint → build → test → size
+ci: test size
+    @echo "✓ all checks passed"

@@ -3,7 +3,11 @@
 # Integration tests for SKILL Runtime Docker Image
 # Following TDD: These tests define what the Dockerfile must achieve
 
-set -e  # Exit on error
+set -euo pipefail
+
+# using first parameter as image name
+#IMAGE_NAME="zipsa-runtime:latest"
+IMAGE_NAME="${1:?Usage: $0 <image-tag>}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -11,8 +15,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Test configuration
-IMAGE_NAME="skill-runtime:test"
 MAX_IMAGE_SIZE_MB=550  # Target: <500MB, allow 550MB for initial version
 
 # Counter for tests
@@ -60,18 +62,12 @@ else
     print_fail "Dockerfile not found"
 fi
 
-# Test 2: Docker build succeeds
-print_test "Docker build succeeds"
-echo "Building image... (this may take a few minutes on first run)"
-if docker build -t "$IMAGE_NAME" . 2>&1 | tee /tmp/docker-build.log | tail -n 20; then
-    print_pass "Docker build successful"
-else
-    print_fail "Docker build failed (see /tmp/docker-build.log for full output)"
-    echo "Last 50 lines of build log:"
-    tail -n 50 /tmp/docker-build.log
-    print_summary
+
+# Test 2: Docker image find 
+docker image inspect "$IMAGE_NAME" >/dev/null 2>&1 || {
+    echo "Error: image '$IMAGE_NAME' not found. Run 'just build' first." >&2
     exit 1
-fi
+}
 
 # Test 3: Image exists and has reasonable size
 print_test "Image exists and has reasonable size"
