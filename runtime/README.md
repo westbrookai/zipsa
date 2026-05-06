@@ -3,7 +3,7 @@
 [![CI](https://github.com/westbrookai/zipsa-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/westbrookai/zipsa-runtime/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Lightweight Docker runtime for executing SKILLs with Claude Code, Codex, and Gemini CLI
+> Lightweight Docker runtime for executing Zipsa SKILLs with Claude Code, Codex, and Gemini CLI
 
 ## Overview
 
@@ -12,7 +12,6 @@ This Docker image provides a ready-to-use environment for running SKILL-based ag
 - **Claude Code**: Official Anthropic CLI
 - **Codex**: Alternative agent runtime
 - **Gemini CLI**: Google's Gemini agent
-- **MCP Support**: Pre-configured MCP server support (`npx`, `uvx`, `pipx`)
 
 **Base Image:** Debian Slim (Multi-stage Build)
 **Image Size:** ~1.9GB (54.9% reduction from initial 4.2GB)
@@ -34,12 +33,6 @@ docker run -it --rm \
   -w /workspace \
   ghcr.io/westbrookai/zipsa-runtime:latest claude
 
-# Run with MCP config
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -v $(pwd)/servers.json:/app/servers.json \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude --mcp-config /app/servers.json
 ```
 
 ### Build Locally
@@ -89,40 +82,6 @@ docker run -it --rm \
   ghcr.io/westbrookai/zipsa-runtime:latest gemini
 ```
 
-### 4. MCP Server Configuration
-
-Create `servers.json`:
-
-```json
-{
-  "mcpServers": {
-    "time": {
-      "command": "uvx",
-      "args": ["mcp-server-time", "--local-timezone=America/New_York"]
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
-    }
-  }
-}
-```
-
-Run with MCP:
-
-```bash
-docker run -it --rm \
-  -v $(pwd):/workspace \
-  -v $(pwd)/servers.json:/app/servers.json \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude --mcp-config /app/servers.json
-```
-
 ---
 
 ## Docker Compose Deployment
@@ -136,9 +95,7 @@ cd examples/minimal-agent
 
 **Features:**
 - Automated environment setup
-- Pre-configured MCP servers
 - Volume mounts for workspace
-- Auto-restart on failures
 
 See [examples/minimal-agent/README.md](./examples/minimal-agent/README.md) for detailed documentation.
 
@@ -146,28 +103,7 @@ See [examples/minimal-agent/README.md](./examples/minimal-agent/README.md) for d
 
 ## Configuration
 
-### Environment Variables
 
-Create `env.txt` (add to `.gitignore`):
-
-```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
-export GOOGLE_OAUTH_CLIENT_ID="your-client-id"
-export GOOGLE_OAUTH_CLIENT_SECRET="your-client-secret"
-```
-
-Load and run:
-
-```bash
-# Load environment variables
-source env.txt
-
-# Run with env vars
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY \
-  -v $(pwd):/workspace \
-  -w /workspace \
-  ghcr.io/westbrookai/zipsa-runtime:latest claude
 ```
 
 ### Volume Mounts
@@ -175,7 +111,6 @@ docker run -it --rm \
 | Mount Point | Purpose | Example |
 |-------------|---------|---------|
 | `/workspace` | Your project directory | `-v $(pwd):/workspace` |
-| `/app/servers.json` | MCP server config | `-v $(pwd)/servers.json:/app/servers.json` |
 | `/root/.claude` | Claude Code settings | `-v ~/.claude:/root/.claude` |
 
 ---
@@ -230,15 +165,6 @@ docker build --build-arg NODE_VERSION=20.12.0 -t skill-runtime:custom .
 docker run --rm skill-runtime:latest which claude
 docker run --rm skill-runtime:latest which npx
 ```
-
-### Issue: MCP servers not loading
-
-**Problem:** `servers.json` not mounted or invalid
-
-**Solution:**
-1. Check file exists: `cat servers.json`
-2. Validate JSON: `cat servers.json | jq .`
-3. Mount correctly: `-v $(pwd)/servers.json:/app/servers.json`
 
 ### Issue: Permission denied
 

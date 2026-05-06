@@ -135,10 +135,6 @@ docker run --rm skill-runtime:latest codex --version
 
 # OpenClaw (if installed)
 docker run --rm skill-runtime:latest openclaw --version
-
-# MCP servers work
-docker run --rm -v $(pwd)/servers.json:/app/servers.json \
-  skill-runtime:latest claude --mcp-config /app/servers.json
 ```
 
 ---
