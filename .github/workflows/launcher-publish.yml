@@ -1,0 +1,60 @@
+name: Publish Launcher to PyPI
+
+on:
+  push:
+    tags:
+      - 'launcher-v*.*.*'  # Triggers on launcher version tags like launcher-v0.1.0
+
+jobs:
+  publish:
+    name: Build and Publish Python Package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for trusted publishing
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Extract version from tag
+      id: version
+      run: |
+        # Extract version without 'launcher-v' prefix (launcher-v0.1.0 -> 0.1.0)
+        VERSION=${GITHUB_REF#refs/tags/launcher-v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Version: ${VERSION}"
+
+    - name: Update version in pyproject.toml
+      run: |
+        cd launcher
+        VERSION=${{ steps.version.outputs.version }}
+        sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
+        echo "Updated version to ${VERSION}"
+
+    - name: Build package
+      run: |
+        cd launcher
+        uv build
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        packages-dir: launcher/dist/
+        # Uses trusted publishing, no API token needed
+        # Configure at: https://pypi.org/manage/account/publishing/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: launcher/dist/*
+        generate_release_notes: true
+        tag_name: ${{ github.ref_name }}

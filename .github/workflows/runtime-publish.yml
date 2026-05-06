@@ -1,17 +1,17 @@
-name: Publish to GitHub Container Registry
+name: Publish Runtime to GHCR
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v0.3.0, v1.0.0
+      - 'runtime-v*.*.*'  # Triggers on runtime version tags like runtime-v0.3.0
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/zipsa-runtime
 
 jobs:
   publish:
-    name: Build and Push to GHCR
+    name: Build and Push Runtime to GHCR
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,8 +37,8 @@ jobs:
     - name: Extract version from tag
       id: version
       run: |
-        # Extract version without 'v' prefix (v0.3.0 -> 0.3.0)
-        VERSION=${GITHUB_REF#refs/tags/v}
+        # Extract version without 'runtime-v' prefix (runtime-v0.3.0 -> 0.3.0)
+        VERSION=${GITHUB_REF#refs/tags/runtime-v}
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "Version: ${VERSION}"
 
@@ -48,14 +48,14 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
           type=raw,value=latest
 
     - name: Build and push multi-arch image
       uses: docker/build-push-action@v6
       with:
-        context: .
+        context: ./runtime
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}

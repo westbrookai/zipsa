@@ -1,10 +1,16 @@
-name: CI
+name: Runtime CI
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-ci.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/runtime-ci.yml'
 
 jobs:
   lint:
@@ -18,7 +24,7 @@ jobs:
     - name: Run hadolint
       uses: hadolint/hadolint-action@v3.1.0
       with:
-        dockerfile: Dockerfile
+        dockerfile: runtime/Dockerfile
         failure-threshold: warning
 
   build-and-test:
@@ -36,23 +42,24 @@ jobs:
     - name: Build Docker image
       uses: docker/build-push-action@v6
       with:
-        context: .
+        context: ./runtime
         push: false
         load: true
-        tags: skill-runtime:test
+        tags: zipsa-runtime:test
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
     - name: Run integration tests
       run: |
+        cd runtime
         chmod +x test-integration.sh
         ./test-integration.sh
 
     - name: Check image size
       run: |
-        IMAGE_SIZE=$(docker images skill-runtime:test --format "{{.Size}}")
+        IMAGE_SIZE=$(docker images zipsa-runtime:test --format "{{.Size}}")
         echo "Image size: $IMAGE_SIZE"
-        docker images skill-runtime:test
+        docker images zipsa-runtime:test
 
   build-matrix:
     name: Multi-arch Build Test
@@ -77,7 +84,7 @@ jobs:
     - name: Build for ${{ matrix.platform }}
       uses: docker/build-push-action@v6
       with:
-        context: .
+        context: ./runtime
         platforms: ${{ matrix.platform }}
         push: false
         cache-from: type=gha
