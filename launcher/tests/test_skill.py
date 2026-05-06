@@ -29,6 +29,20 @@ class TestSkillLoad:
         with pytest.raises(FileNotFoundError):
             Skill.load("/nonexistent/path")
 
+    def test_skill_dir_is_absolute_when_loaded_with_relative_path(self, tmp_path, monkeypatch):
+        """skill_dir must be absolute even when loaded with a relative path."""
+        # Set up a skill in tmp_path
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        import shutil
+        target = tmp_path / "test-skill"
+        shutil.copytree(skill_dir, target)
+
+        # Change cwd so relative path resolves correctly
+        monkeypatch.chdir(tmp_path)
+        skill = Skill.load("test-skill")
+
+        assert skill.skill_dir.is_absolute()
+
     def test_skill_dir_attribute(self):
         """Skill should store its directory path."""
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"

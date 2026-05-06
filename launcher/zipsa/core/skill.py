@@ -35,7 +35,7 @@ class Skill:
         Raises:
             FileNotFoundError: If manifest doesn't exist
         """
-        skill_path = Path(skill_path)
+        skill_path = Path(skill_path).resolve()
 
         if skill_path.is_file():
             # Direct manifest.yaml path
