@@ -1,0 +1,20 @@
+# ZIPSA Runtime Configuration
+# Copy this file to ~/.zipsa/runtime-config.yaml
+
+runtimes:
+  # Claude Code runtime configuration
+  claude:
+    # Environment variables to auto-inject when using Claude Code runtime
+    # Only variables listed here will be automatically passed to the container
+    auto_inject_env:
+      - CLAUDE_CODE_OAUTH_TOKEN
+
+  # Codex runtime configuration (placeholder)
+  # codex:
+  #   auto_inject_env:
+  #     - CODEX_API_KEY
+
+  # Gemini runtime configuration (placeholder)
+  # gemini:
+  #   auto_inject_env:
+  #     - GEMINI_API_KEY

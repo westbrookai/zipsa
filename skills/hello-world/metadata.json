@@ -1,0 +1,8 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "description": "Simple greeting skill for testing agent setup",
+  "author": "WestbrookAI",
+  "tags": ["example", "testing", "setup"],
+  "dependencies": []
+}

@@ -1,0 +1,28 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: with-mcp
+  version: 1.0.0
+spec:
+  purpose: Skill with MCP servers
+  instructions: ./SKILL.md
+  tools:
+    builtin:
+      - WebFetch
+      - Bash
+    mcp:
+      - filesystem:read_file
+      - notion:create-page
+  mcp:
+    - name: filesystem
+      type: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+      mount:
+        host: ~/Documents
+        container: /mnt/docs
+        mode: ro
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      connection: notion

@@ -1,0 +1,13 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: test-skill
+  version: 1.0.0
+  description: Test skill for unit tests
+spec:
+  purpose: Test purpose
+  instructions: ./SKILL.md
+  tools:
+    builtin:
+      - Read
+      - Write
