@@ -1,6 +1,13 @@
-# SKILL Runtime Docker Image
+# Runtime Development Guide
+
+> **IMPORTANT:** Read [/CLAUDE.md](../CLAUDE.md) first for common development rules.
+
+This guide covers Runtime-specific development practices.
+
+---
 
 ## Project Purpose
+
 Lightweight Docker runtime environment for executing SKILLs independently of specific agent runtimes (Claude Code, Codex, OpenClaw).
 
 **Goals:**
@@ -14,9 +21,8 @@ Lightweight Docker runtime environment for executing SKILLs independently of spe
 
 ---
 
-## Development Workflow
+## TDD for Docker Images
 
-### TDD Process
 **Docker images require integration-level TDD:**
 
 1. **Write integration tests first**
@@ -47,20 +53,6 @@ docker run --rm skill-runtime:test uvx --version
 # Test 3: Claude Code runs
 docker run --rm skill-runtime:test claude --version
 ```
-
-### Branch Strategy
-- `main`: Production-ready images only
-- `dev/*`: Feature development branches
-- **Never commit directly to main**
-
-### Work Process
-1. Create branch from main: `dev/feature-name`
-2. Write integration tests for new feature
-3. Implement in Dockerfile
-4. Verify all tests pass
-5. Lint Dockerfile
-6. Create PR to main
-7. Merge after review
 
 ---
 
@@ -104,12 +96,6 @@ Add clear comments for complex operations:
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 ```
 
-### Secrets Management
-- **Never hardcode secrets** in Dockerfile
-- Use build arguments for build-time secrets
-- Use environment variables for runtime secrets
-- Add `env.txt`, `*.keys.json` to `.gitignore`
-
 ---
 
 ## Testing Strategy
@@ -139,42 +125,16 @@ docker run --rm skill-runtime:latest openclaw --version
 
 ---
 
-## Commit Convention
-Follow semantic commit messages:
-
-- `feat:` New runtime features or tool additions
-  - `feat: add OpenClaw support`
-- `fix:` Build or runtime bug fixes
-  - `fix: resolve npx PATH issue`
-- `deps:` Dependency version updates
-  - `deps: upgrade Node.js to 20.12.0`
-- `docs:` Documentation only changes
-  - `docs: update README with new examples`
-- `test:` Test additions or modifications
-  - `test: add integration test for uvx`
-- `refactor:` Dockerfile restructuring without changing behavior
-  - `refactor: use multi-stage build`
-
-**Format:**
-```
-<type>: <short description>
-
-<optional detailed explanation>
-<optional breaking changes>
-```
-
----
-
 ## Quality Checklist
-Before committing:
-- [ ] All integration tests pass
+
+**Runtime-specific checks** (see [/CLAUDE.md](../CLAUDE.md) for common checks):
+
 - [ ] Dockerfile passes hadolint
+- [ ] All integration tests pass
 - [ ] Image builds successfully
 - [ ] Image size is acceptable (target: <500MB)
 - [ ] All tools execute without errors
-- [ ] No secrets in code or Dockerfile
-- [ ] Comments explain complex steps
-- [ ] README.md is up to date
+- [ ] Comments explain complex Dockerfile steps
 
 ---
 

@@ -1,5 +1,7 @@
 # Skills Library
 
+> **IMPORTANT:** Read [/CLAUDE.md](../CLAUDE.md) first for common development rules.
+
 Collection of reusable SKILL definitions for Zipsa runtime.
 
 ## What is a SKILL?

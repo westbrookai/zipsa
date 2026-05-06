@@ -1,6 +1,13 @@
 # Launcher Development Guide
 
+> **IMPORTANT:** Read [/CLAUDE.md](../CLAUDE.md) first for common development rules.
+
+This guide covers Launcher-specific development practices.
+
+---
+
 ## Project Purpose
+
 Python CLI tool for orchestrating SKILL execution across multiple runtimes (Claude Code, Codex, Gemini).
 
 **Goals:**
@@ -18,28 +25,10 @@ Python CLI tool for orchestrating SKILL execution across multiple runtimes (Clau
 
 ---
 
-## Development Workflow
+## TDD for Python
 
-### TDD Process (Required)
+**Example TDD cycle with pytest:**
 
-**All features must be test-driven:**
-
-1. **Write test first**
-   - Define expected behavior in test
-   - Test should fail initially
-
-2. **Review test before implementation**
-   - Show test code for approval
-   - Confirm: "This is what the feature should do"
-
-3. **Implement feature**
-   - Write minimal code to pass test
-
-4. **Verify**
-   - Run tests until all pass
-   - Check coverage doesn't drop
-
-**Example TDD cycle:**
 ```bash
 # 1. Write test
 # tests/test_new_feature.py
@@ -57,26 +46,14 @@ uv run pytest tests/test_new_feature.py -v
 uv run pytest --cov=zipsa
 ```
 
-### Branch Strategy
-- `main`: Production-ready code only
-- `feat/*`: Feature development branches
-- **Never commit directly to main**
-
-### Work Process
-1. Create branch from main: `feat/feature-name`
-2. Write tests for new feature (TDD)
-3. Implement feature
-4. Verify all tests pass
-5. Ensure coverage ≥ 70%
-6. Create PR to main
-7. Merge after review
+**Coverage Requirements:**
+- Minimum: 70% overall coverage
+- New code: 80%+ coverage preferred
+- Don't sacrifice test quality for coverage %
 
 ---
 
 ## Code Guidelines
-
-### Language
-**All source code, comments, commit messages, and documentation must be in English.**
 
 ### Project Structure
 ```
@@ -177,51 +154,15 @@ class TestFeatureName:
 
 ---
 
-## Commit Convention
-
-Follow semantic commit messages:
-
-```
-<type>: <short description>
-
-<optional detailed explanation>
-```
-
-**Types:**
-- `feat:` New features or enhancements
-  - `feat: add runtime config system`
-- `fix:` Bug fixes
-  - `fix: handle missing manifest file gracefully`
-- `test:` Test additions or modifications
-  - `test: add coverage for MCP env extraction`
-- `docs:` Documentation only changes
-  - `docs: update README with runtime config example`
-- `refactor:` Code restructuring without behavior change
-  - `refactor: extract MCP config builder to separate method`
-- `deps:` Dependency updates
-  - `deps: upgrade pydantic to 2.6.0`
-
-**Format:**
-```bash
-git commit -m "feat: add headersHelper support for HTTP MCP servers
-
-- Add headersHelper field to MCPServerHTTP model
-- Include in .claude.json generation
-- Add test for headersHelper configuration"
-```
-
----
-
 ## Quality Checklist
 
-Before committing:
-- [ ] All tests pass (`uv run pytest`)
-- [ ] Coverage ≥ 70% (`uv run pytest --cov=zipsa`)
+**Launcher-specific checks** (see [/CLAUDE.md](../CLAUDE.md) for common checks):
+
+- [ ] All tests pass: `uv run pytest`
+- [ ] Coverage ≥ 70%: `uv run pytest --cov=zipsa`
 - [ ] No linting errors (if configured)
-- [ ] Code follows project structure
-- [ ] New features have tests
-- [ ] README.md updated if needed
-- [ ] Commit message follows convention
+- [ ] Pydantic models validate correctly
+- [ ] CLI commands work as expected
 
 ---
 

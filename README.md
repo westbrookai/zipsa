@@ -31,7 +31,6 @@ Zipsa is a complete ecosystem for developing and executing SKILL-based AI agents
 
 Lightweight Docker image providing isolated execution environment:
 - Pre-installed: Claude Code, Codex, Gemini CLI
-- MCP server support (npx, uvx, pipx)
 - Multi-architecture (amd64, arm64)
 - 1.9GB image size (54.9% reduction)
 
@@ -50,6 +49,7 @@ docker run -it --rm -v $(pwd):/workspace ghcr.io/westbrookai/zipsa-runtime:lates
 Python CLI for orchestrating skill execution:
 - Multi-runtime support (claude, codex, gemini)
 - SKILL manifest validation
+- MCP server support (npx, uvx, pipx)
 - Environment variable management
 - Execution logging and metrics
 
