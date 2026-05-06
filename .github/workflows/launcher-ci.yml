@@ -37,7 +37,7 @@ jobs:
     - name: Install dependencies
       run: |
         cd launcher
-        uv pip install -e ".[dev]"
+        uv sync --extra dev
 
     - name: Run tests with coverage
       run: |
@@ -76,7 +76,7 @@ jobs:
     - name: Install dependencies
       run: |
         cd launcher
-        uv pip install -e ".[dev]"
+        uv sync --extra dev
 
     - name: Check code formatting (if configured)
       run: |

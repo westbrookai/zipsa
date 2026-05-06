@@ -105,9 +105,8 @@ class TestDockerExecutor:
         assert "/mnt/docs:ro" in cmd_str
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_creates_temp_mcp_config(self, mock_popen):
-        """Run should create temporary MCP config file in workspace."""
-        # Setup mocks
+    def test_run_creates_claude_config(self, mock_popen):
+        """Run should create .claude.json in skill's .zipsa directory."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output line\n", ""]
         mock_process = Mock()
@@ -116,34 +115,20 @@ class TestDockerExecutor:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Execute
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        # Verify .zipsa directory doesn't exist yet
-        zipsa_dir = executor.workspace / ".zipsa"
-        if zipsa_dir.exists():
-            # Clean up from previous test
-            for f in zipsa_dir.glob("*.json"):
-                f.unlink()
-
         list(executor.run(skill, "Test input", env={}))
 
-        # Verify .zipsa directory was created
+        zipsa_dir = skill.skill_dir / ".zipsa"
         assert zipsa_dir.exists()
         assert zipsa_dir.is_dir()
-
-        # Verify MCP config files were created and cleaned up
-        # (should be empty after cleanup in finally block)
-        json_files = list(zipsa_dir.glob("mcp-config-*.json"))
-        # Files should be cleaned up in finally block, so should be empty
-        assert len(json_files) == 0
+        assert (zipsa_dir / ".claude.json").exists()
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_cleans_up_temp_file(self, mock_popen):
-        """Run should cleanup temp file after execution."""
-        # Setup mocks
+    def test_run_persists_claude_config(self, mock_popen):
+        """Run should keep .claude.json after execution (not clean it up)."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output\n", ""]
         mock_process = Mock()
@@ -152,18 +137,14 @@ class TestDockerExecutor:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Execute
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        zipsa_dir = executor.workspace / ".zipsa"
-
         list(executor.run(skill, "Test", env={}))
 
-        # Verify cleanup - temp MCP config should be removed
-        json_files = list(zipsa_dir.glob("mcp-config-*.json"))
-        assert len(json_files) == 0
+        claude_json = skill.skill_dir / ".zipsa" / ".claude.json"
+        assert claude_json.exists()
 
     @patch("zipsa.core.executor.subprocess.Popen")
     @patch("builtins.print")
