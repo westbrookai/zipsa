@@ -113,31 +113,40 @@ class DockerExecutor:
         # Generate .claude.json for skill (contains MCP config + onboarding settings)
         claude_json_path = skill.build_claude_json()
 
+        env_file = skill.skill_dir / ".zipsa" / ".env"
         try:
-            # Build Docker command
+            # Build Docker command (also writes env file)
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env, shell=shell
             )
 
             if dry_run:
-                # Read generated config for dry-run display
                 mcp_config = json.loads(claude_json_path.read_text())
                 self._print_dry_run(skill, docker_cmd, mcp_config)
                 return None
 
             if shell:
-                # Interactive shell mode - run directly
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
 
             # Execute and return generator
-            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir)
+            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file)
 
         except Exception:
             raise
+        finally:
+            # Clean up env file for dry_run and shell modes
+            # (normal execution cleanup happens inside _execute_skill)
+            if (dry_run or shell) and env_file.exists():
+                env_file.unlink()
 
     def _execute_skill(
-        self, docker_cmd: list[str], claude_json_path: Path, skill: Skill, run_dir: Optional[Path]
+        self,
+        docker_cmd: list[str],
+        claude_json_path: Path,
+        skill: Skill,
+        run_dir: Optional[Path],
+        env_file: Optional[Path] = None,
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
@@ -309,6 +318,10 @@ class DockerExecutor:
                     # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
 
+            # Clean up env file (contains secrets, should not persist)
+            if env_file and env_file.exists():
+                env_file.unlink()
+
     def _run_shell(self, docker_cmd: list[str], claude_json_path: Path) -> None:
         """Run interactive bash shell in Docker container.
 
@@ -430,6 +443,16 @@ class DockerExecutor:
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
 
+    def _write_env_file(self, skill: Skill, env: dict[str, str]) -> Path:
+        """Write env vars to skill_dir/.zipsa/.env and return the path."""
+        zipsa_dir = skill.skill_dir / ".zipsa"
+        zipsa_dir.mkdir(exist_ok=True)
+        env_file = zipsa_dir / ".env"
+        with open(env_file, "w") as f:
+            for key, value in env.items():
+                f.write(f"{key}={value}\n")
+        return env_file
+
     def _build_docker_command(
         self,
         skill: Skill,
@@ -479,8 +502,8 @@ class DockerExecutor:
                         else:
                             print(f"Warning: Runtime config specifies auto-inject for '{env_var}' but it's not set in host environment")
 
-        for key, value in env.items():
-            cmd.extend(["-e", f"{key}={value}"])
+        env_file = self._write_env_file(skill, env)
+        cmd.extend(["--env-file", str(env_file)])
 
         # Volume mounts
         cmd.extend(
@@ -580,12 +603,16 @@ If a task requires other tools, refuse politely.
         print("MCP config:")
         print(json.dumps(mcp_config, indent=2))
         print()
+        # Show env file keys (values hidden)
+        env_file = skill.skill_dir / ".zipsa" / ".env"
+        if env_file.exists():
+            keys = [line.split("=")[0] for line in env_file.read_text().splitlines() if "=" in line]
+            if keys:
+                print("Environment (from env file):")
+                for key in keys:
+                    print(f"  {key}=***")
+                print()
+
         print("Docker command:")
         for i, arg in enumerate(cmd):
-            # Mask sensitive environment variables
-            if arg.startswith("CLAUDE_CODE_OAUTH_TOKEN="):
-                key, value = arg.split("=", 1)
-                masked = f"{value[:6]}..." if len(value) > 6 else value
-                print(f"  [{i:2d}] {key}={masked}")
-            else:
-                print(f"  [{i:2d}] {arg}")
+            print(f"  [{i:2d}] {arg}")
