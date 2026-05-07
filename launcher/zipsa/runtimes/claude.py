@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 from .base import AgentRuntime
 from . import register_runtime
@@ -25,13 +25,14 @@ class ClaudeRuntime(AgentRuntime):
         allowed_tools: str,
         workspace: Path,
         env: dict[str, str],
+        mcp_debug_file: Optional[str] = None,
     ) -> list[str]:
         """Build Claude Code CLI command.
 
         Returns command array for Claude Code with all necessary flags.
         MCP servers are configured via .claude.json (mounted to /home/agent/.claude.json).
         """
-        return [
+        cmd = [
             "claude",
             "--print",
             user_input,
@@ -43,6 +44,9 @@ class ClaudeRuntime(AgentRuntime):
             "--output-format=stream-json",
             "--verbose",
         ]
+        if mcp_debug_file:
+            cmd.extend(["--debug", "--debug-file", mcp_debug_file])
+        return cmd
 
     def parse_output(self, stream: Iterator[str]) -> Iterator[dict]:
         """Parse Claude Code stream-json output.

@@ -181,6 +181,10 @@ def run(
         bool,
         typer.Option("--shell", help="Start interactive bash shell instead of running skill"),
     ] = False,
+    mcp_debug: Annotated[
+        bool,
+        typer.Option("--mcp-debug", help="Write MCP debug logs to runs/<timestamp>/mcp-debug.log"),
+    ] = False,
 ):
     """Execute a skill with the specified runtime."""
     try:
@@ -211,7 +215,7 @@ def run(
         )
 
         # Execute skill or start shell
-        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell)
+        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug)
 
         if output is None:
             # Dry run mode

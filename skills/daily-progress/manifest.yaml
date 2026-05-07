@@ -27,7 +27,7 @@ spec:
       type: stdio
       command: npx
       args:
-        - "@modelcontextprotocol/server-filesystem@^0.5.0"
+        - "@modelcontextprotocol/server-filesystem@2026.1.14"
         - "/host-claude-projects"
       mount:
         host: "~/.claude/projects"

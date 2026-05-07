@@ -138,6 +138,47 @@ class TestDockerExecutor:
 
         assert cmd.count("--env-file") == 1
 
+    def test_build_docker_command_with_mcp_debug(self, tmp_path):
+        """Docker command should include debug volume mount and --debug-file when mcp_debug_host is set."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        mcp_debug_host = tmp_path / "mcp-debug.log"
+        mcp_debug_host.touch()
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+            mcp_debug_host=mcp_debug_host,
+        )
+
+        cmd_str = " ".join(cmd)
+        assert str(mcp_debug_host) in cmd_str
+        assert "/home/agent/mcp-debug.log" in cmd_str
+        assert "--debug-file" in cmd_str
+
+    def test_build_docker_command_no_debug_by_default(self, tmp_path):
+        """Docker command should not include debug mounts by default."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert "--debug-file" not in cmd
+        assert "--debug" not in cmd
+
     def test_build_docker_command_with_mcp_mounts(self):
         """Docker command should include MCP stdio mounts."""
         executor = DockerExecutor()

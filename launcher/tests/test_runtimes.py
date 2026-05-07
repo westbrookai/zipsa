@@ -90,3 +90,37 @@ class TestClaudeRuntime:
         """Claude runtime should support MCP."""
         runtime = ClaudeRuntime()
         assert runtime.supports_mcp() is True
+
+    def test_build_command_no_debug_by_default(self):
+        """Build command should not include debug flags by default."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="Hello",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+        )
+
+        assert "--debug" not in cmd
+        assert "--debug-file" not in cmd
+
+    def test_build_command_with_mcp_debug_file(self):
+        """Build command should include --debug and --debug-file when mcp_debug_file is set."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="Hello",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+            mcp_debug_file="/home/agent/mcp-debug.log",
+        )
+
+        assert "--debug" in cmd
+        assert "--debug-file" in cmd
+        assert "/home/agent/mcp-debug.log" in cmd

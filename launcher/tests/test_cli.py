@@ -34,7 +34,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, "Hello world", env={}, dry_run=False, shell=False
+            mock_skill, "Hello world", env={}, dry_run=False, shell=False, mcp_debug=False
         )
 
     @patch("zipsa.cli.DockerExecutor")
@@ -98,7 +98,25 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, "input", env={}, dry_run=True, shell=False
+            mock_skill, "input", env={}, dry_run=True, shell=False, mcp_debug=False
+        )
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_with_mcp_debug(self, mock_skill_cls, mock_executor_cls):
+        """--mcp-debug should pass mcp_debug=True to executor."""
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter([])
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "input", "--mcp-debug"])
+
+        assert result.exit_code == 0
+        mock_executor.run.assert_called_once_with(
+            mock_skill, "input", env={}, dry_run=False, shell=False, mcp_debug=True
         )
 
     @patch("zipsa.cli.Skill")

@@ -39,6 +39,7 @@ class DockerExecutor:
         env: Optional[dict[str, str]] = None,
         dry_run: bool = False,
         shell: bool = False,
+        mcp_debug: bool = False,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -84,11 +85,18 @@ class DockerExecutor:
         # Generate .claude.json in centralized directory
         claude_json_path = skill.build_claude_json(output_dir=skill_data_dir)
 
+        # Prepare MCP debug file path (host side) if requested
+        mcp_debug_host = None
+        if mcp_debug and run_dir:
+            mcp_debug_host = run_dir / "mcp-debug.log"
+            mcp_debug_host.touch()
+
         env_file = skill_data_dir / ".env"
         try:
             # Build Docker command (also writes env file)
             docker_cmd = self._build_docker_command(
-                skill, user_input, claude_json_path, env, shell=shell
+                skill, user_input, claude_json_path, env, shell=shell,
+                mcp_debug_host=mcp_debug_host,
             )
 
             if dry_run:
@@ -430,6 +438,7 @@ class DockerExecutor:
         claude_json_path: Path,
         env: dict[str, str],
         shell: bool = False,
+        mcp_debug_host: Optional[Path] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -501,6 +510,10 @@ class DockerExecutor:
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
+        # MCP debug file mount (bind-mount host log file into container)
+        if mcp_debug_host:
+            cmd.extend(["-v", f"{mcp_debug_host}:/home/agent/mcp-debug.log"])
+
         # Image
         cmd.append(self.image)
 
@@ -511,6 +524,7 @@ class DockerExecutor:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
             allowed_tools = skill.get_allowed_tools()
+            mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # MCP config is now in .claude.json (mounted to /home/agent/.claude.json)
             runtime_cmd = self.runtime.build_command(
@@ -520,6 +534,7 @@ class DockerExecutor:
                 allowed_tools=allowed_tools,
                 workspace=Path("/workspace"),
                 env=env,
+                mcp_debug_file=mcp_debug_container,
             )
 
             cmd.extend(runtime_cmd)

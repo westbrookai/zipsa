@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 class AgentRuntime(ABC):
@@ -27,6 +27,7 @@ class AgentRuntime(ABC):
         allowed_tools: str,
         workspace: Path,
         env: dict[str, str],
+        mcp_debug_file: Optional[str] = None,
     ) -> list[str]:
         """Build CLI command for this runtime.
 
