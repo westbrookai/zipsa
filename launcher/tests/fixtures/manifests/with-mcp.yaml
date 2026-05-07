@@ -10,9 +10,6 @@ spec:
     builtin:
       - WebFetch
       - Bash
-    mcp:
-      - filesystem:read_file
-      - notion:create-page
   mcp:
     - name: filesystem
       type: stdio
@@ -21,7 +18,11 @@ spec:
       mount:
         host: ~/Documents
         mode: ro
+      allowed_tools:
+        - read_file
     - name: notion
       type: http
       url: https://mcp.notion.com/mcp
       connection: notion
+      allowed_tools:
+        - create-page

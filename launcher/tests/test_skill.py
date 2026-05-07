@@ -140,7 +140,7 @@ class TestAllowedTools:
         assert tools == "Read,Write"
 
     def test_get_allowed_tools_mcp_format(self):
-        """MCP tools should be converted to mcp__server__method format."""
+        """MCP server allowed_tools become mcp__server__method format."""
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
@@ -150,7 +150,7 @@ class TestAllowedTools:
         assert "WebFetch" in tools
         assert "Bash" in tools
 
-        # Should have MCP tools with correct format
+        # MCP tools from server.allowed_tools
         assert "mcp__filesystem__read_file" in tools
         assert "mcp__notion__create-page" in tools
 
@@ -161,12 +161,17 @@ class TestAllowedTools:
 
         tools = skill.get_allowed_tools().split(",")
 
-        # First two should be builtin
         assert tools[0] == "WebFetch"
         assert tools[1] == "Bash"
-
-        # Rest should be MCP
         assert tools[2].startswith("mcp__")
+
+    def test_get_allowed_tools_empty_allowed_tools(self):
+        """Server with no allowed_tools contributes nothing to the list."""
+        manifest_path = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(manifest_path)
+
+        tools = skill.get_allowed_tools()
+        assert tools == ""
 
 
 class TestClaudeJson:

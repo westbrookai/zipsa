@@ -135,8 +135,8 @@ class TestSkillManifest:
         assert len(manifest.spec.mcp) == 1
         assert manifest.spec.mcp[0].name == "filesystem"
 
-    def test_manifest_with_tools(self):
-        """Manifest with tool whitelist."""
+    def test_manifest_with_builtin_tools(self):
+        """Manifest with builtin tool whitelist."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
             "kind": "Skill",
@@ -144,15 +144,55 @@ class TestSkillManifest:
             "spec": {
                 "purpose": "Test",
                 "instructions": "./SKILL.md",
-                "tools": {
-                    "builtin": ["WebFetch", "Bash"],
-                    "mcp": ["filesystem:read_file", "notion:create-page"],
-                },
+                "tools": {"builtin": ["WebFetch", "Bash"]},
             },
         }
         manifest = SkillManifest.model_validate(data)
         assert "WebFetch" in manifest.spec.tools.builtin
-        assert "filesystem:read_file" in manifest.spec.tools.mcp
+        assert "Bash" in manifest.spec.tools.builtin
+
+    def test_mcp_server_allowed_tools(self):
+        """MCP server allowed_tools lives on the server definition."""
+        data = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "sessions",
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["@modelcontextprotocol/server-filesystem@2025.11.25"],
+                        "allowed_tools": ["read_file", "list_directory"],
+                    },
+                    {
+                        "name": "notion",
+                        "type": "http",
+                        "url": "https://mcp.notion.com/mcp",
+                        "allowed_tools": ["notion-search", "notion-create-pages"],
+                    },
+                ],
+            },
+        }
+        manifest = SkillManifest.model_validate(data)
+        sessions = manifest.spec.mcp[0]
+        assert sessions.allowed_tools == ["read_file", "list_directory"]
+        notion = manifest.spec.mcp[1]
+        assert notion.allowed_tools == ["notion-search", "notion-create-pages"]
+
+    def test_mcp_server_allowed_tools_defaults_empty(self):
+        """allowed_tools defaults to empty list (allow all tools from server)."""
+        data = {
+            "name": "filesystem",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+        }
+        server = MCPServerStdio(**data)
+        assert server.allowed_tools == []
 
     def test_invalid_kind(self):
         """Invalid kind should fail validation."""

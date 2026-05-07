@@ -31,6 +31,7 @@ class MCPServerStdio(BaseModel):
     args: list[str]  # Command arguments
     mount: Optional[VolumeMount] = None
     env: list[str] = Field(default_factory=list)  # Required environment variables
+    allowed_tools: list[str] = Field(default_factory=list)  # Tool whitelist (empty = all)
 
 
 class MCPServerHTTP(BaseModel):
@@ -42,6 +43,7 @@ class MCPServerHTTP(BaseModel):
     connection: Optional[str] = None  # Connection name
     headersHelper: Optional[str] = None  # Shell command to generate headers
     env: list[str] = Field(default_factory=list)  # Required environment variables
+    allowed_tools: list[str] = Field(default_factory=list)  # Tool whitelist (empty = all)
 
 
 # Union type for MCP servers
@@ -51,8 +53,7 @@ MCPServer = MCPServerStdio | MCPServerHTTP
 class SkillTools(BaseModel):
     """Tool whitelist configuration."""
 
-    builtin: list[str] = Field(default_factory=list)  # Built-in tools
-    mcp: list[str] = Field(default_factory=list)  # MCP tools (server:method)
+    builtin: list[str] = Field(default_factory=list)  # Built-in Claude Code tools
 
 
 class SkillLimits(BaseModel):

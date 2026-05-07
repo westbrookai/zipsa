@@ -112,22 +112,17 @@ class Skill:
         """Build --allowedTools comma-separated string.
 
         Converts:
-        - builtin: ["Read", "Write"] -> "Read,Write"
-        - mcp: ["server:method"] -> "mcp__server__method"
+        - spec.tools.builtin: ["Read", "Write"] -> "Read,Write"
+        - spec.mcp[n].allowed_tools: ["read_file"] -> "mcp__<server>__read_file"
 
         Returns:
             Comma-separated tool names
         """
-        tools = []
+        tools = list(self.manifest.spec.tools.builtin)
 
-        # Builtin tools (as-is)
-        tools.extend(self.manifest.spec.tools.builtin)
-
-        # MCP tools (convert "server:method" to "mcp__server__method")
-        for mcp_tool in self.manifest.spec.tools.mcp:
-            # Replace : with __
-            tool_name = mcp_tool.replace(":", "__")
-            tools.append(f"mcp__{tool_name}")
+        for server in self.manifest.spec.mcp:
+            for tool in server.allowed_tools:
+                tools.append(f"mcp__{server.name}__{tool}")
 
         return ",".join(tools)
 

@@ -32,12 +32,21 @@ spec:
       mount:
         host: "~/.claude/projects"
         mode: ro
+      allowed_tools:
+        - read_file
+        - list_directory
+        - directory_tree
 
     # Remote http: write to Notion
     - name: notion
       type: http
       url: https://mcp.notion.com/mcp
-
+      allowed_tools:
+        - notion-search
+        - notion-create-database
+        - notion-create-pages
+        - notion-update-page
+        - notion-fetch
 
     - name: githubcopilot
       type: http
@@ -46,18 +55,8 @@ spec:
       env:
         - GITHUB_PERSONAL_ACCESS_TOKEN
 
-  # Tools whitelist — only these are allowed
   tools:
     builtin: []
-    mcp:
-      - sessions:read_file
-      - sessions:list_directory
-      - sessions:directory_tree
-      - notion:notion-search
-      - notion:notion-create-database
-      - notion:notion-create-pages
-      - notion:notion-update-page
-      - notion:notion-fetch
 
   # Skill-specific configuration
   config:
