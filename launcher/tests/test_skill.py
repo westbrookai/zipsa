@@ -95,7 +95,7 @@ class TestMCPConfig:
         assert config == {"mcpServers": {}}
 
     def test_build_mcp_config_stdio(self):
-        """Stdio MCP server should be in config."""
+        """Stdio MCP server should be in config (passthrough, no auto-appended path)."""
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
@@ -106,7 +106,6 @@ class TestMCPConfig:
         assert config["mcpServers"]["filesystem"]["args"] == [
             "-y",
             "@modelcontextprotocol/server-filesystem",
-            "/workspace",
         ]
 
     def test_build_mcp_config_http(self):
@@ -231,9 +230,9 @@ class TestClaudeJson:
         config = json.loads(claude_json_path.read_text())
 
         assert config["hasCompletedOnboarding"] is True
-        assert "/workspace" in config["projects"]
-        assert config["projects"]["/workspace"]["hasTrustDialogAccepted"] is True
-        assert "mcpServers" in config["projects"]["/workspace"]
+        assert "/home/agent/workspace" in config["projects"]
+        assert config["projects"]["/home/agent/workspace"]["hasTrustDialogAccepted"] is True
+        assert "mcpServers" in config["projects"]["/home/agent/workspace"]
 
     def test_build_claude_json_with_stdio_mcp(self, tmp_path):
         """Stdio MCP servers should be in /workspace project mcpServers."""
@@ -267,13 +266,53 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "filesystem" in mcp_servers
         assert mcp_servers["filesystem"]["command"] == "npx"
         assert mcp_servers["filesystem"]["args"] == [
             "-y",
             "@modelcontextprotocol/server-filesystem",
+        ]
+
+    def test_build_claude_json_stdio_mount_appends_container_path(self, tmp_path):
+        """Stdio server with mount should have container path auto-appended to args."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "sessions",
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["@modelcontextprotocol/server-filesystem@2025.11.25"],
+                        "mount": {"host": "~/.claude/projects", "mode": "ro"},
+                    }
+                ],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+
+        config = json.loads(claude_json_path.read_text())
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
+
+        assert mcp_servers["sessions"]["args"] == [
+            "@modelcontextprotocol/server-filesystem@2025.11.25",
+            "/home/agent/workspace/sessions",
         ]
 
     def test_build_claude_json_with_http_mcp(self, tmp_path):
@@ -307,7 +346,7 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "notion" in mcp_servers
         assert mcp_servers["notion"]["type"] == "http"
@@ -346,7 +385,7 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "github" in mcp_servers
         assert mcp_servers["github"]["type"] == "http"

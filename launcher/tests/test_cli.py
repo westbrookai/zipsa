@@ -53,7 +53,6 @@ class TestRunCommand:
         mock_executor_cls.assert_called_once_with(
             runtime="codex",
             image="ghcr.io/westbrookai/zipsa-runtime:latest",
-            workspace=Path.cwd(),
         )
 
     @patch("zipsa.cli.DockerExecutor")

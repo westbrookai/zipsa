@@ -28,6 +28,7 @@ class AgentRuntime(ABC):
         workspace: Path,
         env: dict[str, str],
         mcp_debug_file: Optional[str] = None,
+        extra_dirs: Optional[list[str]] = None,
     ) -> list[str]:
         """Build CLI command for this runtime.
 

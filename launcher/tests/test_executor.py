@@ -15,7 +15,6 @@ class TestDockerExecutor:
         executor = DockerExecutor()
 
         assert executor.image == "ghcr.io/westbrookai/zipsa-runtime:latest"
-        assert executor.workspace == Path.cwd()
         assert executor.runtime.name == "claude"
 
     def test_executor_custom_runtime(self):
@@ -98,6 +97,8 @@ class TestDockerExecutor:
         assert "/home/agent/.claude.json" in " ".join(cmd)
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
         assert "claude" in cmd
+        # Host cwd should NOT be mounted as workspace
+        assert ":/workspace" not in " ".join(cmd)
 
     def test_build_docker_command_includes_global_env_file(self, tmp_path):
         """Docker command should include ~/.zipsa/.env as second --env-file if it exists."""
@@ -180,7 +181,7 @@ class TestDockerExecutor:
         assert "--debug" not in cmd
 
     def test_build_docker_command_with_mcp_mounts(self):
-        """Docker command should include MCP stdio mounts."""
+        """Docker command should include MCP stdio mounts at /home/agent/workspace/<name>."""
         executor = DockerExecutor()
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
@@ -194,9 +195,11 @@ class TestDockerExecutor:
             env={},
         )
 
-        # Should have MCP mount (from with-mcp.yaml: ~/Documents -> /mnt/docs:ro)
+        # Should auto-generate container path as /home/agent/workspace/<server-name>
         cmd_str = " ".join(cmd)
-        assert "/mnt/docs:ro" in cmd_str
+        assert "/home/agent/workspace/filesystem:ro" in cmd_str
+        # Host cwd should NOT be mounted
+        assert ":/workspace" not in cmd_str
 
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_run_creates_claude_config(self, mock_popen, tmp_path):

@@ -165,10 +165,6 @@ def run(
         str,
         typer.Option("--image", "-i", help="Docker image to use"),
     ] = "ghcr.io/westbrookai/zipsa-runtime:latest",
-    workspace: Annotated[
-        Optional[Path],
-        typer.Option("--workspace", "-w", help="Workspace directory"),
-    ] = None,
     env: Annotated[
         Optional[list[str]],
         typer.Option("--env", "-e", help="Environment variables (KEY=value)"),
@@ -211,7 +207,6 @@ def run(
         executor = DockerExecutor(
             runtime=runtime,
             image=image,
-            workspace=workspace or Path.cwd(),
         )
 
         # Execute skill or start shell

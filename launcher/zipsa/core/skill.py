@@ -131,12 +131,19 @@ class Skill:
 
         return ",".join(tools)
 
-    def build_claude_json(self, output_dir: Optional[Path] = None) -> Path:
+    def build_claude_json(
+        self,
+        output_dir: Optional[Path] = None,
+        container_workspace: str = "/home/agent/workspace",
+    ) -> Path:
         """Generate .claude.json file for skill.
 
         Args:
             output_dir: Directory to write files into.
                         Defaults to ~/.zipsa/<name>@<version>/.
+            container_workspace: Container working directory.
+                        Stdio servers with mounts get their container path
+                        auto-appended as /home/agent/workspace/<server-name>.
 
         Returns:
             Path to created .claude.json file
@@ -151,9 +158,12 @@ class Skill:
         mcp_servers = {}
         for server in self.manifest.spec.mcp:
             if server.type == "stdio":
+                args = list(server.args)
+                if server.mount:
+                    args.append(f"{container_workspace}/{server.name}")
                 mcp_servers[server.name] = {
                     "command": server.command,
-                    "args": server.args,
+                    "args": args,
                 }
             elif server.type == "http":
                 server_config: dict = {
@@ -169,7 +179,7 @@ class Skill:
         claude_config = {
             "hasCompletedOnboarding": True,
             "projects": {
-                "/workspace": {
+                container_workspace: {
                     "hasTrustDialogAccepted": True,
                     "mcpServers": mcp_servers,
                 }

@@ -23,15 +23,14 @@ spec:
   # MCP servers used by this skill
   mcp:
     # Local stdio: read Claude Code session logs
+    # Container path auto-generated as /home/agent/workspace/sessions
     - name: sessions
       type: stdio
       command: npx
       args:
-        - "@modelcontextprotocol/server-filesystem@2026.1.14"
-        - "/host-claude-projects"
+        - "@modelcontextprotocol/server-filesystem@2025.11.25"
       mount:
         host: "~/.claude/projects"
-        container: "/host-claude-projects"
         mode: ro
 
     # Remote http: write to Notion

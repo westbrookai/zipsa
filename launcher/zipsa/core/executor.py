@@ -12,6 +12,9 @@ from .skill import Skill
 from ..runtimes import get_runtime
 
 
+CONTAINER_WORKSPACE = "/home/agent/workspace"
+
+
 class DockerExecutor:
     """Orchestrates Docker container execution for skills."""
 
@@ -19,18 +22,15 @@ class DockerExecutor:
         self,
         runtime: str = "claude",
         image: str = "ghcr.io/westbrookai/zipsa-runtime:latest",
-        workspace: Optional[Path] = None,
     ):
         """Initialize Docker executor.
 
         Args:
             runtime: Runtime to use (claude, codex, gemini)
             image: Docker image to run
-            workspace: Workspace directory (defaults to current directory)
         """
         self.runtime = get_runtime(runtime)
         self.image = image
-        self.workspace = workspace or Path.cwd()
 
     def run(
         self,
@@ -83,7 +83,10 @@ class DockerExecutor:
             run_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate .claude.json in centralized directory
-        claude_json_path = skill.build_claude_json(output_dir=skill_data_dir)
+        claude_json_path = skill.build_claude_json(
+            output_dir=skill_data_dir,
+            container_workspace=CONTAINER_WORKSPACE,
+        )
 
         # Prepare MCP debug file path (host side) if requested
         mcp_debug_host = None
@@ -479,14 +482,6 @@ class DockerExecutor:
         env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
-        # Volume mounts
-        cmd.extend(
-            [
-                "-v",
-                f"{self.workspace}:/workspace",
-            ]
-        )
-
         # Mount .claude.json (contains MCP config + onboarding settings)
         # Note: Must be writable - claude updates this file during execution
         cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
@@ -502,11 +497,11 @@ class DockerExecutor:
         if global_creds.exists():
             cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json"])
 
-        # MCP stdio mounts (from manifest)
+        # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
             if server.type == "stdio" and server.mount:
                 host_path = Path(server.mount.host).expanduser().resolve()
-                container_path = server.mount.container
+                container_path = f"{CONTAINER_WORKSPACE}/{server.name}"
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
@@ -526,15 +521,24 @@ class DockerExecutor:
             allowed_tools = skill.get_allowed_tools()
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
+            # Collect container paths for all stdio MCP mounts so Claude Code
+            # includes them in its ListRoots response (needed by secure-filesystem-server)
+            extra_dirs = [
+                f"{CONTAINER_WORKSPACE}/{server.name}"
+                for server in skill.manifest.spec.mcp
+                if server.type == "stdio" and server.mount
+            ]
+
             # MCP config is now in .claude.json (mounted to /home/agent/.claude.json)
             runtime_cmd = self.runtime.build_command(
                 skill_name=skill.name,
                 user_input=user_input,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                workspace=Path("/workspace"),
+                workspace=Path(CONTAINER_WORKSPACE),
                 env=env,
                 mcp_debug_file=mcp_debug_container,
+                extra_dirs=extra_dirs,
             )
 
             cmd.extend(runtime_cmd)

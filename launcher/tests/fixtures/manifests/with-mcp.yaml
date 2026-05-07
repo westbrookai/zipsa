@@ -17,10 +17,9 @@ spec:
     - name: filesystem
       type: stdio
       command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+      args: ["-y", "@modelcontextprotocol/server-filesystem"]
       mount:
         host: ~/Documents
-        container: /mnt/docs
         mode: ro
     - name: notion
       type: http
