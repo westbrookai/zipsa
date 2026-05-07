@@ -158,8 +158,8 @@ class TestDockerExecutor:
         assert "/mnt/docs:ro" in cmd_str
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_creates_claude_config(self, mock_popen):
-        """Run should create .claude.json in skill's .zipsa directory."""
+    def test_run_creates_claude_config(self, mock_popen, tmp_path):
+        """Run should create .claude.json in ~/.zipsa/<name>@<version>/."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output line\n", ""]
         mock_process = Mock()
@@ -172,15 +172,15 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        list(executor.run(skill, "Test input", env={}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test input", env={}))
 
-        zipsa_dir = skill.skill_dir / ".zipsa"
-        assert zipsa_dir.exists()
-        assert zipsa_dir.is_dir()
-        assert (zipsa_dir / ".claude.json").exists()
+        skill_data_dir = tmp_path / ".zipsa" / "test-skill@1.0.0"
+        assert skill_data_dir.exists()
+        assert (skill_data_dir / ".claude.json").exists()
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_persists_claude_config(self, mock_popen):
+    def test_run_persists_claude_config(self, mock_popen, tmp_path):
         """Run should keep .claude.json after execution (not clean it up)."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output\n", ""]
@@ -194,14 +194,15 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        list(executor.run(skill, "Test", env={}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={}))
 
-        claude_json = skill.skill_dir / ".zipsa" / ".claude.json"
+        claude_json = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".claude.json"
         assert claude_json.exists()
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_cleans_up_env_file(self, mock_popen):
-        """Run should delete .env file after execution."""
+    def test_run_cleans_up_env_file(self, mock_popen, tmp_path):
+        """Run should delete .env file from ~/.zipsa/<name>@<version>/ after execution."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["output\n", ""]
         mock_process = Mock()
@@ -214,9 +215,10 @@ class TestDockerExecutor:
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        list(executor.run(skill, "Test", env={"SECRET": "value"}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={"SECRET": "value"}))
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
 
     @patch("zipsa.core.executor.subprocess.Popen")
@@ -235,15 +237,16 @@ class TestDockerExecutor:
 
     @patch("zipsa.core.executor.subprocess.Popen")
     @patch("builtins.print")
-    def test_dry_run_cleans_up_env_file(self, mock_print, mock_popen):
+    def test_dry_run_cleans_up_env_file(self, mock_print, mock_popen, tmp_path):
         """Dry run should also clean up .env file."""
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        executor.run(skill, "Test", env={"SECRET": "value"}, dry_run=True)
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            executor.run(skill, "Test", env={"SECRET": "value"}, dry_run=True)
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
 
 
