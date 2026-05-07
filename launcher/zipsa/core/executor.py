@@ -40,6 +40,7 @@ class DockerExecutor:
         dry_run: bool = False,
         shell: bool = False,
         mcp_debug: bool = False,
+        extra_docker_opts: Optional[list[str]] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -100,6 +101,7 @@ class DockerExecutor:
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env, shell=shell,
                 mcp_debug_host=mcp_debug_host,
+                extra_docker_opts=extra_docker_opts,
             )
 
             if dry_run:
@@ -442,6 +444,7 @@ class DockerExecutor:
         env: dict[str, str],
         shell: bool = False,
         mcp_debug_host: Optional[Path] = None,
+        extra_docker_opts: Optional[list[str]] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -460,6 +463,10 @@ class DockerExecutor:
             "run",
             "--rm",
         ]
+
+        # Extra docker options (e.g. port forwarding for OAuth flows)
+        if extra_docker_opts:
+            cmd.extend(extra_docker_opts)
 
         # Add interactive TTY flags for shell mode
         if shell:

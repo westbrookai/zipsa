@@ -34,7 +34,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, "Hello world", env={}, dry_run=False, shell=False, mcp_debug=False
+            mock_skill, "Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.DockerExecutor")
@@ -97,7 +97,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, "input", env={}, dry_run=True, shell=False, mcp_debug=False
+            mock_skill, "input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.DockerExecutor")
@@ -115,7 +115,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, "input", env={}, dry_run=False, shell=False, mcp_debug=True
+            mock_skill, "input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.Skill")

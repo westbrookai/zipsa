@@ -181,6 +181,10 @@ def run(
         bool,
         typer.Option("--mcp-debug", help="Write MCP debug logs to runs/<timestamp>/mcp-debug.log"),
     ] = False,
+    docker_opt: Annotated[
+        Optional[list[str]],
+        typer.Option("--docker-opt", help="Extra docker run options (e.g. --docker-opt='-p 56535:56535')"),
+    ] = None,
 ):
     """Execute a skill with the specified runtime."""
     try:
@@ -210,7 +214,7 @@ def run(
         )
 
         # Execute skill or start shell
-        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug)
+        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
 
         if output is None:
             # Dry run mode
