@@ -83,15 +83,3 @@ class SkillManifest(BaseModel):
     kind: Literal["Skill"]
     metadata: SkillMetadata
     spec: SkillSpec
-
-
-class RuntimeSettings(BaseModel):
-    """Runtime-specific settings."""
-
-    auto_inject_env: list[str] = Field(default_factory=list)
-
-
-class RuntimeConfig(BaseModel):
-    """Runtime configuration file structure."""
-
-    runtimes: dict[str, RuntimeSettings] = Field(default_factory=dict)
