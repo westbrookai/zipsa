@@ -497,6 +497,9 @@ class TestBuildClaudeJsonOauth:
         assert "ZIPSA_TOKEN_NOTION" in notion["headersHelper"]
         assert "Authorization" in notion["headersHelper"]
         assert "Bearer" in notion["headersHelper"]
+        # Must use double quotes so shell expands $ZIPSA_TOKEN_NOTION
+        assert notion["headersHelper"].startswith('echo "')
+        assert "'" not in notion["headersHelper"]
 
     def test_oauth2_explicit_headers_helper_not_overridden(self, tmp_path):
         """oauth2 server with explicit headersHelper keeps it unchanged."""
