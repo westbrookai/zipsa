@@ -103,17 +103,23 @@ class DockerExecutor:
                     else:
                         print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
 
+        # Centralized skill data directory: ~/.zipsa/<name>@<version>/
+        skill_data_dir = (
+            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
+        )
+        skill_data_dir.mkdir(parents=True, exist_ok=True)
+
         # Create run directory for logging (skip for dry-run and shell mode)
         run_dir = None
         if not dry_run and not shell:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
-            run_dir = skill.skill_dir / ".zipsa" / "runs" / timestamp
+            run_dir = skill_data_dir / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate .claude.json for skill (contains MCP config + onboarding settings)
-        claude_json_path = skill.build_claude_json()
+        # Generate .claude.json in centralized directory
+        claude_json_path = skill.build_claude_json(output_dir=skill_data_dir)
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = skill_data_dir / ".env"
         try:
             # Build Docker command (also writes env file)
             docker_cmd = self._build_docker_command(
@@ -443,11 +449,10 @@ class DockerExecutor:
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
 
-    def _write_env_file(self, skill: Skill, env: dict[str, str]) -> Path:
-        """Write env vars to skill_dir/.zipsa/.env and return the path."""
-        zipsa_dir = skill.skill_dir / ".zipsa"
-        zipsa_dir.mkdir(exist_ok=True)
-        env_file = zipsa_dir / ".env"
+    def _write_env_file(self, output_dir: Path, env: dict[str, str]) -> Path:
+        """Write env vars to output_dir/.env and return the path."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        env_file = output_dir / ".env"
         with open(env_file, "w") as f:
             for key, value in env.items():
                 f.write(f"{key}={value}\n")
@@ -507,8 +512,11 @@ class DockerExecutor:
         if global_env_file.exists():
             cmd.extend(["--env-file", str(global_env_file)])
 
-        # Per-execution env file (skill_dir/.zipsa/.env), added last to take precedence
-        env_file = self._write_env_file(skill, env)
+        # Per-execution env file (~/.zipsa/<name>@<version>/.env), added last to take precedence
+        skill_data_dir = (
+            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
+        )
+        env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
         # Volume mounts
@@ -610,7 +618,7 @@ If a task requires other tools, refuse politely.
         print(json.dumps(mcp_config, indent=2))
         print()
         # Show env file keys (values hidden)
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / ".env"
         if env_file.exists():
             keys = [line.split("=")[0] for line in env_file.read_text().splitlines() if "=" in line]
             if keys:

@@ -5,16 +5,15 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from zipsa.core.executor import DockerExecutor
 from zipsa.core.skill import Skill
+import pytest
 
 
 class TestRunLogging:
     """Test run logging functionality."""
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_run_dir_created(self, mock_popen):
-        """Run should create timestamped directory in skill/.zipsa/runs/."""
-
-        # Mock process
+    def test_run_dir_created(self, mock_popen, tmp_path):
+        """Run should create timestamped directory under ~/.zipsa/<name>@<version>/runs/."""
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = ["", ""]
         mock_process = Mock()
@@ -23,39 +22,26 @@ class TestRunLogging:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Load skill
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        # Clean up previous runs
-        runs_dir = skill_dir / ".zipsa" / "runs"
-        if runs_dir.exists():
-            shutil.rmtree(runs_dir)
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test input", env={}))
 
-        # Execute
-        list(executor.run(skill, "Test input", env={}))
-
-        # Verify run directory created
-        runs_dir = skill_dir / ".zipsa" / "runs"
+        runs_dir = tmp_path / ".zipsa" / "test-skill@1.0.0" / "runs"
         assert runs_dir.exists()
 
-        # Should have exactly one run directory
         run_dirs = list(runs_dir.iterdir())
         assert len(run_dirs) == 1
 
-        # Verify it's a directory with timestamp format
         run_dir = run_dirs[0]
         assert run_dir.is_dir()
         assert len(run_dir.name) == 23  # YYYY-MM-DD_HHMMSS_microseconds
 
-        # Cleanup
-        shutil.rmtree(skill_dir / ".zipsa" / "runs")
-
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_output_jsonl_saved(self, mock_popen):
+    def test_output_jsonl_saved(self, mock_popen, tmp_path):
         """Output should be saved to output.jsonl in real-time."""
-        # Mock process with JSON output
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = [
             '{"type":"system","subtype":"init"}\n',
@@ -69,30 +55,25 @@ class TestRunLogging:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Execute
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        list(executor.run(skill, "Test input", env={}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test input", env={}))
 
-        # Verify output.jsonl exists and contains events
-        runs_dir = skill_dir / ".zipsa" / "runs"
+        runs_dir = tmp_path / ".zipsa" / "test-skill@1.0.0" / "runs"
         run_dirs = list(runs_dir.iterdir())
         run_dir = run_dirs[0]
         output_file = run_dir / "output.jsonl"
 
         assert output_file.exists()
 
-        # Read and verify content
         lines = output_file.read_text().strip().split('\n')
         assert len(lines) == 3
         assert '"type":"system"' in lines[0]
         assert '"type":"assistant"' in lines[1]
         assert '"type":"result"' in lines[2]
-
-        # Cleanup
-        shutil.rmtree(skill_dir / ".zipsa" / "runs")
 
     def test_summary_filtering(self):
         """Summary should contain only important events."""
@@ -198,42 +179,39 @@ class TestRunLogging:
             assert len(list(runs_dir.iterdir())) == 0
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_error_partial_log(self, mock_popen):
+    def test_error_partial_log(self, mock_popen, tmp_path):
         """Failed execution should preserve partial logs."""
-        # Mock process that outputs then fails
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = [
             '{"type":"system","subtype":"init"}\n',
             '{"type":"assistant","message":{"content":[{"type":"text","text":"Starting"}]}}\n',
-            ""  # End of output
+            ""
         ]
         mock_process = Mock()
         mock_process.stdout = mock_stdout
-        mock_process.wait.return_value = 1  # Non-zero exit
+        mock_process.wait.return_value = 1
         mock_process.returncode = 1
         mock_popen.return_value = mock_process
 
-        # Execute (should raise)
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
         try:
-            list(executor.run(skill, "Test", env={}))
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                list(executor.run(skill, "Test", env={}))
         except RuntimeError:
-            pass  # Expected
+            pass
 
-        # Verify partial log saved
-        runs_dir = skill_dir / ".zipsa" / "runs"
+        runs_dir = tmp_path / ".zipsa" / "test-skill@1.0.0" / "runs"
         run_dirs = list(runs_dir.iterdir())
         run_dir = run_dirs[0]
         output_file = run_dir / "output.jsonl"
 
         assert output_file.exists()
         lines = output_file.read_text().strip().split('\n')
-        assert len(lines) == 2  # Both events saved before failure
+        assert len(lines) == 2
 
-        # Verify metadata marks error
         metadata_file = run_dir / "metadata.json"
         assert metadata_file.exists()
 
@@ -241,6 +219,3 @@ class TestRunLogging:
         metadata = json.loads(metadata_file.read_text())
         assert metadata["is_error"] is True
         assert "No result event" in metadata["error"]
-
-        # Cleanup
-        shutil.rmtree(skill_dir / ".zipsa" / "runs")

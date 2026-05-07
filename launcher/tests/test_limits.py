@@ -81,9 +81,8 @@ class TestLimits:
         mock_process.terminate.assert_called_once()
 
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_max_cost_warning(self, mock_popen, capfd):
+    def test_max_cost_warning(self, mock_popen, tmp_path, capfd):
         """Should warn if max_cost_usd is exceeded."""
-        # Mock process with high cost result
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = [
             '{"type":"system","subtype":"init"}\n',
@@ -97,21 +96,18 @@ class TestLimits:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Load skill with max_cost limit
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        # Override limits for test
         from zipsa.core.models import SkillLimits
         skill.manifest.spec.limits = SkillLimits(max_cost_usd=0.10)
 
-        # Execute - should complete but warn
-        list(executor.run(skill, "Test", env={}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={}))
 
-        # Check metadata for cost warning
-        runs_dir = skill_dir / ".zipsa" / "runs"
-        run_dirs = sorted(runs_dir.iterdir(), reverse=True)  # Most recent first
+        runs_dir = tmp_path / ".zipsa" / "test-skill@1.0.0" / "runs"
+        run_dirs = sorted(runs_dir.iterdir(), reverse=True)
         metadata_file = run_dirs[0] / "metadata.json"
 
         import json
@@ -119,14 +115,9 @@ class TestLimits:
         assert metadata["cost_exceeded"] is True
         assert metadata["cost_limit_usd"] == 0.10
 
-        # Cleanup
-        import shutil
-        shutil.rmtree(skill_dir / ".zipsa" / "runs")
-
     @patch("zipsa.core.executor.subprocess.Popen")
-    def test_no_limits_set(self, mock_popen):
+    def test_no_limits_set(self, mock_popen, tmp_path):
         """Should run normally when no limits are set."""
-        # Mock normal process
         mock_stdout = MagicMock()
         mock_stdout.readline.side_effect = [
             '{"type":"system","subtype":"init"}\n',
@@ -140,23 +131,16 @@ class TestLimits:
         mock_process.returncode = 0
         mock_popen.return_value = mock_process
 
-        # Load skill without limits
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
         skill = Skill.load(skill_dir)
 
-        # Ensure no limits
         skill.manifest.spec.limits = None
 
-        # Execute - should complete normally
-        events = list(executor.run(skill, "Test", env={}))
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            events = list(executor.run(skill, "Test", env={}))
 
-        # Should get all events
         assert len(events) > 0
-
-        # Cleanup
-        import shutil
-        shutil.rmtree(skill_dir / ".zipsa" / "runs")
 
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_keyboard_interrupt_terminates_process(self, mock_popen):

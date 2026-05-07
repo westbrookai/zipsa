@@ -45,59 +45,53 @@ class TestDockerExecutor:
         assert "Read,Write" in prompt  # Allowed tools
         assert "Single-task focused" in prompt  # Behavior rules
 
-    def test_write_env_file_creates_file(self):
-        """_write_env_file should create .env in skill's .zipsa dir."""
+    def test_write_env_file_creates_file(self, tmp_path):
+        """_write_env_file should create .env in the given output_dir."""
         executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+        output_dir = tmp_path / "skill-data"
         env = {"FOO": "bar", "TOKEN": "secret"}
 
-        env_file = executor._write_env_file(skill, env)
+        env_file = executor._write_env_file(output_dir, env)
 
-        assert env_file == skill.skill_dir / ".zipsa" / ".env"
+        assert env_file == output_dir / ".env"
         assert env_file.exists()
         content = env_file.read_text()
         assert "FOO=bar\n" in content
         assert "TOKEN=secret\n" in content
 
-    def test_write_env_file_empty_env(self):
+    def test_write_env_file_empty_env(self, tmp_path):
         """_write_env_file should create empty .env file when no env vars."""
         executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+        output_dir = tmp_path / "skill-data"
 
-        env_file = executor._write_env_file(skill, {})
+        env_file = executor._write_env_file(output_dir, {})
 
         assert env_file.exists()
         assert env_file.read_text() == ""
 
-    def test_build_docker_command_uses_env_file(self):
+    def test_build_docker_command_uses_env_file(self, tmp_path):
         """Docker command should use --env-file instead of -e flags."""
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}
 
-        cmd = executor._build_docker_command(
-            skill=skill,
-            user_input="Test input",
-            claude_json_path=claude_json_path,
-            env=env,
-        )
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test input",
+                claude_json_path=claude_json_path,
+                env=env,
+            )
 
-        # Should use --env-file, not -e
         assert "--env-file" in cmd
         assert "-e" not in cmd
 
-        # env file path should be in the command
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         assert str(env_file) in cmd
-
-        # env file should contain the token
         assert "CLAUDE_CODE_OAUTH_TOKEN=test-token\n" in env_file.read_text()
 
-        # Other docker basics
         assert cmd[0] == "docker"
         assert "--rm" in cmd
         assert "--name" in cmd
@@ -253,6 +247,73 @@ class TestDockerExecutor:
         assert not env_file.exists()
 
 
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_run_creates_run_dir_in_home(self, mock_popen, tmp_path):
+        """run() should create runs/<timestamp>/ under ~/.zipsa/<name>@<version>/."""
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = ["output\n", ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={}))
+
+        skill_data_dir = tmp_path / ".zipsa" / "test-skill@1.0.0"
+        assert skill_data_dir.exists()
+        runs_dir = skill_data_dir / "runs"
+        assert runs_dir.exists()
+        assert len(list(runs_dir.iterdir())) == 1
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_run_creates_claude_json_in_home(self, mock_popen, tmp_path):
+        """run() should create .claude.json under ~/.zipsa/<name>@<version>/."""
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = ["output\n", ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={}))
+
+        skill_data_dir = tmp_path / ".zipsa" / "test-skill@1.0.0"
+        assert (skill_data_dir / ".claude.json").exists()
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_run_cleans_up_env_file_in_home(self, mock_popen, tmp_path):
+        """run() should delete .env from ~/.zipsa/<name>@<version>/ after execution."""
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = ["output\n", ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            list(executor.run(skill, "Test", env={"SECRET": "value"}))
+
+        env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
+        assert not env_file.exists()
+
+
 class TestRuntimeConfig:
     """Test runtime config file handling."""
 
@@ -269,35 +330,37 @@ runtimes:
         executor = DockerExecutor(runtime_config_path=config_path)
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
-            executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                executor._build_docker_command(
+                    skill=skill,
+                    user_input="Test",
+                    claude_json_path=claude_json_path,
+                    env={},
+                )
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         assert "CLAUDE_CODE_OAUTH_TOKEN=test-token\n" in env_file.read_text()
 
-    def test_no_auto_inject_without_config(self):
+    def test_no_auto_inject_without_config(self, tmp_path):
         """Should not auto-inject if runtime config doesn't exist."""
         executor = DockerExecutor(runtime_config_path=Path("/nonexistent/config.yaml"))
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
-            executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                executor._build_docker_command(
+                    skill=skill,
+                    user_input="Test",
+                    claude_json_path=claude_json_path,
+                    env={},
+                )
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_file.read_text()
 
     def test_no_auto_inject_if_runtime_not_in_config(self, tmp_path):
@@ -313,17 +376,18 @@ runtimes:
         executor = DockerExecutor(runtime="claude", runtime_config_path=config_path)
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}):
-            executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                executor._build_docker_command(
+                    skill=skill,
+                    user_input="Test",
+                    claude_json_path=claude_json_path,
+                    env={},
+                )
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_file.read_text()
 
     def test_user_env_overrides_config(self, tmp_path):
@@ -339,17 +403,18 @@ runtimes:
         executor = DockerExecutor(runtime_config_path=config_path)
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         with patch.dict("os.environ", {"CLAUDE_CODE_OAUTH_TOKEN": "host-token"}):
-            executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={"CLAUDE_CODE_OAUTH_TOKEN": "user-token"},
-            )
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                executor._build_docker_command(
+                    skill=skill,
+                    user_input="Test",
+                    claude_json_path=claude_json_path,
+                    env={"CLAUDE_CODE_OAUTH_TOKEN": "user-token"},
+                )
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         content = env_file.read_text()
         assert "CLAUDE_CODE_OAUTH_TOKEN=user-token\n" in content
         assert "host-token" not in content
@@ -368,16 +433,17 @@ runtimes:
         executor = DockerExecutor(runtime_config_path=config_path)
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         with patch.dict("os.environ", {}, clear=True):
-            executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                executor._build_docker_command(
+                    skill=skill,
+                    user_input="Test",
+                    claude_json_path=claude_json_path,
+                    env={},
+                )
 
-        env_file = skill.skill_dir / ".zipsa" / ".env"
+        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_file.read_text()
         assert any("CLAUDE_CODE_OAUTH_TOKEN" in str(call) for call in mock_print.call_args_list)
