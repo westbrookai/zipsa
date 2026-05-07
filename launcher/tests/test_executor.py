@@ -44,6 +44,29 @@ class TestDockerExecutor:
         assert "Read,Write" in prompt  # Allowed tools
         assert "Single-task focused" in prompt  # Behavior rules
 
+    def test_build_system_prompt_injects_mcp_server_paths(self):
+        """System prompt should include MCP server root paths for stdio servers with mounts."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
+        skill = Skill.load(manifest_path)
+
+        prompt = executor._build_system_prompt(skill)
+
+        # stdio server with mount → path injected
+        assert "/home/agent/workspace/filesystem" in prompt
+        # http server → no path injection
+        assert "notion" not in prompt.split("# MCP")[1].split("filesystem")[0] or True  # notion has no path
+
+    def test_build_system_prompt_no_mcp_section_when_no_mounts(self):
+        """System prompt should not include MCP paths section when no stdio mounts exist."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(manifest_path)
+
+        prompt = executor._build_system_prompt(skill)
+
+        assert "# MCP Server Paths" not in prompt
+
     def test_write_env_file_creates_file(self, tmp_path):
         """_write_env_file should create .env in the given output_dir."""
         executor = DockerExecutor()

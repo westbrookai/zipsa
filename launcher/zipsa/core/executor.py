@@ -554,6 +554,17 @@ class DockerExecutor:
         Returns:
             Complete system prompt string
         """
+        mcp_paths_section = ""
+        mounted_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "stdio" and s.mount
+        ]
+        if mounted_servers:
+            lines = ["# MCP Server Paths"]
+            for server in mounted_servers:
+                lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
+            mcp_paths_section = "\n".join(lines) + "\n\n"
+
         return f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
 
 # Purpose
@@ -562,7 +573,7 @@ class DockerExecutor:
 # Instructions
 {skill.instructions}
 
-# Available tools
+{mcp_paths_section}# Available tools
 You may ONLY use these tools: {skill.get_allowed_tools()}
 If a task requires other tools, refuse politely.
 
