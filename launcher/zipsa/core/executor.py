@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -465,8 +466,9 @@ class DockerExecutor:
         ]
 
         # Extra docker options (e.g. port forwarding for OAuth flows)
-        if extra_docker_opts:
-            cmd.extend(extra_docker_opts)
+        # Each opt is shell-split so "-p 56535:56535" works as well as ["-p", "56535:56535"]
+        for opt in (extra_docker_opts or []):
+            cmd.extend(shlex.split(opt))
 
         # Add interactive TTY flags for shell mode
         if shell:
