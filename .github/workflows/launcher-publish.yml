@@ -33,12 +33,19 @@ jobs:
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "Version: ${VERSION}"
 
-    - name: Update version in pyproject.toml
+    - name: Verify pyproject.toml version matches tag
       run: |
         cd launcher
-        VERSION=${{ steps.version.outputs.version }}
-        sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
-        echo "Updated version to ${VERSION}"
+        TAG_VERSION=${{ steps.version.outputs.version }}
+        PKG_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "Tag version:     ${TAG_VERSION}"
+        echo "pyproject.toml:  ${PKG_VERSION}"
+        if [ "${TAG_VERSION}" != "${PKG_VERSION}" ]; then
+          echo "ERROR: Tag version (${TAG_VERSION}) does not match pyproject.toml version (${PKG_VERSION})"
+          echo "Bump the version in launcher/pyproject.toml before tagging."
+          exit 1
+        fi
+        echo "Versions match. Proceeding."
 
     - name: Build package
       run: |
