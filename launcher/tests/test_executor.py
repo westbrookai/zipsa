@@ -382,3 +382,114 @@ class TestDockerExecutor:
 
         env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
+
+    def test_ensure_oauth_credentials_injects_token_for_oauth2_servers(self, tmp_path):
+        """Pre-flight injects ZIPSA_TOKEN_<NAME> for oauth2 servers."""
+        from unittest.mock import MagicMock
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        mock_manager.ensure_credentials.return_value = "tok-abc123"
+
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        assert env["ZIPSA_TOKEN_NOTION"] == "tok-abc123"
+        mock_manager.ensure_credentials.assert_called_once_with("notion", "https://mcp.notion.com/mcp")
+
+    def test_ensure_oauth_credentials_skips_servers_without_auth(self):
+        """Pre-flight does nothing for HTTP servers without auth field."""
+        from zipsa.core.models import MCPServerHTTP, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="api",
+                        type="http",
+                        url="https://api.example.com/mcp",
+                        auth=None,
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env == {}
+
+    def test_ensure_oauth_credentials_skips_token_already_in_env(self):
+        """Pre-flight skips servers whose token is already in env dict."""
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {"ZIPSA_TOKEN_NOTION": "existing-token"}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env["ZIPSA_TOKEN_NOTION"] == "existing-token"

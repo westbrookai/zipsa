@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 from .skill import Skill
 from ..runtimes import get_runtime
+from ..auth.oauth import OAuthManager
 
 
 CONTAINER_WORKSPACE = "/home/agent/workspace"
@@ -70,6 +71,9 @@ class DockerExecutor:
                         env[env_var] = os.environ[env_var]
                     else:
                         print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
+
+        # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers
+        self._ensure_oauth_credentials(skill, env)
 
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
         skill_data_dir = (
@@ -436,6 +440,27 @@ class DockerExecutor:
             for key, value in env.items():
                 f.write(f"{key}={value}\n")
         return env_file
+
+    def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
+        """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
+        oauth_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
+        ]
+        if not oauth_servers:
+            return
+
+        manager = OAuthManager()
+        print("Checking credentials...")
+
+        for server in oauth_servers:
+            token_var = f"ZIPSA_TOKEN_{server.name.upper()}"
+            if token_var in env:
+                print(f"  {server.name}: token already set")
+                continue
+            token = manager.ensure_credentials(server.name, server.url)
+            env[token_var] = token
+            print(f"  {server.name}: authorized")
 
     def _build_docker_command(
         self,
