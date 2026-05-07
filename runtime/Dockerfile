@@ -102,7 +102,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Set working directory
-WORKDIR /workspace
+WORKDIR /home/agent/workspace
 
 # Install runtime dependencies (NO build-essential)
 RUN apt-get update && \
@@ -195,8 +195,8 @@ RUN apt-get update && \
 # Create non-root user and group
 RUN groupadd -r agent -g 1000 && \
     useradd -r -u 1000 -g agent -m -s /bin/bash agent && \
-    mkdir -p /workspace /home/agent/.claude/skills /home/agent/.local/bin && \
-    chown -R agent:agent /workspace /home/agent
+    mkdir -p /home/agent/workspace /home/agent/.claude/skills /home/agent/.local/bin && \
+    chown -R agent:agent /home/agent
 
 # Set environment variables for better CLI experience
 ENV TERM=xterm-256color
@@ -218,7 +218,7 @@ RUN echo 'alias ll="ls -lah"' >> /home/agent/.bashrc && \
     echo 'alias claude-help="claude --help"' >> /home/agent/.bashrc
 
 # Set working directory
-WORKDIR /workspace
+WORKDIR /home/agent/workspace
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

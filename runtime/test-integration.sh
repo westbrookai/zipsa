@@ -160,15 +160,15 @@ fi
 # Test 12: Working directory is set
 print_test "Working directory is properly set"
 WORKDIR=$(docker run --rm "$IMAGE_NAME" pwd)
-if [ "$WORKDIR" = "/workspace" ]; then
-    print_pass "Working directory is /workspace"
+if [ "$WORKDIR" = "/home/agent/workspace" ]; then
+    print_pass "Working directory is /home/agent/workspace"
 else
-    print_fail "Working directory is $WORKDIR (expected /workspace)"
+    print_fail "Working directory is $WORKDIR (expected /home/agent/workspace)"
 fi
 
 # Test 13: Basic file operations work
 print_test "Basic file operations work in container"
-if docker run --rm -v "$(pwd):/workspace" "$IMAGE_NAME" ls -la /workspace > /dev/null 2>&1; then
+if docker run --rm -v "$(pwd):/home/agent/workspace" "$IMAGE_NAME" ls -la /home/agent/workspace > /dev/null 2>&1; then
     print_pass "Volume mounting and file operations work"
 else
     print_fail "Volume mounting failed"
