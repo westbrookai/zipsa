@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zipsa"
-version = "0.1.0"
+version = "0.1.5"
 description = "Multi-runtime skill launcher for Claude Code, Codex, and Gemini CLI"
 readme = "README.md"
 requires-python = ">=3.10"
