@@ -453,3 +453,88 @@ class TestClaudeJson:
         assert claude_json_path == output_dir / ".claude.json"
         assert claude_json_path.exists()
         assert (output_dir / ".claude.json.org").exists()
+
+
+def _make_skill(tmp_path: Path, mcp_entries: str) -> Skill:
+    """Helper: create a minimal skill with given mcp yaml block."""
+    import yaml
+    skill_dir = tmp_path / "test-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Test\n")
+    (skill_dir / "manifest.yaml").write_text(f"""
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: test-skill
+  version: 1.0.0
+spec:
+  purpose: Test
+  instructions: ./SKILL.md
+  mcp:
+{mcp_entries}
+  tools:
+    builtin: []
+""")
+    return Skill.load(skill_dir)
+
+
+class TestBuildClaudeJsonOauth:
+    """Test auto headersHelper generation for oauth2 servers."""
+
+    def test_oauth2_auto_generates_headers_helper(self, tmp_path):
+        """oauth2 server without explicit headersHelper gets auto-generated one."""
+        skill = _make_skill(tmp_path, """
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        notion = config["projects"]["/home/agent/workspace"]["mcpServers"]["notion"]
+        assert "headersHelper" in notion
+        assert "ZIPSA_TOKEN_NOTION" in notion["headersHelper"]
+        assert "Authorization" in notion["headersHelper"]
+        assert "Bearer" in notion["headersHelper"]
+
+    def test_oauth2_explicit_headers_helper_not_overridden(self, tmp_path):
+        """oauth2 server with explicit headersHelper keeps it unchanged."""
+        skill = _make_skill(tmp_path, """
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+      headersHelper: 'echo {"X-Custom": "value"}'
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        notion = config["projects"]["/home/agent/workspace"]["mcpServers"]["notion"]
+        assert notion["headersHelper"] == 'echo {"X-Custom": "value"}'
+
+    def test_no_auth_no_headers_helper(self, tmp_path):
+        """HTTP server without auth gets no auto-generated headersHelper."""
+        skill = _make_skill(tmp_path, """
+    - name: api
+      type: http
+      url: https://api.example.com/mcp
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        api = config["projects"]["/home/agent/workspace"]["mcpServers"]["api"]
+        assert "headersHelper" not in api
+
+    def test_token_var_uppercased_server_name(self, tmp_path):
+        """Token env var uses uppercased server name."""
+        skill = _make_skill(tmp_path, """
+    - name: github-copilot
+      type: http
+      url: https://api.example.com/mcp
+      auth:
+        type: oauth2
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        server = config["projects"]["/home/agent/workspace"]["mcpServers"]["github-copilot"]
+        assert "ZIPSA_TOKEN_GITHUB-COPILOT" in server["headersHelper"]
