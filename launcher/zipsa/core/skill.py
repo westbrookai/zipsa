@@ -131,22 +131,23 @@ class Skill:
 
         return ",".join(tools)
 
-    def build_claude_json(self) -> Path:
+    def build_claude_json(self, output_dir: Optional[Path] = None) -> Path:
         """Generate .claude.json file for skill.
 
-        Creates skill_dir/.zipsa/.claude.json with:
-        - Onboarding completion flag
-        - Trust dialog acceptance
-        - MCP server configuration for /workspace project
+        Args:
+            output_dir: Directory to write files into.
+                        Defaults to ~/.zipsa/<name>@<version>/.
 
         Returns:
             Path to created .claude.json file
         """
-        # Create .zipsa directory if not exists
-        zipsa_dir = self.skill_dir / ".zipsa"
-        zipsa_dir.mkdir(exist_ok=True)
+        if output_dir is None:
+            output_dir = (
+                Path.home() / ".zipsa" / f"{self.name}@{self.manifest.metadata.version}"
+            )
 
-        # Build MCP servers config
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         mcp_servers = {}
         for server in self.manifest.spec.mcp:
             if server.type == "stdio":
@@ -155,19 +156,16 @@ class Skill:
                     "args": server.args,
                 }
             elif server.type == "http":
-                server_config = {
+                server_config: dict = {
                     "type": "http",
                     "url": server.url,
                 }
-                # TODO: Auto-generate connection field
-                # connection = f"{server.name}|{sha256(config)[:16]}"
                 if server.connection:
                     server_config["connection"] = server.connection
                 if server.headersHelper:
                     server_config["headersHelper"] = server.headersHelper
                 mcp_servers[server.name] = server_config
 
-        # Build full .claude.json structure
         claude_config = {
             "hasCompletedOnboarding": True,
             "projects": {
@@ -175,16 +173,12 @@ class Skill:
                     "hasTrustDialogAccepted": True,
                     "mcpServers": mcp_servers,
                 }
-            }
+            },
         }
 
-        # Write to files
-        claude_json_path = zipsa_dir / ".claude.json"
-        claude_json_org_path = zipsa_dir / ".claude.json.org"
-
         config_text = json.dumps(claude_config, indent=2)
+        claude_json_path = output_dir / ".claude.json"
         claude_json_path.write_text(config_text)
-        # Also write .org file for comparison after execution
-        claude_json_org_path.write_text(config_text)
+        (output_dir / ".claude.json.org").write_text(config_text)
 
         return claude_json_path

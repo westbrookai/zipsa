@@ -3,6 +3,7 @@
 import json
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 from zipsa.core.skill import Skill
 
 
@@ -173,11 +174,10 @@ class TestClaudeJson:
     """Test .claude.json generation."""
 
     def test_build_claude_json_creates_file(self, tmp_path):
-        """Should create .claude.json file in .zipsa directory."""
-        # Create minimal manifest in tmp directory
+        """Should create .claude.json file in output_dir."""
         skill_dir = tmp_path / "test-skill"
         skill_dir.mkdir()
-        zipsa_dir = skill_dir / ".zipsa"
+        output_dir = tmp_path / "skill-data"
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
@@ -196,17 +196,12 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=output_dir)
 
-        # Both files should exist
         assert claude_json_path.exists()
-        assert claude_json_path == zipsa_dir / ".claude.json"
-
-        claude_json_org_path = zipsa_dir / ".claude.json.org"
-        assert claude_json_org_path.exists()
-
-        # Both should have same content initially
-        assert claude_json_path.read_text() == claude_json_org_path.read_text()
+        assert claude_json_path == output_dir / ".claude.json"
+        assert (output_dir / ".claude.json.org").exists()
+        assert claude_json_path.read_text() == (output_dir / ".claude.json.org").read_text()
 
     def test_build_claude_json_structure(self, tmp_path):
         """Should have correct structure with onboarding and projects."""
@@ -230,7 +225,7 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         # Parse and check structure
         config = json.loads(claude_json_path.read_text())
@@ -269,7 +264,7 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
         mcp_servers = config["projects"]["/workspace"]["mcpServers"]
@@ -309,7 +304,7 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
         mcp_servers = config["projects"]["/workspace"]["mcpServers"]
@@ -348,7 +343,7 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
         mcp_servers = config["projects"]["/workspace"]["mcpServers"]
@@ -358,3 +353,59 @@ class TestClaudeJson:
         assert mcp_servers["github"]["url"] == "https://api.githubcopilot.com/mcp"
         assert "headersHelper" in mcp_servers["github"]
         assert mcp_servers["github"]["headersHelper"] == "echo \"{\\\"Authorization\\\": \\\"Bearer $TOKEN\\\"}\""
+
+    def test_build_claude_json_uses_default_home_dir(self, tmp_path):
+        """build_claude_json with no args should write to ~/.zipsa/<name>@<version>/."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "my-skill", "version": "2.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            claude_json_path = skill.build_claude_json()
+
+        expected_dir = tmp_path / ".zipsa" / "my-skill@2.0.0"
+        assert claude_json_path == expected_dir / ".claude.json"
+        assert claude_json_path.exists()
+        assert (expected_dir / ".claude.json.org").exists()
+
+    def test_build_claude_json_uses_custom_output_dir(self, tmp_path):
+        """build_claude_json with output_dir should write there."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "my-skill", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        output_dir = tmp_path / "custom-output"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=output_dir)
+
+        assert claude_json_path == output_dir / ".claude.json"
+        assert claude_json_path.exists()
+        assert (output_dir / ".claude.json.org").exists()
