@@ -5,7 +5,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
@@ -66,14 +65,14 @@ class DockerExecutor:
             for env_var in server.env:
                 # Only add if not already set and exists in host environment
                 if env_var not in env:
-                    import os
                     if env_var in os.environ:
                         env[env_var] = os.environ[env_var]
                     else:
                         print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
 
-        # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers
-        self._ensure_oauth_credentials(skill, env)
+        # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers (skip for dry-run)
+        if not dry_run:
+            self._ensure_oauth_credentials(skill, env)
 
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
         skill_data_dir = (
@@ -439,6 +438,7 @@ class DockerExecutor:
         with open(env_file, "w") as f:
             for key, value in env.items():
                 f.write(f"{key}={value}\n")
+        env_file.chmod(0o600)
         return env_file
 
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
@@ -454,7 +454,7 @@ class DockerExecutor:
         print("Checking credentials...")
 
         for server in oauth_servers:
-            token_var = f"ZIPSA_TOKEN_{server.name.upper()}"
+            token_var = f"ZIPSA_TOKEN_{server.name.upper().replace('-', '_')}"
             if token_var in env:
                 print(f"  {server.name}: token already set")
                 continue

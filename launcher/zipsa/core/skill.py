@@ -170,7 +170,7 @@ class Skill:
                 # Auto-generate headersHelper for oauth2 servers if not explicitly set
                 headers_helper = server.headersHelper
                 if not headers_helper and server.auth and server.auth.type == "oauth2":
-                    token_var = f"ZIPSA_TOKEN_{server.name.upper()}"
+                    token_var = f"ZIPSA_TOKEN_{server.name.upper().replace('-', '_')}"
                     headers_helper = f'echo \'{{"Authorization": "Bearer ${token_var}"}}\''
                 if headers_helper:
                     server_config["headersHelper"] = headers_helper

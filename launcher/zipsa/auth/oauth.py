@@ -9,7 +9,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 
-from .browser import open_browser_and_wait, CALLBACK_PORT
+from .browser import open_browser_and_wait, CALLBACK_PORT, OAuthCallbackError
 from .storage import FileTokenStorage
 
 CALLBACK_URI = f"http://localhost:{CALLBACK_PORT}/callback"
@@ -99,7 +99,7 @@ class OAuthManager:
                 state,
             )
 
-            code = open_browser_and_wait(auth_url)
+            code = open_browser_and_wait(auth_url, expected_state=state)
             tokens = await self._exchange(
                 client, meta["token_endpoint"], client_info, code, code_verifier
             )

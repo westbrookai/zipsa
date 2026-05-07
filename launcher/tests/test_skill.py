@@ -526,7 +526,7 @@ class TestBuildClaudeJsonOauth:
         assert "headersHelper" not in api
 
     def test_token_var_uppercased_server_name(self, tmp_path):
-        """Token env var uses uppercased server name."""
+        """Token env var uses uppercased server name with hyphens replaced by underscores."""
         skill = _make_skill(tmp_path, """
     - name: github-copilot
       type: http
@@ -537,4 +537,4 @@ class TestBuildClaudeJsonOauth:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path)
         config = json.loads(claude_json_path.read_text())
         server = config["projects"]["/home/agent/workspace"]["mcpServers"]["github-copilot"]
-        assert "ZIPSA_TOKEN_GITHUB-COPILOT" in server["headersHelper"]
+        assert "ZIPSA_TOKEN_GITHUB_COPILOT" in server["headersHelper"]
