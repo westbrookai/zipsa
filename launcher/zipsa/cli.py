@@ -19,6 +19,32 @@ app = typer.Typer(
 )
 
 
+def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
+    """Find a run directory under runs_dir.
+
+    If run_id is None, returns the lexicographically latest directory.
+    If run_id is given, matches it as a prefix against directory names.
+
+    Raises ValueError on missing, ambiguous, or empty runs directory.
+    """
+    if not runs_dir.exists():
+        raise ValueError(f"No runs found")
+    dirs = sorted([d for d in runs_dir.iterdir() if d.is_dir()])
+    if not dirs:
+        raise ValueError(f"No runs found")
+
+    if run_id is None:
+        return dirs[-1]
+
+    matches = [d for d in dirs if d.name.startswith(run_id)]
+    if not matches:
+        raise ValueError(f"No run matching '{run_id}' found")
+    if len(matches) > 1:
+        names = ", ".join(m.name for m in matches)
+        raise ValueError(f"Ambiguous run ID '{run_id}' — matches: {names}")
+    return matches[0]
+
+
 @app.command()
 def run(
     skill_dir: Annotated[

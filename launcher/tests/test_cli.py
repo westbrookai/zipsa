@@ -2,8 +2,9 @@
 
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
+import pytest
 from typer.testing import CliRunner
-from zipsa.cli import app
+from zipsa.cli import app, _find_run_dir
 
 
 runner = CliRunner()
@@ -300,3 +301,60 @@ class TestRuntimesCommand:
         assert "claude" in result.stdout
         assert "codex" in result.stdout
         assert "gemini" in result.stdout
+
+
+class TestFindRunDir:
+    """Test _find_run_dir helper for view command run selection."""
+
+    def test_returns_latest_run_when_no_id_given(self, tmp_path):
+        runs = tmp_path / "runs"
+        older = runs / "2026-05-07_100000_000000"
+        newer = runs / "2026-05-08_120000_000000"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        (older / "output.jsonl").touch()
+        (newer / "output.jsonl").touch()
+
+        result = _find_run_dir(runs)
+
+        assert result == newer
+
+    def test_raises_when_no_runs_exist(self, tmp_path):
+        runs = tmp_path / "runs"
+        with pytest.raises(ValueError, match="No runs found"):
+            _find_run_dir(runs)
+
+    def test_prefix_match_returns_correct_run(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_103540_691234"
+        run.mkdir(parents=True)
+        (run / "output.jsonl").touch()
+
+        result = _find_run_dir(runs, run_id="2026-05-08_103540")
+
+        assert result == run
+
+    def test_raises_on_ambiguous_prefix(self, tmp_path):
+        runs = tmp_path / "runs"
+        (runs / "2026-05-08_103540_111111").mkdir(parents=True)
+        (runs / "2026-05-08_103540_222222").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="Ambiguous"):
+            _find_run_dir(runs, run_id="2026-05-08_103540")
+
+    def test_raises_when_prefix_matches_nothing(self, tmp_path):
+        runs = tmp_path / "runs"
+        (runs / "2026-05-08_103540_111111").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="No run matching"):
+            _find_run_dir(runs, run_id="2026-05-09")
+
+    def test_returns_dir_even_when_output_jsonl_missing(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_103540_111111"
+        run.mkdir(parents=True)
+        # no output.jsonl — _find_run_dir just returns the directory
+        # the CLI layer handles missing output.jsonl separately
+
+        result = _find_run_dir(runs)
+        assert result == run
