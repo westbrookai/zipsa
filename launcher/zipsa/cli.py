@@ -1,5 +1,6 @@
 """CLI for zipsa launcher."""
 
+import re
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -19,6 +20,9 @@ app = typer.Typer(
 )
 
 
+_RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
+
+
 def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
     """Find a run directory under runs_dir.
 
@@ -28,10 +32,10 @@ def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
     Raises ValueError on missing, ambiguous, or empty runs directory.
     """
     if not runs_dir.exists():
-        raise ValueError(f"No runs found")
-    dirs = sorted([d for d in runs_dir.iterdir() if d.is_dir()])
+        raise ValueError("No runs found")
+    dirs = sorted([d for d in runs_dir.iterdir() if d.is_dir() and _RUN_DIR_RE.match(d.name)])
     if not dirs:
-        raise ValueError(f"No runs found")
+        raise ValueError("No runs found")
 
     if run_id is None:
         return dirs[-1]
@@ -41,7 +45,7 @@ def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
         raise ValueError(f"No run matching '{run_id}' found")
     if len(matches) > 1:
         names = ", ".join(m.name for m in matches)
-        raise ValueError(f"Ambiguous run ID '{run_id}' — matches: {names}")
+        raise ValueError(f"Ambiguous run ID '{run_id}': matches {names}")
     return matches[0]
 
 

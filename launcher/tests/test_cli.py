@@ -308,8 +308,8 @@ class TestFindRunDir:
 
     def test_returns_latest_run_when_no_id_given(self, tmp_path):
         runs = tmp_path / "runs"
-        older = runs / "2026-05-07_100000_000000"
-        newer = runs / "2026-05-08_120000_000000"
+        older = runs / "2026-05-07_100000_00000"
+        newer = runs / "2026-05-08_120000_00000"
         older.mkdir(parents=True)
         newer.mkdir(parents=True)
         (older / "output.jsonl").touch()
@@ -326,7 +326,7 @@ class TestFindRunDir:
 
     def test_prefix_match_returns_correct_run(self, tmp_path):
         runs = tmp_path / "runs"
-        run = runs / "2026-05-08_103540_691234"
+        run = runs / "2026-05-08_103540_69123"
         run.mkdir(parents=True)
         (run / "output.jsonl").touch()
 
@@ -336,25 +336,34 @@ class TestFindRunDir:
 
     def test_raises_on_ambiguous_prefix(self, tmp_path):
         runs = tmp_path / "runs"
-        (runs / "2026-05-08_103540_111111").mkdir(parents=True)
-        (runs / "2026-05-08_103540_222222").mkdir(parents=True)
+        (runs / "2026-05-08_103540_11111").mkdir(parents=True)
+        (runs / "2026-05-08_103540_22222").mkdir(parents=True)
 
         with pytest.raises(ValueError, match="Ambiguous"):
             _find_run_dir(runs, run_id="2026-05-08_103540")
 
     def test_raises_when_prefix_matches_nothing(self, tmp_path):
         runs = tmp_path / "runs"
-        (runs / "2026-05-08_103540_111111").mkdir(parents=True)
+        (runs / "2026-05-08_103540_11111").mkdir(parents=True)
 
         with pytest.raises(ValueError, match="No run matching"):
             _find_run_dir(runs, run_id="2026-05-09")
 
     def test_returns_dir_even_when_output_jsonl_missing(self, tmp_path):
         runs = tmp_path / "runs"
-        run = runs / "2026-05-08_103540_111111"
+        run = runs / "2026-05-08_103540_11111"
         run.mkdir(parents=True)
         # no output.jsonl — _find_run_dir just returns the directory
         # the CLI layer handles missing output.jsonl separately
+
+        result = _find_run_dir(runs)
+        assert result == run
+
+    def test_ignores_non_timestamp_directories(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_120000_00000"
+        run.mkdir(parents=True)
+        (runs / "tmp").mkdir()  # non-timestamp directory
 
         result = _find_run_dir(runs)
         assert result == run
