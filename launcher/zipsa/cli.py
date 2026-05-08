@@ -167,12 +167,12 @@ def view(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     except ValueError as e:
-        typer.echo(str(e))
+        typer.echo(str(e), err=True)
         raise typer.Exit(1)
 
     output_jsonl = run_dir / "output.jsonl"
     if not output_jsonl.exists():
-        typer.echo(f"Run '{run_dir.name}' has no output.jsonl")
+        typer.echo(f"Run '{run_dir.name}' has no output.jsonl", err=True)
         raise typer.Exit(1)
 
     def events():
@@ -183,7 +183,7 @@ def view(
                     try:
                         yield json.loads(line)
                     except json.JSONDecodeError:
-                        pass
+                        typer.echo(f"Warning: skipped malformed line in {output_jsonl}", err=True)
 
     render(events(), output_mode)
 

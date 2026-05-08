@@ -406,7 +406,7 @@ class TestViewCommand:
             result = runner.invoke(app, ["view", "test-skill"])
 
         assert result.exit_code == 1
-        assert "No runs found" in result.output
+        assert "No runs found" in result.stderr
 
     @patch("zipsa.cli.Skill")
     def test_view_specific_run_by_prefix(self, mock_skill_cls, tmp_path):
@@ -444,4 +444,4 @@ class TestViewCommand:
             result = runner.invoke(app, ["view", "test-skill"])
 
         assert result.exit_code == 1
-        assert "output.jsonl" in result.output
+        assert "output.jsonl" in result.stderr
