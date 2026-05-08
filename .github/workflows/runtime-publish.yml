@@ -21,6 +21,27 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Extract version from tag
+      id: version
+      run: |
+        # Extract version without 'runtime-v' prefix (runtime-v0.3.0 -> 0.3.0)
+        VERSION=${GITHUB_REF#refs/tags/runtime-v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Tag version: ${VERSION}"
+
+    - name: Validate Dockerfile LABEL version matches tag
+      run: |
+        LABEL_VERSION=$(grep 'LABEL version=' runtime/Dockerfile | sed 's/.*LABEL version="\(.*\)"/\1/')
+        TAG_VERSION=${{ steps.version.outputs.version }}
+        echo "Dockerfile LABEL version: ${LABEL_VERSION}"
+        echo "Git tag version:          ${TAG_VERSION}"
+        if [ "${LABEL_VERSION}" != "${TAG_VERSION}" ]; then
+          echo "ERROR: Dockerfile LABEL version (${LABEL_VERSION}) does not match git tag version (${TAG_VERSION})"
+          echo "Update LABEL version in runtime/Dockerfile before tagging."
+          exit 1
+        fi
+        echo "OK: versions match (${TAG_VERSION})"
+
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v4
 
@@ -33,14 +54,6 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract version from tag
-      id: version
-      run: |
-        # Extract version without 'runtime-v' prefix (runtime-v0.3.0 -> 0.3.0)
-        VERSION=${GITHUB_REF#refs/tags/runtime-v}
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        echo "Version: ${VERSION}"
 
     - name: Extract metadata for Docker
       id: meta

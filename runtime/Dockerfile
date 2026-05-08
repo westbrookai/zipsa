@@ -93,7 +93,7 @@ ARG PIPX_VERSION
 # Metadata
 LABEL maintainer="your-email@example.com"
 LABEL description="SKILL Runtime with Claude Code, Codex, and Gemini CLI (Multi-stage)"
-LABEL version="0.3.0"
+LABEL version="0.4.3"
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
