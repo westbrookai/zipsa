@@ -516,14 +516,12 @@ class DockerExecutor:
         env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
-        # Mount .claude.json (contains MCP config + onboarding settings)
-        # Note: Must be writable - claude updates this file during execution
-        cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
-
-        # Mount .claude.json.org (read-only original for comparison)
-        claude_json_org_path = claude_json_path.parent / ".claude.json.org"
-        if claude_json_org_path.exists():
-            cmd.extend(["-v", f"{claude_json_org_path}:/home/agent/.claude.json.org:ro"])
+        # Mount skill data directory read-only to /.zipsa.
+        # .claude.json is copied into the container overlay FS at startup (see bash wrapper
+        # below) so Claude Code can atomically rename it without hitting EBUSY — which occurs
+        # when the file itself is a bind-mount point.
+        skill_data_dir = claude_json_path.parent
+        cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
 
         # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
@@ -540,9 +538,13 @@ class DockerExecutor:
         # Image
         cmd.append(self.image)
 
-        # Shell mode: just run bash
+        # Preamble copies .claude.json from the read-only /.zipsa mount into the
+        # container's overlay FS so Claude Code can atomically rename it.
+        cp_preamble = "cp /.zipsa/.claude.json /home/agent/.claude.json"
+
         if shell:
-            cmd.append("bash")
+            # exec replaces the copy-shell with a fresh interactive bash
+            cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
         else:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
@@ -569,7 +571,7 @@ class DockerExecutor:
                 extra_dirs=extra_dirs,
             )
 
-            cmd.extend(runtime_cmd)
+            cmd.extend(["bash", "-c", f"{cp_preamble} && {shlex.join(runtime_cmd)}"])
 
         return cmd
 

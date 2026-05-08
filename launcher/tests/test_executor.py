@@ -117,9 +117,10 @@ class TestDockerExecutor:
         assert cmd[0] == "docker"
         assert "--rm" in cmd
         assert "--name" in cmd
-        assert "/home/agent/.claude.json" in " ".join(cmd)
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
-        assert "claude" in cmd
+        assert "bash" in cmd  # bash wrapper copies .claude.json before running claude
+        # .claude.json must NOT be bind-mounted as a file (causes EBUSY on rename)
+        assert ":/home/agent/.claude.json" not in " ".join(cmd)
         # Host cwd should NOT be mounted as workspace
         assert ":/workspace" not in " ".join(cmd)
 
@@ -382,6 +383,48 @@ class TestDockerExecutor:
 
         env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
+
+    def test_build_docker_command_mounts_skill_data_dir_not_file(self, tmp_path):
+        """Docker command should mount skill data dir to /.zipsa:ro, not .claude.json directly."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        cmd_str = " ".join(cmd)
+        # Directory mount — not the individual file
+        assert f"{tmp_path}:/.zipsa:ro" in cmd_str
+        # File must NOT be bind-mounted (causes EBUSY rename failure in container)
+        assert ":/home/agent/.claude.json" not in cmd_str
+
+    def test_build_docker_command_wraps_with_bash_cp(self, tmp_path):
+        """Docker command should copy .claude.json from /.zipsa before running claude."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test input",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert "bash" in cmd
+        assert "-c" in cmd
+        bash_c = cmd[cmd.index("-c") + 1]
+        assert "cp /.zipsa/.claude.json /home/agent/.claude.json" in bash_c
+        assert "claude" in bash_c
 
     def test_ensure_oauth_credentials_injects_token_for_oauth2_servers(self, tmp_path):
         """Pre-flight injects ZIPSA_TOKEN_<NAME> for oauth2 servers."""
