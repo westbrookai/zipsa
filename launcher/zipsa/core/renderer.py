@@ -96,10 +96,6 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
                 return f"{_GRAY}Result:{_RESET} HTTP {code} {code_text}"
             else:
                 return f"{_GRAY}Result:{_RESET} Success"
-        first = content[0].get("content", "")
-        if isinstance(first, str):
-            return f"{_GRAY}Result:{_RESET} {first}"
-        return f"{_GRAY}Result:{_RESET} Success"
 
     if event_type == "result":
         if mode != OutputMode.pretty:

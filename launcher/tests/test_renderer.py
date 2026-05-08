@@ -17,7 +17,6 @@ EVENTS = [
         "message": {
             "content": [{"type": "tool_use", "name": "mcp__notion__notion-search", "input": {"query": "zipsa"}}]
         },
-        "tool_use_result": {"result": "Found 3 pages"},
     },
     {
         "type": "user",
@@ -142,3 +141,29 @@ class TestPrettyMode:
         out = capsys.readouterr().out
         assert "[Turn 1]" in out
         assert "[Turn 2]" in out
+
+
+class TestAnswerMode:
+    def test_answer_mode_prints_only_text(self, capsys):
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "hmm"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Final answer."}]}},
+        ]
+        render(iter(events), OutputMode.answer)
+        out = capsys.readouterr().out
+        assert "Final answer." in out
+        assert "Thinking" not in out
+        assert "Turn" not in out
+
+    def test_answer_mode_skips_tool_events(self, capsys):
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "tool_use", "name": "read_file", "input": {}}]},
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
+        ]
+        render(iter(events), OutputMode.answer)
+        out = capsys.readouterr().out
+        assert "Done." in out
+        assert "read_file" not in out
