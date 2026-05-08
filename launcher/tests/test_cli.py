@@ -221,6 +221,8 @@ class TestListCommand:
 
 
 class TestRunOutputMode:
+    """Test --output-mode option on run command."""
+
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
     def test_run_defaults_to_pretty_mode(self, mock_skill_cls, mock_executor_cls):

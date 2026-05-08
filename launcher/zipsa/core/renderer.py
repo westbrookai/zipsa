@@ -20,7 +20,7 @@ def render(events: Iterator[dict], mode: OutputMode) -> None:
     """Render an event stream to stdout according to the given mode."""
     if mode == OutputMode.json:
         for event in events:
-            print(json.dumps(event, ensure_ascii=False))
+            print(json.dumps(event, ensure_ascii=False), flush=True)
         return
 
     turn = 0
@@ -32,7 +32,7 @@ def render(events: Iterator[dict], mode: OutputMode) -> None:
             output, turn = result
         else:
             output = result
-        print(output)
+        print(output, flush=True)
 
 
 def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] | None":
