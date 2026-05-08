@@ -1,8 +1,6 @@
 """Tests for output renderer."""
 
 import json
-from io import StringIO
-from unittest.mock import patch
 from zipsa.core.renderer import OutputMode, render
 
 
@@ -55,7 +53,7 @@ class TestJsonMode:
     def test_json_mode_prints_each_event_as_json(self, capsys):
         render(iter(EVENTS), OutputMode.json)
         out = capsys.readouterr().out
-        lines = [l for l in out.splitlines() if l.strip()]
+        lines = [line for line in out.splitlines() if line.strip()]
         assert len(lines) == len(EVENTS)
         for line, event in zip(lines, EVENTS):
             assert json.loads(line) == event
