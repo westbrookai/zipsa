@@ -525,12 +525,6 @@ class DockerExecutor:
         if claude_json_org_path.exists():
             cmd.extend(["-v", f"{claude_json_org_path}:/home/agent/.claude.json.org:ro"])
 
-        # Mount global credentials if they exist
-        # Note: Must be writable - claude may refresh tokens during execution
-        global_creds = Path.home() / ".zipsa" / ".credentials.json"
-        if global_creds.exists():
-            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json"])
-
         # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
             if server.type == "stdio" and server.mount:
