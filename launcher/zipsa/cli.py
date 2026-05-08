@@ -1,8 +1,5 @@
 """CLI for zipsa launcher."""
 
-import json
-import os
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -10,6 +7,7 @@ import typer
 from pydantic import ValidationError
 
 from .core.executor import DockerExecutor
+from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .runtimes import list_runtimes
 
@@ -19,132 +17,6 @@ app = typer.Typer(
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
     add_completion=False,
 )
-
-# ANSI color codes
-GRAY = "\033[90m"
-RESET = "\033[0m"
-
-# Global turn counter
-_current_turn = 0
-
-
-def format_event(event: dict) -> Optional[str]:
-    """Format important events for user-friendly display.
-
-    Returns formatted string or None if event should be skipped.
-    """
-    global _current_turn
-
-    event_type = event.get("type")
-
-    # Skip system and rate_limit events
-    if event_type in ("system", "rate_limit_event"):
-        return None
-
-    # Assistant messages
-    if event_type == "assistant":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        content_type = first_content.get("type")
-
-        # Thinking - indicates new turn
-        if content_type == "thinking":
-            _current_turn += 1
-            thinking = first_content.get("thinking", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Thinking:{RESET} {thinking}"
-
-        # Tool use (same turn, no turn increment)
-        elif content_type == "tool_use":
-            tool_name = first_content.get("name", "Unknown")
-            tool_input = first_content.get("input", {})
-
-            # Format input nicely
-            if "url" in tool_input:
-                detail = f"url={tool_input['url']}"
-            elif "query" in tool_input:
-                detail = f"query=\"{tool_input['query']}\""
-            elif "prompt" in tool_input:
-                detail = f"prompt=\"{tool_input['prompt']}\""
-            else:
-                # Show first key-value pair
-                items = list(tool_input.items())
-                if items:
-                    key, val = items[0]
-                    detail = f"{key}={val}"
-                else:
-                    detail = ""
-
-            return f"\n{GRAY}Tool:{RESET} {tool_name}\n  {detail}"
-
-        # Final text response (new turn if no thinking)
-        elif content_type == "text":
-            _current_turn += 1
-            text = first_content.get("text", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Answer:{RESET} {text}"
-
-    # Tool results (user role)
-    elif event_type == "user":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        if first_content.get("type") == "tool_result":
-            # Get result from tool_use_result if available
-            tool_result = event.get("tool_use_result", {})
-
-            # tool_use_result can be a string (error messages) or dict (structured data)
-            if isinstance(tool_result, str):
-                # String result (often error messages)
-                return f"{GRAY}Result:{RESET} {tool_result}"
-            elif isinstance(tool_result, dict):
-                # Structured result - extract meaningful info
-                if "matches" in tool_result:
-                    matches = tool_result["matches"]
-                    return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
-                elif "result" in tool_result:
-                    result = tool_result["result"]
-                    return f"{GRAY}Result:{RESET} {result}"
-                elif "code" in tool_result:
-                    code = tool_result.get("code")
-                    code_text = tool_result.get("codeText", "")
-                    return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
-                else:
-                    # Generic dict result
-                    return f"{GRAY}Result:{RESET} Success"
-            else:
-                # Fallback to content field
-                content_result = first_content.get("content", "")
-                if isinstance(content_result, str):
-                    return f"{GRAY}Result:{RESET} {content_result}"
-                else:
-                    return f"{GRAY}Result:{RESET} Success"
-
-    # Final result summary
-    elif event_type == "result":
-        is_error = event.get("is_error", False)
-        duration_ms = event.get("duration_ms", 0)
-        num_turns = event.get("num_turns", 0)
-        cost = event.get("total_cost_usd", 0)
-
-        status = "Error" if is_error else "Success"
-        duration_s = duration_ms / 1000
-
-        summary = f"\n{'='*50}\n"
-        summary += f"{status}\n"
-        summary += f"Duration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n"
-        summary += f"{'='*50}"
-
-        return summary
-
-    return None
 
 
 @app.command()
@@ -185,6 +57,10 @@ def run(
         Optional[list[str]],
         typer.Option("--docker-opt", help="Extra docker run options (e.g. --docker-opt='-p 56535:56535')"),
     ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
 ):
     """Execute a skill with the specified runtime."""
     try:
@@ -220,15 +96,8 @@ def run(
             # Dry run mode
             return
 
-        # Reset turn counter for new execution
-        global _current_turn
-        _current_turn = 0
-
-        # Stream output
-        for event in output:
-            formatted = format_event(event)
-            if formatted:
-                typer.echo(formatted)
+        # Stream output through renderer
+        render(output, output_mode)
 
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)

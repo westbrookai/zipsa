@@ -220,6 +220,70 @@ class TestListCommand:
         assert "no skills" in result.stdout.lower() or "0" in result.stdout
 
 
+class TestRunOutputMode:
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_defaults_to_pretty_mode(self, mock_skill_cls, mock_executor_cls):
+        """run without --output-mode should use pretty rendering."""
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}}
+        ]
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter(events)
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello"])
+
+        assert result.exit_code == 0
+        assert "Done." in result.output
+        # pretty mode adds Answer: prefix
+        assert "Answer:" in result.output
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_answer_mode_prints_only_text(self, mock_skill_cls, mock_executor_cls):
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "hmm"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Final answer."}]}},
+        ]
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter(events)
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello", "--output-mode", "answer"])
+
+        assert result.exit_code == 0
+        assert "Final answer." in result.output
+        assert "Thinking" not in result.output
+        assert "Turn" not in result.output
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_json_mode_prints_raw_json(self, mock_skill_cls, mock_executor_cls):
+        import json as _json
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        event = {"type": "result", "total_cost_usd": 0.01}
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter([event])
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello", "--output-mode", "json"])
+
+        assert result.exit_code == 0
+        assert _json.loads(result.output.strip().splitlines()[-1]) == event
+
+
 class TestRuntimesCommand:
     """Test runtimes command."""
 
