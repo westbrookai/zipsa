@@ -52,6 +52,9 @@ coverage/
 *.bak
 *.backup
 
+# Git worktrees
+.worktrees/
+
 # zipsa runtime and execution files
 .zipsa-mcp-*.json
 .zipsa/
