@@ -1,5 +1,6 @@
 """CLI for zipsa launcher."""
 
+import json
 import re
 from pathlib import Path
 from typing import Annotated, Optional
@@ -138,6 +139,53 @@ def run(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def view(
+    skill_dir: Annotated[
+        str,
+        typer.Argument(help="Path to skill directory or manifest.yaml"),
+    ],
+    run_id: Annotated[
+        Optional[str],
+        typer.Argument(help="Run ID prefix to replay (default: latest run)"),
+    ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
+):
+    """Replay the output of a past skill run."""
+    try:
+        skill = Skill.load(skill_dir)
+        runs_dir = (
+            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / "runs"
+        )
+        run_dir = _find_run_dir(runs_dir, run_id)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(str(e))
+        raise typer.Exit(1)
+
+    output_jsonl = run_dir / "output.jsonl"
+    if not output_jsonl.exists():
+        typer.echo(f"Run '{run_dir.name}' has no output.jsonl")
+        raise typer.Exit(1)
+
+    def events():
+        with open(output_jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        pass
+
+    render(events(), output_mode)
 
 
 @app.command()
