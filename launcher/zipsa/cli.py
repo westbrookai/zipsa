@@ -1,8 +1,7 @@
 """CLI for zipsa launcher."""
 
 import json
-import os
-import sys
+import re
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -10,6 +9,7 @@ import typer
 from pydantic import ValidationError
 
 from .core.executor import DockerExecutor
+from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .runtimes import list_runtimes
 
@@ -20,131 +20,34 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# ANSI color codes
-GRAY = "\033[90m"
-RESET = "\033[0m"
 
-# Global turn counter
-_current_turn = 0
+_RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
 
 
-def format_event(event: dict) -> Optional[str]:
-    """Format important events for user-friendly display.
+def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
+    """Find a run directory under runs_dir.
 
-    Returns formatted string or None if event should be skipped.
+    If run_id is None, returns the lexicographically latest directory.
+    If run_id is given, matches it as a prefix against directory names.
+
+    Raises ValueError on missing, ambiguous, or empty runs directory.
     """
-    global _current_turn
+    if not runs_dir.exists():
+        raise ValueError("No runs found")
+    dirs = sorted([d for d in runs_dir.iterdir() if d.is_dir() and _RUN_DIR_RE.match(d.name)])
+    if not dirs:
+        raise ValueError("No runs found")
 
-    event_type = event.get("type")
+    if run_id is None:
+        return dirs[-1]
 
-    # Skip system and rate_limit events
-    if event_type in ("system", "rate_limit_event"):
-        return None
-
-    # Assistant messages
-    if event_type == "assistant":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        content_type = first_content.get("type")
-
-        # Thinking - indicates new turn
-        if content_type == "thinking":
-            _current_turn += 1
-            thinking = first_content.get("thinking", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Thinking:{RESET} {thinking}"
-
-        # Tool use (same turn, no turn increment)
-        elif content_type == "tool_use":
-            tool_name = first_content.get("name", "Unknown")
-            tool_input = first_content.get("input", {})
-
-            # Format input nicely
-            if "url" in tool_input:
-                detail = f"url={tool_input['url']}"
-            elif "query" in tool_input:
-                detail = f"query=\"{tool_input['query']}\""
-            elif "prompt" in tool_input:
-                detail = f"prompt=\"{tool_input['prompt']}\""
-            else:
-                # Show first key-value pair
-                items = list(tool_input.items())
-                if items:
-                    key, val = items[0]
-                    detail = f"{key}={val}"
-                else:
-                    detail = ""
-
-            return f"\n{GRAY}Tool:{RESET} {tool_name}\n  {detail}"
-
-        # Final text response (new turn if no thinking)
-        elif content_type == "text":
-            _current_turn += 1
-            text = first_content.get("text", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Answer:{RESET} {text}"
-
-    # Tool results (user role)
-    elif event_type == "user":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        if first_content.get("type") == "tool_result":
-            # Get result from tool_use_result if available
-            tool_result = event.get("tool_use_result", {})
-
-            # tool_use_result can be a string (error messages) or dict (structured data)
-            if isinstance(tool_result, str):
-                # String result (often error messages)
-                return f"{GRAY}Result:{RESET} {tool_result}"
-            elif isinstance(tool_result, dict):
-                # Structured result - extract meaningful info
-                if "matches" in tool_result:
-                    matches = tool_result["matches"]
-                    return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
-                elif "result" in tool_result:
-                    result = tool_result["result"]
-                    return f"{GRAY}Result:{RESET} {result}"
-                elif "code" in tool_result:
-                    code = tool_result.get("code")
-                    code_text = tool_result.get("codeText", "")
-                    return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
-                else:
-                    # Generic dict result
-                    return f"{GRAY}Result:{RESET} Success"
-            else:
-                # Fallback to content field
-                content_result = first_content.get("content", "")
-                if isinstance(content_result, str):
-                    return f"{GRAY}Result:{RESET} {content_result}"
-                else:
-                    return f"{GRAY}Result:{RESET} Success"
-
-    # Final result summary
-    elif event_type == "result":
-        is_error = event.get("is_error", False)
-        duration_ms = event.get("duration_ms", 0)
-        num_turns = event.get("num_turns", 0)
-        cost = event.get("total_cost_usd", 0)
-
-        status = "Error" if is_error else "Success"
-        duration_s = duration_ms / 1000
-
-        summary = f"\n{'='*50}\n"
-        summary += f"{status}\n"
-        summary += f"Duration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n"
-        summary += f"{'='*50}"
-
-        return summary
-
-    return None
+    matches = [d for d in dirs if d.name.startswith(run_id)]
+    if not matches:
+        raise ValueError(f"No run matching '{run_id}' found")
+    if len(matches) > 1:
+        names = ", ".join(m.name for m in matches)
+        raise ValueError(f"Ambiguous run ID '{run_id}': matches {names}")
+    return matches[0]
 
 
 @app.command()
@@ -185,12 +88,16 @@ def run(
         Optional[list[str]],
         typer.Option("--docker-opt", help="Extra docker run options (e.g. --docker-opt='-p 56535:56535')"),
     ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
 ):
     """Execute a skill with the specified runtime."""
     try:
         # Load skill
         skill = Skill.load(skill_dir)
-        typer.echo(f"Loaded skill: {skill.name}")
+        typer.echo(f"Loaded skill: {skill.name}", err=True)
 
         # Validate input
         if not shell and not user_input:
@@ -220,15 +127,8 @@ def run(
             # Dry run mode
             return
 
-        # Reset turn counter for new execution
-        global _current_turn
-        _current_turn = 0
-
-        # Stream output
-        for event in output:
-            formatted = format_event(event)
-            if formatted:
-                typer.echo(formatted)
+        # Stream output through renderer
+        render(output, output_mode)
 
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -239,6 +139,53 @@ def run(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def view(
+    skill_dir: Annotated[
+        str,
+        typer.Argument(help="Path to skill directory or manifest.yaml"),
+    ],
+    run_id: Annotated[
+        Optional[str],
+        typer.Argument(help="Run ID prefix to replay (default: latest run)"),
+    ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
+):
+    """Replay the output of a past skill run."""
+    try:
+        skill = Skill.load(skill_dir)
+        runs_dir = (
+            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / "runs"
+        )
+        run_dir = _find_run_dir(runs_dir, run_id)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
+    output_jsonl = run_dir / "output.jsonl"
+    if not output_jsonl.exists():
+        typer.echo(f"Run '{run_dir.name}' has no output.jsonl", err=True)
+        raise typer.Exit(1)
+
+    def events():
+        with open(output_jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        typer.echo(f"Warning: skipped malformed line in {output_jsonl}", err=True)
+
+    render(events(), output_mode)
 
 
 @app.command()

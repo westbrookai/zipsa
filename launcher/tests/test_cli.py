@@ -2,8 +2,9 @@
 
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
+import pytest
 from typer.testing import CliRunner
-from zipsa.cli import app
+from zipsa.cli import app, _find_run_dir
 
 
 runner = CliRunner()
@@ -220,6 +221,72 @@ class TestListCommand:
         assert "no skills" in result.stdout.lower() or "0" in result.stdout
 
 
+class TestRunOutputMode:
+    """Test --output-mode option on run command."""
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_defaults_to_pretty_mode(self, mock_skill_cls, mock_executor_cls):
+        """run without --output-mode should use pretty rendering."""
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}}
+        ]
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter(events)
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello"])
+
+        assert result.exit_code == 0
+        assert "Done." in result.output
+        # pretty mode adds Answer: prefix
+        assert "Answer:" in result.output
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_answer_mode_prints_only_text(self, mock_skill_cls, mock_executor_cls):
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "hmm"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Final answer."}]}},
+        ]
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter(events)
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello", "--output-mode", "answer"])
+
+        assert result.exit_code == 0
+        assert "Final answer." in result.output
+        assert "Thinking" not in result.output
+        assert "Turn" not in result.output
+
+    @patch("zipsa.cli.DockerExecutor")
+    @patch("zipsa.cli.Skill")
+    def test_run_json_mode_prints_raw_json(self, mock_skill_cls, mock_executor_cls):
+        import json as _json
+        mock_skill = Mock()
+        mock_skill.name = "test-skill"
+        mock_skill_cls.load.return_value = mock_skill
+
+        event = {"type": "result", "total_cost_usd": 0.01}
+        mock_executor = Mock()
+        mock_executor.run.return_value = iter([event])
+        mock_executor_cls.return_value = mock_executor
+
+        result = runner.invoke(app, ["run", "test-skill", "hello", "--output-mode", "json"])
+
+        assert result.exit_code == 0
+        assert _json.loads(result.output.strip().splitlines()[-1]) == event
+
+
 class TestRuntimesCommand:
     """Test runtimes command."""
 
@@ -234,3 +301,147 @@ class TestRuntimesCommand:
         assert "claude" in result.stdout
         assert "codex" in result.stdout
         assert "gemini" in result.stdout
+
+
+class TestFindRunDir:
+    """Test _find_run_dir helper for view command run selection."""
+
+    def test_returns_latest_run_when_no_id_given(self, tmp_path):
+        runs = tmp_path / "runs"
+        older = runs / "2026-05-07_100000_00000"
+        newer = runs / "2026-05-08_120000_00000"
+        older.mkdir(parents=True)
+        newer.mkdir(parents=True)
+        (older / "output.jsonl").touch()
+        (newer / "output.jsonl").touch()
+
+        result = _find_run_dir(runs)
+
+        assert result == newer
+
+    def test_raises_when_no_runs_exist(self, tmp_path):
+        runs = tmp_path / "runs"
+        with pytest.raises(ValueError, match="No runs found"):
+            _find_run_dir(runs)
+
+    def test_prefix_match_returns_correct_run(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_103540_69123"
+        run.mkdir(parents=True)
+        (run / "output.jsonl").touch()
+
+        result = _find_run_dir(runs, run_id="2026-05-08_103540")
+
+        assert result == run
+
+    def test_raises_on_ambiguous_prefix(self, tmp_path):
+        runs = tmp_path / "runs"
+        (runs / "2026-05-08_103540_11111").mkdir(parents=True)
+        (runs / "2026-05-08_103540_22222").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="Ambiguous"):
+            _find_run_dir(runs, run_id="2026-05-08_103540")
+
+    def test_raises_when_prefix_matches_nothing(self, tmp_path):
+        runs = tmp_path / "runs"
+        (runs / "2026-05-08_103540_11111").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="No run matching"):
+            _find_run_dir(runs, run_id="2026-05-09")
+
+    def test_returns_dir_even_when_output_jsonl_missing(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_103540_11111"
+        run.mkdir(parents=True)
+        # no output.jsonl — _find_run_dir just returns the directory
+        # the CLI layer handles missing output.jsonl separately
+
+        result = _find_run_dir(runs)
+        assert result == run
+
+    def test_ignores_non_timestamp_directories(self, tmp_path):
+        runs = tmp_path / "runs"
+        run = runs / "2026-05-08_120000_00000"
+        run.mkdir(parents=True)
+        (runs / "tmp").mkdir()  # non-timestamp directory
+
+        result = _find_run_dir(runs)
+        assert result == run
+
+
+class TestViewCommand:
+    """Test view command for replaying past skill runs."""
+
+    @patch("zipsa.cli.Skill")
+    def test_view_replays_latest_run(self, mock_skill_cls, tmp_path):
+        """view should read output.jsonl from latest run and render it."""
+        mock_skill = Mock()
+        mock_skill.name = "daily-progress"
+        mock_skill.manifest.metadata.version = "0.1.0"
+        mock_skill_cls.load.return_value = mock_skill
+
+        # Create a fake run directory
+        run_dir = tmp_path / ".zipsa" / "daily-progress@0.1.0" / "runs" / "2026-05-08_120000_00000"
+        run_dir.mkdir(parents=True)
+        output_jsonl = run_dir / "output.jsonl"
+        output_jsonl.write_text(
+            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}}\n'
+        )
+
+        with patch("zipsa.cli.Path.home", return_value=tmp_path):
+            result = runner.invoke(app, ["view", "test-skill"])
+
+        assert result.exit_code == 0
+        assert "Done." in result.output
+
+    @patch("zipsa.cli.Skill")
+    def test_view_errors_when_no_runs(self, mock_skill_cls, tmp_path):
+        """view should exit with error when no runs exist."""
+        mock_skill = Mock()
+        mock_skill.name = "daily-progress"
+        mock_skill.manifest.metadata.version = "0.1.0"
+        mock_skill_cls.load.return_value = mock_skill
+
+        with patch("zipsa.cli.Path.home", return_value=tmp_path):
+            result = runner.invoke(app, ["view", "test-skill"])
+
+        assert result.exit_code == 1
+        assert "No runs found" in result.stderr
+
+    @patch("zipsa.cli.Skill")
+    def test_view_specific_run_by_prefix(self, mock_skill_cls, tmp_path):
+        """view with run-id prefix should replay that specific run."""
+        mock_skill = Mock()
+        mock_skill.name = "daily-progress"
+        mock_skill.manifest.metadata.version = "0.1.0"
+        mock_skill_cls.load.return_value = mock_skill
+
+        run_dir = tmp_path / ".zipsa" / "daily-progress@0.1.0" / "runs" / "2026-05-08_103540_69123"
+        run_dir.mkdir(parents=True)
+        (run_dir / "output.jsonl").write_text(
+            '{"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello."}]}}\n'
+        )
+
+        with patch("zipsa.cli.Path.home", return_value=tmp_path):
+            result = runner.invoke(app, ["view", "test-skill", "2026-05-08_103540"])
+
+        assert result.exit_code == 0
+        assert "Hello." in result.output
+
+    @patch("zipsa.cli.Skill")
+    def test_view_errors_when_output_jsonl_missing(self, mock_skill_cls, tmp_path):
+        """view should exit with error when output.jsonl is missing."""
+        mock_skill = Mock()
+        mock_skill.name = "daily-progress"
+        mock_skill.manifest.metadata.version = "0.1.0"
+        mock_skill_cls.load.return_value = mock_skill
+
+        run_dir = tmp_path / ".zipsa" / "daily-progress@0.1.0" / "runs" / "2026-05-08_120000_00000"
+        run_dir.mkdir(parents=True)
+        # no output.jsonl
+
+        with patch("zipsa.cli.Path.home", return_value=tmp_path):
+            result = runner.invoke(app, ["view", "test-skill"])
+
+        assert result.exit_code == 1
+        assert "output.jsonl" in result.stderr
