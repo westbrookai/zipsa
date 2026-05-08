@@ -97,7 +97,7 @@ def run(
     try:
         # Load skill
         skill = Skill.load(skill_dir)
-        typer.echo(f"Loaded skill: {skill.name}")
+        typer.echo(f"Loaded skill: {skill.name}", err=True)
 
         # Validate input
         if not shell and not user_input:
