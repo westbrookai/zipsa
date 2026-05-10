@@ -11,6 +11,7 @@ from typing import Iterator, Optional
 from .skill import Skill
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
+from .. import paths as zipsa_paths
 
 
 CONTAINER_WORKSPACE = "/home/agent/workspace"
@@ -75,9 +76,7 @@ class DockerExecutor:
             self._ensure_oauth_credentials(skill, env)
 
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
-        skill_data_dir = (
-            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
-        )
+        skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
         skill_data_dir.mkdir(parents=True, exist_ok=True)
 
         # Create run directory for logging (skip for dry-run and shell mode)
@@ -505,14 +504,12 @@ class DockerExecutor:
         ])
 
         # Global env file (~/.zipsa/.env) takes lower precedence, added first
-        global_env_file = Path.home() / ".zipsa" / ".env"
-        if global_env_file.exists():
-            cmd.extend(["--env-file", str(global_env_file)])
+        _global_env = zipsa_paths.global_env_file()
+        if _global_env.exists():
+            cmd.extend(["--env-file", str(_global_env)])
 
         # Per-execution env file (~/.zipsa/<name>@<version>/.env), added last to take precedence
-        skill_data_dir = (
-            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
-        )
+        skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
         env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
@@ -629,7 +626,7 @@ If a task requires other tools, refuse politely.
         print(json.dumps(mcp_config, indent=2))
         print()
         # Show env file keys (values hidden)
-        env_file = Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / ".env"
+        env_file = zipsa_paths.skill_env_file(skill.name, skill.manifest.metadata.version)
         if env_file.exists():
             keys = [line.split("=")[0] for line in env_file.read_text().splitlines() if "=" in line]
             if keys:

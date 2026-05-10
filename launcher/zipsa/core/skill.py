@@ -144,9 +144,8 @@ class Skill:
             Path to created .claude.json file
         """
         if output_dir is None:
-            output_dir = (
-                Path.home() / ".zipsa" / f"{self.name}@{self.manifest.metadata.version}"
-            )
+            from zipsa.paths import skill_data_dir as _skill_data_dir
+            output_dir = _skill_data_dir(self.name, self.manifest.metadata.version)
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
