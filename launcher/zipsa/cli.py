@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
+from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
 from .core.executor import DockerExecutor
@@ -19,6 +20,22 @@ app = typer.Typer(
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
     add_completion=False,
 )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"zipsa {pkg_version('zipsa')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        Optional[bool],
+        typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show version and exit"),
+    ] = None,
+) -> None:
+    pass
 
 
 _RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
