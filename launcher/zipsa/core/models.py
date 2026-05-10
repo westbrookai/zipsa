@@ -34,6 +34,12 @@ class MCPServerStdio(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)  # Tool whitelist (empty = all)
 
 
+class MCPServerAuth(BaseModel):
+    """OAuth authentication configuration for HTTP MCP servers."""
+
+    type: Literal["oauth2", "none"]
+
+
 class MCPServerHTTP(BaseModel):
     """HTTP MCP server configuration."""
 
@@ -44,6 +50,7 @@ class MCPServerHTTP(BaseModel):
     headersHelper: Optional[str] = None  # Shell command to generate headers
     env: list[str] = Field(default_factory=list)  # Required environment variables
     allowed_tools: list[str] = Field(default_factory=list)  # Tool whitelist (empty = all)
+    auth: Optional[MCPServerAuth] = None  # Authentication configuration
 
 
 # Union type for MCP servers

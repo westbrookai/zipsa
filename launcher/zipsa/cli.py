@@ -9,6 +9,7 @@ import typer
 from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
+from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
@@ -219,7 +220,7 @@ def validate(
         typer.echo(f"  Version: {skill.manifest.metadata.version}")
         typer.echo(f"  Purpose: {skill.manifest.spec.purpose}")
         typer.echo(f"  MCP Servers: {len(skill.manifest.spec.mcp)}")
-        tool_count = len(skill.manifest.spec.tools.builtin) + len(skill.manifest.spec.tools.mcp)
+        tool_count = len(skill.manifest.spec.tools.builtin)
         typer.echo(f"  Tools: {tool_count}")
 
     except FileNotFoundError as e:
@@ -302,6 +303,53 @@ def runtimes():
     typer.echo("Available runtimes:\n")
     for runtime_name in available:
         typer.echo(f"  - {runtime_name}")
+
+
+@app.command()
+def connect(
+    skill_dir: Annotated[
+        str,
+        typer.Argument(help="Path to skill directory or manifest.yaml"),
+    ],
+    server_name: Annotated[
+        Optional[str],
+        typer.Argument(help="MCP server name to authorize (default: all OAuth servers)"),
+    ] = None,
+):
+    """Pre-authorize OAuth credentials for a skill's HTTP MCP servers."""
+    try:
+        skill = Skill.load(skill_dir)
+
+        oauth_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
+        ]
+
+        if server_name:
+            oauth_servers = [s for s in oauth_servers if s.name == server_name]
+            if not oauth_servers:
+                typer.echo(
+                    f"Error: Server '{server_name}' not found or is not an OAuth2 server",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+        if not oauth_servers:
+            typer.echo("No OAuth servers found in skill")
+            return
+
+        manager = OAuthManager()
+        for server in oauth_servers:
+            typer.echo(f"Authorizing {server.name}...")
+            manager.ensure_credentials(server.name, server.url)
+            typer.echo(f"✓ {server.name}: authorized")
+
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def main():

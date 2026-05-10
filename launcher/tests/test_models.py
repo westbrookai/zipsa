@@ -7,6 +7,7 @@ from zipsa.core.models import (
     SkillMetadata,
     MCPServerStdio,
     MCPServerHTTP,
+    MCPServerAuth,
     SkillTools,
     VolumeMount,
 )
@@ -88,6 +89,65 @@ class TestMCPServers:
         server = MCPServerHTTP(**data)
         assert server.type == "http"
         assert server.url == "https://mcp.notion.com/mcp"
+
+    def test_http_server_with_oauth2_auth(self):
+        """HTTP server accepts auth.type: oauth2."""
+        data = {
+            "name": "notion",
+            "type": "http",
+            "url": "https://mcp.notion.com/mcp",
+            "auth": {"type": "oauth2"},
+        }
+        server = MCPServerHTTP(**data)
+        assert server.auth is not None
+        assert server.auth.type == "oauth2"
+
+    def test_http_server_auth_defaults_none(self):
+        """HTTP server auth defaults to None."""
+        data = {
+            "name": "notion",
+            "type": "http",
+            "url": "https://mcp.notion.com/mcp",
+        }
+        server = MCPServerHTTP(**data)
+        assert server.auth is None
+
+    def test_http_server_auth_type_none(self):
+        """HTTP server auth.type: none is valid."""
+        data = {
+            "name": "notion",
+            "type": "http",
+            "url": "https://mcp.notion.com/mcp",
+            "auth": {"type": "none"},
+        }
+        server = MCPServerHTTP(**data)
+        assert server.auth.type == "none"
+
+    def test_manifest_with_oauth2_server(self, tmp_path):
+        """Full manifest parsing with oauth2 auth."""
+        import yaml
+        manifest_yaml = tmp_path / "manifest.yaml"
+        manifest_yaml.write_text("""
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: test-oauth
+  version: 1.0.0
+spec:
+  purpose: Test
+  instructions: ./SKILL.md
+  mcp:
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+  tools:
+    builtin: []
+""")
+        data = yaml.safe_load(manifest_yaml.read_text())
+        manifest = SkillManifest.model_validate(data)
+        assert manifest.spec.mcp[0].auth.type == "oauth2"
 
 
 class TestSkillManifest:

@@ -5,12 +5,12 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from .skill import Skill
 from ..runtimes import get_runtime
+from ..auth.oauth import OAuthManager
 
 
 CONTAINER_WORKSPACE = "/home/agent/workspace"
@@ -65,11 +65,14 @@ class DockerExecutor:
             for env_var in server.env:
                 # Only add if not already set and exists in host environment
                 if env_var not in env:
-                    import os
                     if env_var in os.environ:
                         env[env_var] = os.environ[env_var]
                     else:
                         print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
+
+        # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers (skip for dry-run)
+        if not dry_run:
+            self._ensure_oauth_credentials(skill, env)
 
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
         skill_data_dir = (
@@ -435,7 +438,29 @@ class DockerExecutor:
         with open(env_file, "w") as f:
             for key, value in env.items():
                 f.write(f"{key}={value}\n")
+        env_file.chmod(0o600)
         return env_file
+
+    def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
+        """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
+        oauth_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
+        ]
+        if not oauth_servers:
+            return
+
+        manager = OAuthManager()
+        print("Checking credentials...")
+
+        for server in oauth_servers:
+            token_var = f"ZIPSA_TOKEN_{server.name.upper().replace('-', '_')}"
+            if token_var in env:
+                print(f"  {server.name}: token already set")
+                continue
+            token = manager.ensure_credentials(server.name, server.url)
+            env[token_var] = token
+            print(f"  {server.name}: authorized")
 
     def _build_docker_command(
         self,
@@ -491,20 +516,12 @@ class DockerExecutor:
         env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
-        # Mount .claude.json (contains MCP config + onboarding settings)
-        # Note: Must be writable - claude updates this file during execution
-        cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
-
-        # Mount .claude.json.org (read-only original for comparison)
-        claude_json_org_path = claude_json_path.parent / ".claude.json.org"
-        if claude_json_org_path.exists():
-            cmd.extend(["-v", f"{claude_json_org_path}:/home/agent/.claude.json.org:ro"])
-
-        # Mount global credentials if they exist
-        # Note: Must be writable - claude may refresh tokens during execution
-        global_creds = Path.home() / ".zipsa" / ".credentials.json"
-        if global_creds.exists():
-            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json"])
+        # Mount skill data directory read-only to /.zipsa.
+        # .claude.json is copied into the container overlay FS at startup (see bash wrapper
+        # below) so Claude Code can atomically rename it without hitting EBUSY — which occurs
+        # when the file itself is a bind-mount point.
+        skill_data_dir = claude_json_path.parent
+        cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
 
         # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
@@ -521,9 +538,13 @@ class DockerExecutor:
         # Image
         cmd.append(self.image)
 
-        # Shell mode: just run bash
+        # Preamble copies .claude.json from the read-only /.zipsa mount into the
+        # container's overlay FS so Claude Code can atomically rename it.
+        cp_preamble = "cp /.zipsa/.claude.json /home/agent/.claude.json"
+
         if shell:
-            cmd.append("bash")
+            # exec replaces the copy-shell with a fresh interactive bash
+            cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
         else:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
@@ -550,7 +571,7 @@ class DockerExecutor:
                 extra_dirs=extra_dirs,
             )
 
-            cmd.extend(runtime_cmd)
+            cmd.extend(["bash", "-c", f"{cp_preamble} && {shlex.join(runtime_cmd)}"])
 
         return cmd
 

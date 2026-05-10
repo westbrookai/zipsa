@@ -117,9 +117,10 @@ class TestDockerExecutor:
         assert cmd[0] == "docker"
         assert "--rm" in cmd
         assert "--name" in cmd
-        assert "/home/agent/.claude.json" in " ".join(cmd)
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
-        assert "claude" in cmd
+        assert "bash" in cmd  # bash wrapper copies .claude.json before running claude
+        # .claude.json must NOT be bind-mounted as a file (causes EBUSY on rename)
+        assert ":/home/agent/.claude.json" not in " ".join(cmd)
         # Host cwd should NOT be mounted as workspace
         assert ":/workspace" not in " ".join(cmd)
 
@@ -382,3 +383,156 @@ class TestDockerExecutor:
 
         env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
+
+    def test_build_docker_command_mounts_skill_data_dir_not_file(self, tmp_path):
+        """Docker command should mount skill data dir to /.zipsa:ro, not .claude.json directly."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        cmd_str = " ".join(cmd)
+        # Directory mount — not the individual file
+        assert f"{tmp_path}:/.zipsa:ro" in cmd_str
+        # File must NOT be bind-mounted (causes EBUSY rename failure in container)
+        assert ":/home/agent/.claude.json" not in cmd_str
+
+    def test_build_docker_command_wraps_with_bash_cp(self, tmp_path):
+        """Docker command should copy .claude.json from /.zipsa before running claude."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test input",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert "bash" in cmd
+        assert "-c" in cmd
+        bash_c = cmd[cmd.index("-c") + 1]
+        assert "cp /.zipsa/.claude.json /home/agent/.claude.json" in bash_c
+        assert "claude" in bash_c
+
+    def test_ensure_oauth_credentials_injects_token_for_oauth2_servers(self, tmp_path):
+        """Pre-flight injects ZIPSA_TOKEN_<NAME> for oauth2 servers."""
+        from unittest.mock import MagicMock
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        mock_manager.ensure_credentials.return_value = "tok-abc123"
+
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        assert env["ZIPSA_TOKEN_NOTION"] == "tok-abc123"
+        mock_manager.ensure_credentials.assert_called_once_with("notion", "https://mcp.notion.com/mcp")
+
+    def test_ensure_oauth_credentials_skips_servers_without_auth(self):
+        """Pre-flight does nothing for HTTP servers without auth field."""
+        from zipsa.core.models import MCPServerHTTP, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="api",
+                        type="http",
+                        url="https://api.example.com/mcp",
+                        auth=None,
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env == {}
+
+    def test_ensure_oauth_credentials_skips_token_already_in_env(self):
+        """Pre-flight skips servers whose token is already in env dict."""
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {"ZIPSA_TOKEN_NOTION": "existing-token"}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env["ZIPSA_TOKEN_NOTION"] == "existing-token"
