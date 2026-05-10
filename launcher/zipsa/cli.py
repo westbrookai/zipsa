@@ -13,6 +13,7 @@ from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
+from .paths import skill_runs_dir
 from .runtimes import list_runtimes
 
 
@@ -177,9 +178,7 @@ def view(
     """Replay the output of a past skill run."""
     try:
         skill = Skill.load(skill_dir)
-        runs_dir = (
-            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / "runs"
-        )
+        runs_dir = skill_runs_dir(skill.name, skill.manifest.metadata.version)
         run_dir = _find_run_dir(runs_dir, run_id)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)

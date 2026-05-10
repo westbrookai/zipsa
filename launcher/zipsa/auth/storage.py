@@ -4,14 +4,14 @@ import json
 from pathlib import Path
 from typing import Optional
 
-CREDENTIALS_DIR = Path.home() / ".zipsa" / "credentials"
+from zipsa.paths import credentials_dir
 
 
 class FileTokenStorage:
     """Persists OAuth tokens to ~/.zipsa/credentials/<name>.json with 600 permissions."""
 
     def __init__(self, server_name: str):
-        self.path = CREDENTIALS_DIR / f"{server_name}.json"
+        self.path = credentials_dir() / f"{server_name}.json"
 
     async def load(self) -> Optional[dict]:
         """Load credentials from disk. Returns None if file doesn't exist."""
