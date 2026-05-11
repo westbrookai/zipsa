@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from zipsa.core.executor import DockerExecutor
 from zipsa.core.skill import Skill
+from zipsa.paths import zipsa_home
 
 
 class TestDockerExecutor:
@@ -99,18 +100,17 @@ class TestDockerExecutor:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path)
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test input",
-                claude_json_path=claude_json_path,
-                env=env,
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test input",
+            claude_json_path=claude_json_path,
+            env=env,
+        )
 
         assert "--env-file" in cmd
         assert "-e" not in cmd
 
-        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
+        env_file = zipsa_home() / "minimal@1.0.0" / ".env"
         assert str(env_file) in cmd
         assert "CLAUDE_CODE_OAUTH_TOKEN=test-token\n" in env_file.read_text()
 
@@ -131,35 +131,33 @@ class TestDockerExecutor:
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json()
 
-        global_env_file = tmp_path / ".zipsa" / ".env"
-        global_env_file.parent.mkdir()
-        global_env_file.write_text("GLOBAL_TOKEN=global-value\n")
+        global_env = zipsa_home() / ".env"
+        global_env.parent.mkdir(parents=True, exist_ok=True)
+        global_env.write_text("GLOBAL_TOKEN=global-value\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert cmd.count("--env-file") == 2
-        assert str(global_env_file) in cmd
+        assert str(global_env) in cmd
 
-    def test_build_docker_command_no_global_env_file_when_missing(self, tmp_path):
+    def test_build_docker_command_no_global_env_file_when_missing(self):
         """Docker command should have only one --env-file if ~/.zipsa/.env doesn't exist."""
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert cmd.count("--env-file") == 1
 
@@ -193,13 +191,12 @@ class TestDockerExecutor:
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json(output_dir=tmp_path)
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert "--debug-file" not in cmd
         assert "--debug" not in cmd
