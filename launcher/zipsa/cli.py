@@ -191,6 +191,9 @@ def view(
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+    except ValidationError as e:
+        typer.echo(f"Error: Invalid manifest - {e}", err=True)
+        raise typer.Exit(1)
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)

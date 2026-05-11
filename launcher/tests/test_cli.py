@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 from typer.testing import CliRunner
 from zipsa.cli import app, _find_run_dir
+from zipsa.paths import SkillNotInstalledError
 
 
 runner = CliRunner()
@@ -697,7 +698,6 @@ class TestNameResolution:
 
     @patch("zipsa.cli.resolve_skill")
     def test_run_exits_when_not_installed(self, mock_resolve):
-        from zipsa.paths import SkillNotInstalledError
         mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
         result = runner.invoke(app, ["run", "ghost", "hello"])
         assert result.exit_code == 1
@@ -705,21 +705,20 @@ class TestNameResolution:
 
     @patch("zipsa.cli.resolve_skill")
     def test_validate_exits_when_not_installed(self, mock_resolve):
-        from zipsa.paths import SkillNotInstalledError
         mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
         result = runner.invoke(app, ["validate", "ghost"])
         assert result.exit_code == 1
+        assert "ghost" in result.output
 
     @patch("zipsa.cli.resolve_skill")
     def test_view_exits_when_not_installed(self, mock_resolve):
-        from zipsa.paths import SkillNotInstalledError
         mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
         result = runner.invoke(app, ["view", "ghost"])
         assert result.exit_code == 1
+        assert "ghost" in result.output
 
     @patch("zipsa.cli.resolve_skill")
     def test_connect_exits_when_not_installed(self, mock_resolve):
-        from zipsa.paths import SkillNotInstalledError
         mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
         result = runner.invoke(app, ["connect", "ghost"])
         assert result.exit_code == 1
