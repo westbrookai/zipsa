@@ -65,9 +65,10 @@ import io
 import json
 import os
 import tarfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 import yaml
-from zipsa.installer import install_from_github
+from zipsa.installer import install_from_github, install_local
 
 
 def _make_fake_tarball(subpath: str, skill_name: str = "test-skill", version: str = "0.1.0") -> bytes:
@@ -243,3 +244,102 @@ class TestInstallFromGithub:
                 mock_open.side_effect = [mock_commit, mock_tarball]
                 with pytest.raises(FileNotFoundError, match="manifest"):
                     install_from_github("westbrookai/zipsa/skills/nonexistent")
+
+
+def _make_local_skill(base: Path, name: str = "my-skill", version: str = "0.1.0") -> Path:
+    skill_dir = base / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "manifest.yaml").write_text(yaml.dump({
+        "apiVersion": "zipsa.dev/v1alpha1",
+        "kind": "Skill",
+        "metadata": {"name": name, "version": version},
+        "spec": {
+            "purpose": "Local test skill",
+            "instructions": "./SKILL.md",
+            "mcp": [],
+            "tools": {"builtin": []},
+        },
+    }))
+    (skill_dir / "SKILL.md").write_text("# Instructions")
+    return skill_dir
+
+
+class TestInstallLocal:
+    def test_install_path_copies_files(self, tmp_path):
+        """--path installs a copy of the local skill."""
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            name = install_local(str(src), link=False)
+
+        assert name == "my-skill"
+        installed = dest_home / "skills" / "my-skill"
+        assert installed.exists()
+        assert not installed.is_symlink()
+        assert (installed / "manifest.yaml").exists()
+
+    def test_install_link_creates_symlink(self, tmp_path):
+        """--link installs a symlink to the local skill."""
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            name = install_local(str(src), link=True)
+
+        assert name == "my-skill"
+        installed = dest_home / "skills" / "my-skill"
+        assert installed.is_symlink()
+        assert installed.resolve() == src.resolve()
+
+    def test_install_local_writes_install_json(self, tmp_path):
+        """install_local writes _install.json with type=copy."""
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            install_local(str(src), link=False)
+
+        meta = json.loads(
+            (dest_home / "skills" / "my-skill" / "_install.json").read_text()
+        )
+        assert meta["type"] == "copy"
+        assert meta["version"] == "0.1.0"
+        assert "commit_sha" not in meta
+
+    def test_install_link_writes_install_json_with_link_type(self, tmp_path):
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            install_local(str(src), link=True)
+
+        meta = json.loads(
+            (dest_home / "skills" / "my-skill" / "_install.json").read_text()
+        )
+        assert meta["type"] == "link"
+
+    def test_install_local_raises_if_already_installed(self, tmp_path):
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            install_local(str(src), link=False)
+            with pytest.raises(FileExistsError, match="already installed"):
+                install_local(str(src), link=False)
+
+    def test_install_local_force_replaces(self, tmp_path):
+        src = _make_local_skill(tmp_path / "src")
+        dest_home = tmp_path / "home"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            install_local(str(src), link=False)
+            name = install_local(str(src), link=False, force=True)
+
+        assert name == "my-skill"
+
+    def test_install_local_path_not_found_raises(self, tmp_path):
+        dest_home = tmp_path / "home"
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            with pytest.raises(FileNotFoundError):
+                install_local(str(tmp_path / "nonexistent"), link=False)

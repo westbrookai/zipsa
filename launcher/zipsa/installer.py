@@ -209,3 +209,45 @@ def install_from_github(source_str: str, force: bool = False) -> str:
 
     _write_install_json(dest, canonical, source.ref, version, "github", commit_sha)
     return name
+
+
+def install_local(local_path: str, link: bool = False, force: bool = False) -> str:
+    """Install a local skill by copy (default) or symlink. Returns skill name."""
+    from .paths import skills_dir
+    from .core.skill import Skill
+    from pydantic import ValidationError
+
+    src = Path(local_path).resolve()
+    if not src.exists():
+        raise FileNotFoundError(f"Path not found: {src}")
+
+    try:
+        skill = Skill.load(src)
+    except ValidationError as e:
+        raise ValueError(f"Install failed: invalid manifest — {e}")
+
+    name = skill.name
+    version = skill.manifest.metadata.version
+    dest = skills_dir() / name
+
+    if dest.exists() and not force:
+        raise FileExistsError(
+            f"Skill '{name}' is already installed. Use --force to overwrite."
+        )
+    if dest.exists():
+        if dest.is_symlink():
+            dest.unlink()
+        else:
+            shutil.rmtree(dest)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if link:
+        dest.symlink_to(src)
+        install_type = "link"
+    else:
+        shutil.copytree(src, dest)
+        install_type = "copy"
+
+    _write_install_json(dest, str(src), "local", version, install_type)
+    return name
