@@ -577,3 +577,48 @@ class TestSaveMetadata:
         metadata = json.loads((run_dir / "metadata.json").read_text())
         assert metadata["user_input"] == "failing query"
         assert metadata["is_error"] is True
+
+    def test_skill_json_status_failed_sets_is_error(self, tmp_path):
+        """is_error should be True when skill's final JSON has status != 'ok'."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        skill_json = '{"status": "failed", "phase": "write-to-notion", "result": null, "state_updates": null, "user_facing_summary": "Notion unavailable.", "needs_input": null, "error": {"code": "notion_unavailable"}}'
+        (run_dir / "output.jsonl").write_text(
+            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
+            '{"type": "result", "is_error": false, "duration_ms": 1000, '
+            '"duration_api_ms": 800, "num_turns": 1, "total_cost_usd": 0.01, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="daily log")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["is_error"] is True
+        assert metadata["skill_status"] == "failed"
+
+    def test_skill_json_status_ok_keeps_is_error_false(self, tmp_path):
+        """is_error should remain False when skill's final JSON has status 'ok'."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        skill_json = '{"status": "ok", "phase": "done", "result": "summary", "state_updates": null, "user_facing_summary": "Done.", "needs_input": null, "error": null}'
+        (run_dir / "output.jsonl").write_text(
+            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
+            '{"type": "result", "is_error": false, "duration_ms": 500, '
+            '"duration_api_ms": 400, "num_turns": 1, "total_cost_usd": 0.005, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="some query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["is_error"] is False

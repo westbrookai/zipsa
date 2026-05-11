@@ -368,6 +368,17 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
+    @staticmethod
+    def _extract_skill_status(text: str | None) -> str | None:
+        """Extract the skill contract status field from the final assistant text."""
+        if not text:
+            return None
+        try:
+            data = json.loads(text.strip())
+            return data.get("status")
+        except (json.JSONDecodeError, ValueError):
+            return None
+
     def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits=None, user_input: str = "") -> None:
         """Extract metrics from output.jsonl and save to metadata.json.
 
@@ -386,15 +397,22 @@ class DockerExecutor:
         if not output_file.exists():
             return
 
-        # Find result event
+        # Scan all events: find result event and last assistant text
         result_event = None
+        last_assistant_text = None
         with open(output_file, 'r') as f:
             for line in f:
                 try:
                     event = json.loads(line.strip())
-                    if event.get("type") == "result":
+                    event_type = event.get("type")
+                    if event_type == "result":
                         result_event = event
-                        break
+                    elif event_type == "assistant":
+                        content = event.get("message", {}).get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                last_assistant_text = block.get("text", "")
+                                break
                 except json.JSONDecodeError:
                     continue
 
@@ -427,6 +445,14 @@ class DockerExecutor:
                 "model_usage": result_event.get("modelUsage", {}),
                 "user_input": user_input
             }
+
+        # Override is_error if skill's final JSON reports a non-ok status.
+        # Claude Code reports is_error=False for a clean process exit even when
+        # the skill itself returned status=failed in its contract JSON output.
+        skill_status = self._extract_skill_status(last_assistant_text)
+        if skill_status and skill_status != "ok":
+            metadata["is_error"] = True
+            metadata["skill_status"] = skill_status
 
         # Add limit information if applicable
         if limits and limits.max_cost_usd:
@@ -579,14 +605,9 @@ class DockerExecutor:
         return cmd
 
     def _build_system_prompt(self, skill: Skill) -> str:
-        """Build system prompt from skill metadata.
+        contract_path = Path(__file__).parent.parent / "runtime-contract.md"
+        contract = contract_path.read_text(encoding="utf-8")
 
-        Args:
-            skill: Skill instance
-
-        Returns:
-            Complete system prompt string
-        """
         mcp_paths_section = ""
         mounted_servers = [
             s for s in skill.manifest.spec.mcp
@@ -598,7 +619,7 @@ class DockerExecutor:
                 lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
             mcp_paths_section = "\n".join(lines) + "\n\n"
 
-        return f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
+        skill_body = f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
 
 # Purpose
 {skill.manifest.spec.purpose}
@@ -614,6 +635,19 @@ If a task requires other tools, refuse politely.
 - Single-task focused: only do what your purpose describes
 - Be concise: no preamble, just answer
 - Decline gracefully for off-topic requests
+"""
+
+        meta = skill.manifest.metadata
+        return f"""You are operating inside the zipsa skill runtime.
+Read the runtime contract first, then execute according to the skill definition.
+
+<runtime_contract>
+{contract}
+</runtime_contract>
+
+<skill_definition name="{meta.name}" version="{meta.version}">
+{skill_body}
+</skill_definition>
 """
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
