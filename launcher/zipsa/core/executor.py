@@ -605,8 +605,9 @@ class DockerExecutor:
         return cmd
 
     def _build_system_prompt(self, skill: Skill) -> str:
-        contract_path = Path(__file__).parent.parent / "runtime-contract.md"
-        contract = contract_path.read_text(encoding="utf-8")
+        prompts_dir = Path(__file__).parent.parent / "system-prompts"
+        contract = (prompts_dir / "runtime-contract.md").read_text(encoding="utf-8")
+        template = (prompts_dir / "system-prompt-template.md").read_text(encoding="utf-8")
 
         mcp_paths_section = ""
         mounted_servers = [
@@ -638,17 +639,12 @@ If a task requires other tools, refuse politely.
 """
 
         meta = skill.manifest.metadata
-        return f"""You are operating inside the zipsa skill runtime.
-Read the runtime contract first, then execute according to the skill definition.
-
-<runtime_contract>
-{contract}
-</runtime_contract>
-
-<skill_definition name="{meta.name}" version="{meta.version}">
-{skill_body}
-</skill_definition>
-"""
+        return template.format(
+            contract=contract,
+            skill_name=meta.name,
+            skill_version=meta.version,
+            skill_body=skill_body,
+        )
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
