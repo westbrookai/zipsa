@@ -1,7 +1,9 @@
 """Tests for CLI commands."""
 
+import json
+import os
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, patch as _patch
 import pytest
 from typer.testing import CliRunner
 from zipsa.cli import app, _find_run_dir
@@ -176,12 +178,84 @@ class TestValidateCommand:
 
 
 class TestListCommand:
-    """Test list command."""
+    """Test list command (installed skills with stats)."""
+
+    def test_list_shows_installed_skills(self, tmp_path):
+        """list shows skills from ZIPSA_HOME/skills/."""
+        import json as _json
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        skill_dir = zipsa_home / "skills" / "daily-progress"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "daily-progress", "version": "0.1.0"},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (skill_dir / "SKILL.md").write_text("# Test")
+        (skill_dir / "_install.json").write_text(_json.dumps({
+            "source": "github:westbrookai/zipsa/skills/daily-progress",
+            "ref": "main", "commit_sha": "abc123", "version": "0.1.0",
+            "type": "github", "installed_at": "2026-05-11T00:00:00+00:00",
+        }))
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "daily-progress" in result.output
+        assert "0.1.0" in result.output
+
+    def test_list_empty_when_no_skills_installed(self, tmp_path):
+        """list reports no installed skills."""
+        zipsa_home = tmp_path / ".zipsa"
+        zipsa_home.mkdir(parents=True)
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "No installed skills" in result.output
+
+    def test_list_shows_linked_label_for_link_type(self, tmp_path):
+        """list shows 'linked' for link-type installs."""
+        import json as _json
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        original_dir = tmp_path / "original" / "hello-world"
+        original_dir.mkdir(parents=True)
+        (original_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "hello-world", "version": "0.1.0"},
+            "spec": {"purpose": "Hi", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (original_dir / "SKILL.md").write_text("# Hi")
+        (original_dir / "_install.json").write_text(_json.dumps({
+            "source": "/some/local/path", "ref": "local",
+            "version": "0.1.0", "type": "link",
+            "installed_at": "2026-05-11T00:00:00+00:00",
+        }))
+
+        skills_dir_path = zipsa_home / "skills"
+        skills_dir_path.mkdir(parents=True)
+        link_path = skills_dir_path / "hello-world"
+        link_path.symlink_to(original_dir)
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "linked" in result.output.lower()
+
+
+class TestDiscoverCommand:
+    """Test discover command (scan directory for skills)."""
 
     @patch("zipsa.cli.Skill")
     @patch("zipsa.cli.Path")
     def test_list_skills(self, mock_path_cls, mock_skill_cls):
-        """List skills in directory."""
+        """Discover skills in directory."""
         # Mock directory structure
         skill1 = Mock()
         skill1.is_dir.return_value = True
@@ -209,7 +283,7 @@ class TestListCommand:
 
         mock_skill_cls.load.side_effect = load_skill
 
-        result = runner.invoke(app, ["list", "."])
+        result = runner.invoke(app, ["discover", "."])
 
         assert result.exit_code == 0
         assert "skill-1" in result.stdout
@@ -217,17 +291,40 @@ class TestListCommand:
 
     @patch("zipsa.cli.Path")
     def test_list_empty_directory(self, mock_path_cls):
-        """List empty skills directory."""
+        """Discover finds no skills in empty directory."""
         mock_path = Mock()
         mock_path.exists.return_value = True
         mock_path.is_dir.return_value = True
         mock_path.iterdir.return_value = []
         mock_path_cls.return_value = mock_path
 
-        result = runner.invoke(app, ["list", "."])
+        result = runner.invoke(app, ["discover", "."])
 
         assert result.exit_code == 0
         assert "no skills" in result.stdout.lower() or "0" in result.stdout
+
+    def test_discover_lists_skills_in_directory(self, tmp_path):
+        """discover scans a directory for skill manifests."""
+        import yaml
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "my-skill", "version": "0.1.0"},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (skill_dir / "SKILL.md").write_text("# Test")
+
+        result = runner.invoke(app, ["discover", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "my-skill" in result.output
+
+    def test_discover_no_skills_found(self, tmp_path):
+        result = runner.invoke(app, ["discover", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "No skills found" in result.output
 
 
 class TestRunOutputMode:

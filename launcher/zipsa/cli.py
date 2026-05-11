@@ -15,7 +15,7 @@ from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .installer import install_from_github, install_local
-from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, SkillNotInstalledError
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError
 from .runtimes import list_runtimes
 
 
@@ -251,13 +251,103 @@ def validate(
 
 
 @app.command(name="list")
-def list_skills(
+def list_installed():
+    """List installed skills with run statistics."""
+    sd = _skills_dir()
+    if not sd.exists():
+        typer.echo("No installed skills.")
+        return
+
+    installed = []
+    for item in sorted(sd.iterdir()):
+        if not item.is_dir() and not item.is_symlink():
+            continue
+        manifest_path = item / "manifest.yaml"
+        if not manifest_path.exists():
+            continue
+        try:
+            skill = Skill.load(item)
+        except Exception:
+            continue
+
+        install_json = item / "_install.json"
+        install_meta = {}
+        if install_json.exists():
+            try:
+                install_meta = json.loads(install_json.read_text())
+            except Exception:
+                pass
+
+        # Compute run stats from zipsa_home()/<name>@<version>/runs/
+        total_runs = 0
+        successful_runs = 0
+        home = zipsa_home()
+        if home.exists():
+            for run_data_dir in home.iterdir():
+                if not run_data_dir.is_dir():
+                    continue
+                if not run_data_dir.name.startswith(f"{skill.name}@"):
+                    continue
+                runs_dir = run_data_dir / "runs"
+                if not runs_dir.exists():
+                    continue
+                for run_dir in runs_dir.iterdir():
+                    if not run_dir.is_dir():
+                        continue
+                    meta_file = run_dir / "metadata.json"
+                    if not meta_file.exists():
+                        continue
+                    try:
+                        meta = json.loads(meta_file.read_text())
+                    except Exception:
+                        continue
+                    total_runs += 1
+                    if not meta.get("is_error", True):
+                        successful_runs += 1
+
+        installed.append({
+            "skill": skill,
+            "meta": install_meta,
+            "total_runs": total_runs,
+            "successful_runs": successful_runs,
+            "is_link": item.is_symlink(),
+            "item": item,
+        })
+
+    if not installed:
+        typer.echo("No installed skills.")
+        return
+
+    typer.echo(f"Installed skills ({len(installed)}):\n")
+
+    for entry in installed:
+        skill = entry["skill"]
+        meta = entry["meta"]
+        label = " (linked)" if entry["is_link"] else ""
+        typer.echo(f"  {skill.name} @ {skill.manifest.metadata.version}{label}")
+
+        if entry["total_runs"] == 0:
+            typer.echo("    Last run: never")
+        else:
+            success_pct = int(entry["successful_runs"] / entry["total_runs"] * 100)
+            typer.echo(f"    {entry['total_runs']} runs · {success_pct}% success")
+
+        if entry["is_link"]:
+            typer.echo(f"    Linked from: {entry['item'].resolve()}")
+        elif meta.get("source"):
+            typer.echo(f"    Source: {meta['source']}")
+
+        typer.echo()
+
+
+@app.command(name="discover")
+def discover(
     skills_dir: Annotated[
         str,
         typer.Argument(help="Directory containing skills"),
     ] = ".",
 ):
-    """List all skills in a directory."""
+    """Scan a directory and list all skills found."""
     try:
         skills_path = Path(skills_dir)
         if not skills_path.exists():
