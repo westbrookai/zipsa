@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 from zipsa.core.skill import Skill
+from zipsa.paths import zipsa_home
 
 
 class TestSkillLoad:
@@ -399,7 +400,7 @@ class TestClaudeJson:
         assert mcp_servers["github"]["headersHelper"] == "echo \"{\\\"Authorization\\\": \\\"Bearer $TOKEN\\\"}\""
 
     def test_build_claude_json_uses_default_home_dir(self, tmp_path):
-        """build_claude_json with no args should write to ~/.zipsa/<name>@<version>/."""
+        """build_claude_json with no args should write to ZIPSA_HOME/<name>@<version>/."""
         skill_dir = tmp_path / "test-skill"
         skill_dir.mkdir()
         manifest = {
@@ -418,11 +419,9 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            claude_json_path = skill.build_claude_json()
-
-        expected_dir = tmp_path / ".zipsa" / "my-skill@2.0.0"
+        expected_dir = zipsa_home() / "my-skill@2.0.0"
         assert claude_json_path == expected_dir / ".claude.json"
         assert claude_json_path.exists()
         assert (expected_dir / ".claude.json.org").exists()
