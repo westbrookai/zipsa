@@ -754,6 +754,24 @@ class TestInstallCommand:
         assert result.exit_code == 1
         mock_install.assert_not_called()
 
+    @patch("zipsa.cli.install_from_github")
+    @patch("zipsa.cli.install_local")
+    def test_install_source_and_path_exits_nonzero(self, mock_local, mock_github):
+        """install exits 1 when both source and --path are provided."""
+        result = runner.invoke(app, ["install", "user/repo", "--path", "./a"])
+        assert result.exit_code == 1
+        mock_github.assert_not_called()
+        mock_local.assert_not_called()
+
+    @patch("zipsa.cli.install_from_github")
+    @patch("zipsa.cli.install_local")
+    def test_install_source_and_link_exits_nonzero(self, mock_local, mock_github):
+        """install exits 1 when both source and --link are provided."""
+        result = runner.invoke(app, ["install", "user/repo", "--link", "./a"])
+        assert result.exit_code == 1
+        mock_github.assert_not_called()
+        mock_local.assert_not_called()
+
     @patch("zipsa.cli.install_local")
     def test_install_with_path_flag(self, mock_install):
         """install --path calls install_local with link=False."""
