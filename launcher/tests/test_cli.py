@@ -13,9 +13,10 @@ runner = CliRunner()
 class TestRunCommand:
     """Test run command."""
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_basic(self, mock_skill_cls, mock_executor_cls):
+    def test_run_basic(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Run command should execute skill."""
         # Setup mocks
         mock_skill = Mock()
@@ -38,9 +39,10 @@ class TestRunCommand:
             mock_skill, "Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_with_runtime(self, mock_skill_cls, mock_executor_cls):
+    def test_run_with_runtime(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Run with custom runtime."""
         mock_skill = Mock()
         mock_skill_cls.load.return_value = mock_skill
@@ -56,9 +58,10 @@ class TestRunCommand:
             image="ghcr.io/westbrookai/zipsa-runtime:latest",
         )
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_with_env_vars(self, mock_skill_cls, mock_executor_cls):
+    def test_run_with_env_vars(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Run with environment variables."""
         mock_skill = Mock()
         mock_skill_cls.load.return_value = mock_skill
@@ -84,9 +87,10 @@ class TestRunCommand:
         call_env = mock_executor.run.call_args[1]["env"]
         assert call_env == {"KEY1": "value1", "KEY2": "value2"}
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_dry_run(self, mock_skill_cls, mock_executor_cls):
+    def test_run_dry_run(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Dry run should not execute."""
         mock_skill = Mock()
         mock_skill_cls.load.return_value = mock_skill
@@ -101,9 +105,10 @@ class TestRunCommand:
             mock_skill, "input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_with_mcp_debug(self, mock_skill_cls, mock_executor_cls):
+    def test_run_with_mcp_debug(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """--mcp-debug should pass mcp_debug=True to executor."""
         mock_skill = Mock()
         mock_skill.name = "test-skill"
@@ -119,8 +124,9 @@ class TestRunCommand:
             mock_skill, "input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None
         )
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_run_invalid_skill(self, mock_skill_cls):
+    def test_run_invalid_skill(self, mock_skill_cls, mock_resolve):
         """Run with invalid skill should fail."""
         mock_skill_cls.load.side_effect = FileNotFoundError("Not found")
 
@@ -132,8 +138,9 @@ class TestRunCommand:
 class TestValidateCommand:
     """Test validate command."""
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_validate_valid_skill(self, mock_skill_cls):
+    def test_validate_valid_skill(self, mock_skill_cls, mock_resolve):
         """Validate valid skill."""
         mock_skill = Mock()
         mock_skill.name = "test-skill"
@@ -152,8 +159,9 @@ class TestValidateCommand:
         assert result.exit_code == 0
         assert "valid" in result.stdout.lower() or "✓" in result.stdout
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_validate_invalid_skill(self, mock_skill_cls):
+    def test_validate_invalid_skill(self, mock_skill_cls, mock_resolve):
         """Validate invalid skill."""
         from pydantic import ValidationError
 
@@ -224,9 +232,10 @@ class TestListCommand:
 class TestRunOutputMode:
     """Test --output-mode option on run command."""
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_defaults_to_pretty_mode(self, mock_skill_cls, mock_executor_cls):
+    def test_run_defaults_to_pretty_mode(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """run without --output-mode should use pretty rendering."""
         mock_skill = Mock()
         mock_skill.name = "test-skill"
@@ -246,9 +255,10 @@ class TestRunOutputMode:
         # pretty mode adds Answer: prefix
         assert "Answer:" in result.output
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_answer_mode_prints_only_text(self, mock_skill_cls, mock_executor_cls):
+    def test_run_answer_mode_prints_only_text(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         mock_skill = Mock()
         mock_skill.name = "test-skill"
         mock_skill_cls.load.return_value = mock_skill
@@ -268,9 +278,10 @@ class TestRunOutputMode:
         assert "Thinking" not in result.output
         assert "Turn" not in result.output
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.DockerExecutor")
     @patch("zipsa.cli.Skill")
-    def test_run_json_mode_prints_raw_json(self, mock_skill_cls, mock_executor_cls):
+    def test_run_json_mode_prints_raw_json(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         import json as _json
         mock_skill = Mock()
         mock_skill.name = "test-skill"
@@ -373,8 +384,9 @@ class TestFindRunDir:
 class TestViewCommand:
     """Test view command for replaying past skill runs."""
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_view_replays_latest_run(self, mock_skill_cls, tmp_path):
+    def test_view_replays_latest_run(self, mock_skill_cls, mock_resolve, tmp_path):
         """view should read output.jsonl from latest run and render it."""
         mock_skill = Mock()
         mock_skill.name = "daily-progress"
@@ -395,8 +407,9 @@ class TestViewCommand:
         assert result.exit_code == 0
         assert "Done." in result.output
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_view_errors_when_no_runs(self, mock_skill_cls, tmp_path):
+    def test_view_errors_when_no_runs(self, mock_skill_cls, mock_resolve, tmp_path):
         """view should exit with error when no runs exist."""
         mock_skill = Mock()
         mock_skill.name = "daily-progress"
@@ -409,8 +422,9 @@ class TestViewCommand:
         assert result.exit_code == 1
         assert "No runs found" in result.stderr
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_view_specific_run_by_prefix(self, mock_skill_cls, tmp_path):
+    def test_view_specific_run_by_prefix(self, mock_skill_cls, mock_resolve, tmp_path):
         """view with run-id prefix should replay that specific run."""
         mock_skill = Mock()
         mock_skill.name = "daily-progress"
@@ -429,8 +443,9 @@ class TestViewCommand:
         assert result.exit_code == 0
         assert "Hello." in result.output
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_view_errors_when_output_jsonl_missing(self, mock_skill_cls, tmp_path):
+    def test_view_errors_when_output_jsonl_missing(self, mock_skill_cls, mock_resolve, tmp_path):
         """view should exit with error when output.jsonl is missing."""
         mock_skill = Mock()
         mock_skill.name = "daily-progress"
@@ -451,9 +466,10 @@ class TestViewCommand:
 class TestConnectCommand:
     """Test connect command."""
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.OAuthManager")
     @patch("zipsa.cli.Skill")
-    def test_connect_all_oauth_servers(self, mock_skill_cls, mock_oauth_manager_cls):
+    def test_connect_all_oauth_servers(self, mock_skill_cls, mock_oauth_manager_cls, mock_resolve):
         """connect authorizes all oauth2 servers in skill."""
         from zipsa.core.models import MCPServerHTTP, MCPServerAuth
 
@@ -472,7 +488,7 @@ class TestConnectCommand:
         mock_manager.ensure_credentials.return_value = "tok-123"
         mock_oauth_manager_cls.return_value = mock_manager
 
-        result = runner.invoke(app, ["connect", "skills/daily-progress"])
+        result = runner.invoke(app, ["connect", "daily-progress"])
 
         assert result.exit_code == 0
         mock_manager.ensure_credentials.assert_called_once_with(
@@ -480,9 +496,10 @@ class TestConnectCommand:
         )
         assert "notion" in result.stdout
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.OAuthManager")
     @patch("zipsa.cli.Skill")
-    def test_connect_specific_server(self, mock_skill_cls, mock_oauth_manager_cls):
+    def test_connect_specific_server(self, mock_skill_cls, mock_oauth_manager_cls, mock_resolve):
         """connect with server_name only authorizes that server."""
         from zipsa.core.models import MCPServerHTTP, MCPServerAuth
 
@@ -507,27 +524,29 @@ class TestConnectCommand:
         mock_manager.ensure_credentials.return_value = "tok"
         mock_oauth_manager_cls.return_value = mock_manager
 
-        result = runner.invoke(app, ["connect", "skills/daily-progress", "notion"])
+        result = runner.invoke(app, ["connect", "daily-progress", "notion"])
 
         assert result.exit_code == 0
         calls = mock_manager.ensure_credentials.call_args_list
         assert len(calls) == 1
         assert calls[0][0][0] == "notion"
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_connect_no_oauth_servers(self, mock_skill_cls):
+    def test_connect_no_oauth_servers(self, mock_skill_cls, mock_resolve):
         """connect reports nothing to do if no oauth2 servers."""
         mock_skill = Mock()
         mock_skill.manifest.spec.mcp = []
         mock_skill_cls.load.return_value = mock_skill
 
-        result = runner.invoke(app, ["connect", "skills/daily-progress"])
+        result = runner.invoke(app, ["connect", "daily-progress"])
 
         assert result.exit_code == 0
         assert "no" in result.stdout.lower() or "0" in result.stdout
 
+    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
     @patch("zipsa.cli.Skill")
-    def test_connect_unknown_server_name_exits_nonzero(self, mock_skill_cls):
+    def test_connect_unknown_server_name_exits_nonzero(self, mock_skill_cls, mock_resolve):
         """connect with unknown server_name exits non-zero."""
         from zipsa.core.models import MCPServerHTTP, MCPServerAuth
 
@@ -542,7 +561,7 @@ class TestConnectCommand:
         ]
         mock_skill_cls.load.return_value = mock_skill
 
-        result = runner.invoke(app, ["connect", "skills/daily-progress", "nonexistent"])
+        result = runner.invoke(app, ["connect", "daily-progress", "nonexistent"])
 
         assert result.exit_code != 0
 
@@ -671,3 +690,36 @@ class TestUninstallCommand:
 
         assert result.exit_code == 0
         assert not link_path.is_symlink()
+
+
+class TestNameResolution:
+    """Verify all commands reject unknown skill names with exit code 1."""
+
+    @patch("zipsa.cli.resolve_skill")
+    def test_run_exits_when_not_installed(self, mock_resolve):
+        from zipsa.paths import SkillNotInstalledError
+        mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
+        result = runner.invoke(app, ["run", "ghost", "hello"])
+        assert result.exit_code == 1
+        assert "ghost" in result.output
+
+    @patch("zipsa.cli.resolve_skill")
+    def test_validate_exits_when_not_installed(self, mock_resolve):
+        from zipsa.paths import SkillNotInstalledError
+        mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
+        result = runner.invoke(app, ["validate", "ghost"])
+        assert result.exit_code == 1
+
+    @patch("zipsa.cli.resolve_skill")
+    def test_view_exits_when_not_installed(self, mock_resolve):
+        from zipsa.paths import SkillNotInstalledError
+        mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
+        result = runner.invoke(app, ["view", "ghost"])
+        assert result.exit_code == 1
+
+    @patch("zipsa.cli.resolve_skill")
+    def test_connect_exits_when_not_installed(self, mock_resolve):
+        from zipsa.paths import SkillNotInstalledError
+        mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
+        result = runner.invoke(app, ["connect", "ghost"])
+        assert result.exit_code == 1

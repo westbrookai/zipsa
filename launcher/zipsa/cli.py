@@ -15,7 +15,7 @@ from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .installer import install_from_github, install_local
-from .paths import skill_runs_dir, installed_skill_dir
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, SkillNotInstalledError
 from .runtimes import list_runtimes
 
 
@@ -73,9 +73,9 @@ def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
 
 @app.command()
 def run(
-    skill_dir: Annotated[
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
     ],
     user_input: Annotated[
         Optional[str],
@@ -117,7 +117,7 @@ def run(
     """Execute a skill with the specified runtime."""
     try:
         # Load skill
-        skill = Skill.load(skill_dir)
+        skill = Skill.load(resolve_skill(name))
         typer.echo(f"Loaded skill: {skill.name}", err=True)
 
         # Validate input
@@ -151,6 +151,9 @@ def run(
         # Stream output through renderer
         render(output, output_mode)
 
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -164,9 +167,9 @@ def run(
 
 @app.command()
 def view(
-    skill_dir: Annotated[
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
     ],
     run_id: Annotated[
         Optional[str],
@@ -179,9 +182,12 @@ def view(
 ):
     """Replay the output of a past skill run."""
     try:
-        skill = Skill.load(skill_dir)
+        skill = Skill.load(resolve_skill(name))
         runs_dir = skill_runs_dir(skill.name, skill.manifest.metadata.version)
         run_dir = _find_run_dir(runs_dir, run_id)
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -209,14 +215,14 @@ def view(
 
 @app.command()
 def validate(
-    skill_dir: Annotated[
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
     ],
 ):
     """Validate a skill manifest."""
     try:
-        skill = Skill.load(skill_dir)
+        skill = Skill.load(resolve_skill(name))
         typer.echo(f"✓ Skill '{skill.name}' is valid")
         typer.echo(f"  Version: {skill.manifest.metadata.version}")
         typer.echo(f"  Purpose: {skill.manifest.spec.purpose}")
@@ -224,6 +230,9 @@ def validate(
         tool_count = len(skill.manifest.spec.tools.builtin)
         typer.echo(f"  Tools: {tool_count}")
 
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -375,9 +384,9 @@ def uninstall(
 
 @app.command()
 def connect(
-    skill_dir: Annotated[
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
     ],
     server_name: Annotated[
         Optional[str],
@@ -386,7 +395,7 @@ def connect(
 ):
     """Pre-authorize OAuth credentials for a skill's HTTP MCP servers."""
     try:
-        skill = Skill.load(skill_dir)
+        skill = Skill.load(resolve_skill(name))
 
         oauth_servers = [
             s for s in skill.manifest.spec.mcp
@@ -412,6 +421,9 @@ def connect(
             manager.ensure_credentials(server.name, server.url)
             typer.echo(f"✓ {server.name}: authorized")
 
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
