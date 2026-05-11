@@ -9,10 +9,14 @@ import pytest
 from zipsa.paths import (
     credentials_dir,
     global_env_file,
+    installed_skill_dir,
+    resolve_skill,
     skill_data_dir,
     skill_env_file,
     skill_runs_dir,
+    skills_dir,
     zipsa_home,
+    SkillNotInstalledError,
 )
 
 
@@ -52,3 +56,24 @@ class TestGlobalPaths:
     def test_credentials_dir(self, tmp_path):
         with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
             assert credentials_dir() == tmp_path / "credentials"
+
+
+class TestInstalledSkillPaths:
+    def test_skills_dir(self, tmp_path):
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            assert skills_dir() == tmp_path / "skills"
+
+    def test_installed_skill_dir(self, tmp_path):
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            assert installed_skill_dir("daily-progress") == tmp_path / "skills" / "daily-progress"
+
+    def test_resolve_skill_returns_path_when_installed(self, tmp_path):
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            skill_path = tmp_path / "skills" / "daily-progress"
+            skill_path.mkdir(parents=True)
+            assert resolve_skill("daily-progress") == skill_path
+
+    def test_resolve_skill_raises_when_not_installed(self, tmp_path):
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with pytest.raises(SkillNotInstalledError, match="daily-progress"):
+                resolve_skill("daily-progress")

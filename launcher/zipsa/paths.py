@@ -30,3 +30,24 @@ def global_env_file() -> Path:
 
 def credentials_dir() -> Path:
     return zipsa_home() / "credentials"
+
+
+class SkillNotInstalledError(Exception):
+    pass
+
+
+def skills_dir() -> Path:
+    return zipsa_home() / "skills"
+
+
+def installed_skill_dir(name: str) -> Path:
+    return skills_dir() / name
+
+
+def resolve_skill(name: str) -> Path:
+    path = installed_skill_dir(name)
+    if not path.exists():
+        raise SkillNotInstalledError(
+            f"Skill '{name}' not found. Try: zipsa install <source>"
+        )
+    return path
