@@ -23,6 +23,7 @@ app = typer.Typer(
     name="zipsa",
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
     add_completion=False,
+    no_args_is_help=True,
 )
 
 
