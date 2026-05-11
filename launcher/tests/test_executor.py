@@ -533,3 +533,27 @@ class TestDockerExecutor:
 
         mock_manager.ensure_credentials.assert_not_called()
         assert env["ZIPSA_TOKEN_NOTION"] == "existing-token"
+
+
+class TestSaveMetadata:
+    """Test _save_metadata writes correct metadata.json."""
+
+    def test_user_input_is_recorded_in_metadata(self, tmp_path):
+        """metadata.json should contain the user_input field."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        (run_dir / "output.jsonl").write_text(
+            '{"type": "result", "is_error": false, "duration_ms": 1000, '
+            '"duration_api_ms": 800, "num_turns": 2, "total_cost_usd": 0.01, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="test query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["user_input"] == "test query"

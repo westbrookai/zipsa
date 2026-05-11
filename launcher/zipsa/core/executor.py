@@ -117,7 +117,7 @@ class DockerExecutor:
                 return None
 
             # Execute and return generator
-            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file)
+            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file, user_input)
 
         except Exception:
             raise
@@ -134,6 +134,7 @@ class DockerExecutor:
         skill: Skill,
         run_dir: Optional[Path],
         env_file: Optional[Path] = None,
+        user_input: str = "",
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
@@ -142,6 +143,8 @@ class DockerExecutor:
             claude_json_path: Path to .claude.json file (not cleaned up after execution)
             skill: Skill being executed
             run_dir: Directory to save run logs (None to skip logging)
+            env_file: Environment file path (optional)
+            user_input: User's input/query for this execution
 
         Yields:
             Parsed output events
@@ -300,7 +303,7 @@ class DockerExecutor:
             if run_dir:
                 try:
                     self._save_summary(run_dir)
-                    self._save_metadata(run_dir, skill, cost_exceeded, limits)
+                    self._save_metadata(run_dir, skill, cost_exceeded, limits, user_input=user_input)
                 except Exception as e:
                     # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
@@ -365,7 +368,7 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
-    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits = None) -> None:
+    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits=None, user_input: str = "") -> None:
         """Extract metrics from output.jsonl and save to metadata.json.
 
         Extracts execution metrics from the result event.
@@ -375,6 +378,7 @@ class DockerExecutor:
             skill: Skill that was executed
             cost_exceeded: Whether cost limit was exceeded
             limits: Skill limits configuration
+            user_input: User's input/query for this execution
         """
         output_file = run_dir / "output.jsonl"
         metadata_file = run_dir / "metadata.json"
@@ -402,7 +406,8 @@ class DockerExecutor:
                 "skill_version": skill.manifest.metadata.version,
                 "timestamp": datetime.now().isoformat(),
                 "is_error": True,
-                "error": "No result event found - execution may have failed"
+                "error": "No result event found - execution may have failed",
+                "user_input": user_input
             }
         else:
             # Extract from result event
@@ -419,7 +424,8 @@ class DockerExecutor:
                 "stop_reason": result_event.get("stop_reason"),
                 "terminal_reason": result_event.get("terminal_reason"),
                 "usage": result_event.get("usage", {}),
-                "model_usage": result_event.get("modelUsage", {})
+                "model_usage": result_event.get("modelUsage", {}),
+                "user_input": user_input
             }
 
         # Add limit information if applicable
