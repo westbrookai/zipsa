@@ -326,7 +326,7 @@ def list_installed():
         skill = entry["skill"]
         meta = entry["meta"]
         label = " (linked)" if entry["is_link"] else ""
-        typer.echo(f"  {skill.name} @ {skill.manifest.metadata.version}{label}")
+        typer.echo(f"  {skill.name}@{skill.manifest.metadata.version}{label}")
 
         if entry["total_runs"] == 0:
             typer.echo("    Last run: never")
