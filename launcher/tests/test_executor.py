@@ -557,3 +557,23 @@ class TestSaveMetadata:
 
         metadata = json.loads((run_dir / "metadata.json").read_text())
         assert metadata["user_input"] == "test query"
+
+    def test_user_input_is_recorded_when_no_result_event(self, tmp_path):
+        """user_input is saved even when execution fails before producing a result event."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        # No result event — simulates crashed execution
+        (run_dir / "output.jsonl").write_text(
+            '{"type": "assistant", "message": {"content": []}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="failing query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["user_input"] == "failing query"
+        assert metadata["is_error"] is True
