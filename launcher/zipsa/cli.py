@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -360,11 +361,14 @@ def uninstall(
         typer.echo(f"Error: Skill '{name}' is not installed.", err=True)
         raise typer.Exit(1)
 
-    if dest.is_symlink():
-        dest.unlink()
-    else:
-        import shutil
-        shutil.rmtree(dest)
+    try:
+        if dest.is_symlink():
+            dest.unlink()
+        else:
+            shutil.rmtree(dest)
+    except OSError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
     typer.echo(f"Uninstalled {name}")
 

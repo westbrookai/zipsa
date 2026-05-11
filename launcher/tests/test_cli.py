@@ -656,3 +656,18 @@ class TestUninstallCommand:
             result = runner.invoke(app, ["uninstall", "ghost"])
         assert result.exit_code == 1
         assert "not installed" in result.output
+
+    def test_uninstall_removes_dangling_symlink(self, tmp_path):
+        """uninstall removes a dangling symlink (original target deleted)."""
+        gone_target = tmp_path / "gone"
+        link_path = tmp_path / "skills" / "my-skill"
+        link_path.parent.mkdir(parents=True)
+        link_path.symlink_to(gone_target)  # dangling symlink
+        assert not link_path.exists()  # dangling: target gone
+        assert link_path.is_symlink()  # but symlink itself exists
+
+        with patch("zipsa.cli.installed_skill_dir", return_value=link_path):
+            result = runner.invoke(app, ["uninstall", "my-skill"])
+
+        assert result.exit_code == 0
+        assert not link_path.is_symlink()
