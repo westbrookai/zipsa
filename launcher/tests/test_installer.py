@@ -55,3 +55,7 @@ class TestParseGithubSource:
     def test_only_one_part_raises(self):
         with pytest.raises(ValueError, match="Invalid"):
             parse_github_source("westbrookai")
+
+    def test_empty_ref_raises(self):
+        with pytest.raises(ValueError, match="Invalid"):
+            parse_github_source("westbrookai/zipsa@")

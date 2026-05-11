@@ -12,7 +12,6 @@ import urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -46,6 +45,10 @@ def parse_github_source(source: str) -> GitHubSource:
     ref = "HEAD"
     if "@" in source:
         source, ref = source.rsplit("@", 1)
+        if not ref:
+            raise ValueError(
+                f"Invalid GitHub source: ref cannot be empty after '@'"
+            )
 
     parts = source.split("/")
     if len(parts) < 2:
