@@ -638,9 +638,19 @@ If a task requires other tools, refuse politely.
 - Decline gracefully for off-topic requests
 """
 
+        now = datetime.now().astimezone()
+        tz_offset = now.strftime("%z")
+        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
+        execution_context = (
+            f"date: {now.strftime('%Y-%m-%d')}\n"
+            f"time: {now.strftime('%H:%M:%S')}\n"
+            f"timezone: {now.strftime('%Z')} ({tz_offset_fmt})"
+        )
+
         meta = skill.manifest.metadata
         return template.format(
             contract=contract,
+            execution_context=execution_context,
             skill_name=meta.name,
             skill_version=meta.version,
             skill_body=skill_body,
