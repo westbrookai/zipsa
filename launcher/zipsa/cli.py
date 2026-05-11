@@ -14,7 +14,7 @@ from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .installer import install_from_github, install_local
-from .paths import skill_runs_dir
+from .paths import skill_runs_dir, installed_skill_dir
 from .runtimes import list_runtimes
 
 
@@ -345,6 +345,28 @@ def install(
     except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def uninstall(
+    name: Annotated[
+        str,
+        typer.Argument(help="Installed skill name"),
+    ],
+):
+    """Uninstall a skill (preserves run history)."""
+    dest = installed_skill_dir(name)
+    if not dest.exists() and not dest.is_symlink():
+        typer.echo(f"Error: Skill '{name}' is not installed.", err=True)
+        raise typer.Exit(1)
+
+    if dest.is_symlink():
+        dest.unlink()
+    else:
+        import shutil
+        shutil.rmtree(dest)
+
+    typer.echo(f"Uninstalled {name}")
 
 
 @app.command()

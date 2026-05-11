@@ -616,3 +616,43 @@ class TestInstallCommand:
         mock_install.side_effect = FileNotFoundError("not found")
         result = runner.invoke(app, ["install", "westbrookai/zipsa/skills/daily-progress"])
         assert result.exit_code == 1
+
+
+class TestUninstallCommand:
+    """Test uninstall command."""
+
+    def test_uninstall_removes_skill_dir(self, tmp_path):
+        """uninstall removes ~/.zipsa/skills/<name>/."""
+        skill_dir = tmp_path / "skills" / "daily-progress"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "_install.json").write_text('{"type": "github"}')
+
+        with patch("zipsa.cli.installed_skill_dir", return_value=skill_dir):
+            result = runner.invoke(app, ["uninstall", "daily-progress"])
+
+        assert result.exit_code == 0
+        assert not skill_dir.exists()
+        assert "daily-progress" in result.output
+
+    def test_uninstall_removes_symlink_only_for_linked_skills(self, tmp_path):
+        """uninstall for linked skill removes symlink, not original."""
+        original = tmp_path / "original"
+        original.mkdir()
+        link_path = tmp_path / "skills" / "my-skill"
+        link_path.parent.mkdir(parents=True)
+        link_path.symlink_to(original)
+
+        with patch("zipsa.cli.installed_skill_dir", return_value=link_path):
+            result = runner.invoke(app, ["uninstall", "my-skill"])
+
+        assert result.exit_code == 0
+        assert not link_path.exists()
+        assert original.exists()
+
+    def test_uninstall_not_installed_exits_nonzero(self, tmp_path):
+        """uninstall exits 1 when skill is not installed."""
+        non_existent = tmp_path / "skills" / "ghost"
+        with patch("zipsa.cli.installed_skill_dir", return_value=non_existent):
+            result = runner.invoke(app, ["uninstall", "ghost"])
+        assert result.exit_code == 1
+        assert "not installed" in result.output
