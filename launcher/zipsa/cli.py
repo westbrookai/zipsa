@@ -258,6 +258,9 @@ def list_installed():
         typer.echo("No installed skills.")
         return
 
+    home = zipsa_home()
+    home_subdirs = list(home.iterdir()) if home.exists() else []
+
     installed = []
     for item in sorted(sd.iterdir()):
         if not item.is_dir() and not item.is_symlink():
@@ -281,29 +284,27 @@ def list_installed():
         # Compute run stats from zipsa_home()/<name>@<version>/runs/
         total_runs = 0
         successful_runs = 0
-        home = zipsa_home()
-        if home.exists():
-            for run_data_dir in home.iterdir():
-                if not run_data_dir.is_dir():
+        for run_data_dir in home_subdirs:
+            if not run_data_dir.is_dir():
+                continue
+            if not run_data_dir.name.startswith(f"{skill.name}@"):
+                continue
+            runs_dir = run_data_dir / "runs"
+            if not runs_dir.exists():
+                continue
+            for run_dir in runs_dir.iterdir():
+                if not run_dir.is_dir():
                     continue
-                if not run_data_dir.name.startswith(f"{skill.name}@"):
+                meta_file = run_dir / "metadata.json"
+                if not meta_file.exists():
                     continue
-                runs_dir = run_data_dir / "runs"
-                if not runs_dir.exists():
+                try:
+                    meta = json.loads(meta_file.read_text())
+                except Exception:
                     continue
-                for run_dir in runs_dir.iterdir():
-                    if not run_dir.is_dir():
-                        continue
-                    meta_file = run_dir / "metadata.json"
-                    if not meta_file.exists():
-                        continue
-                    try:
-                        meta = json.loads(meta_file.read_text())
-                    except Exception:
-                        continue
-                    total_runs += 1
-                    if not meta.get("is_error", True):
-                        successful_runs += 1
+                total_runs += 1
+                if not meta.get("is_error", True):
+                    successful_runs += 1
 
         installed.append({
             "skill": skill,
@@ -393,6 +394,8 @@ def discover(
             typer.echo(f"    Path: {skill['path']}")
             typer.echo()
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

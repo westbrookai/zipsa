@@ -248,13 +248,51 @@ class TestListCommand:
         assert result.exit_code == 0
         assert "linked" in result.output.lower()
 
+    def test_list_shows_run_stats(self, tmp_path):
+        """list shows run count and success rate from metadata.json files."""
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        skill_dir = zipsa_home / "skills" / "my-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "my-skill", "version": "0.1.0"},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (skill_dir / "SKILL.md").write_text("# Test")
+        (skill_dir / "_install.json").write_text(json.dumps({
+            "source": "github:test/repo", "ref": "main",
+            "version": "0.1.0", "type": "github",
+            "installed_at": "2026-05-11T00:00:00+00:00",
+        }))
+
+        # Create run history: 2 runs, 1 success, 1 error
+        runs_dir = zipsa_home / "my-skill@0.1.0" / "runs"
+        for run_id, is_error in [("2026-05-11_120000_00001", False), ("2026-05-11_120100_00002", True)]:
+            rd = runs_dir / run_id
+            rd.mkdir(parents=True)
+            (rd / "metadata.json").write_text(json.dumps({
+                "run_id": run_id, "skill_name": "my-skill",
+                "skill_version": "0.1.0", "is_error": is_error,
+            }))
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0
+        assert "my-skill" in result.output
+        assert "2 run" in result.output  # "2 runs"
+        assert "50%" in result.output
+
 
 class TestDiscoverCommand:
     """Test discover command (scan directory for skills)."""
 
     @patch("zipsa.cli.Skill")
     @patch("zipsa.cli.Path")
-    def test_list_skills(self, mock_path_cls, mock_skill_cls):
+    def test_discover_skills(self, mock_path_cls, mock_skill_cls):
         """Discover skills in directory."""
         # Mock directory structure
         skill1 = Mock()
@@ -325,6 +363,19 @@ class TestDiscoverCommand:
         result = runner.invoke(app, ["discover", str(tmp_path)])
         assert result.exit_code == 0
         assert "No skills found" in result.output
+
+    def test_discover_nonexistent_dir_exits_nonzero(self, tmp_path):
+        """discover exits 1 for non-existent directory."""
+        result = runner.invoke(app, ["discover", str(tmp_path / "nonexistent")])
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_discover_file_arg_exits_nonzero(self, tmp_path):
+        """discover exits 1 when path is a file, not a directory."""
+        file_path = tmp_path / "a_file.txt"
+        file_path.write_text("content")
+        result = runner.invoke(app, ["discover", str(file_path)])
+        assert result.exit_code == 1
 
 
 class TestRunOutputMode:
