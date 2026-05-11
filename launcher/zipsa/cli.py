@@ -325,19 +325,30 @@ def list_installed():
     for entry in installed:
         skill = entry["skill"]
         meta = entry["meta"]
-        label = " (linked)" if entry["is_link"] else ""
-        typer.echo(f"  {skill.name}@{skill.manifest.metadata.version}{label}")
+
+        name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
+        version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
+        if entry["is_link"]:
+            label = typer.style(" (linked)", fg=typer.colors.YELLOW)
+        else:
+            label = ""
+        typer.echo(f"  {name}{version}{label}")
 
         if entry["total_runs"] == 0:
-            typer.echo("    Last run: never")
+            typer.echo(typer.style("    never run", fg=typer.colors.BRIGHT_BLACK))
         else:
             success_pct = int(entry["successful_runs"] / entry["total_runs"] * 100)
-            typer.echo(f"    {entry['total_runs']} runs · {success_pct}% success")
+            pct_color = typer.colors.GREEN if success_pct >= 80 else typer.colors.YELLOW if success_pct >= 50 else typer.colors.RED
+            runs_str = typer.style(f"{entry['total_runs']} runs", fg=typer.colors.WHITE)
+            pct_str = typer.style(f"{success_pct}% success", fg=pct_color)
+            typer.echo(f"    {runs_str} · {pct_str}")
 
         if entry["is_link"]:
-            typer.echo(f"    Linked from: {entry['item'].resolve()}")
+            path_str = typer.style(str(entry["item"].resolve()), fg=typer.colors.BRIGHT_BLACK)
+            typer.echo(f"    {typer.style('Linked from:', fg=typer.colors.BRIGHT_BLACK)} {path_str}")
         elif meta.get("source"):
-            typer.echo(f"    Source: {meta['source']}")
+            src_str = typer.style(meta["source"], fg=typer.colors.BRIGHT_BLACK)
+            typer.echo(f"    {typer.style('Source:', fg=typer.colors.BRIGHT_BLACK)} {src_str}")
 
         typer.echo()
 
