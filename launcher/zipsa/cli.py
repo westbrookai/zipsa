@@ -416,7 +416,7 @@ def runtimes():
 def install(
     source: Annotated[
         Optional[str],
-        typer.Argument(help="GitHub source: user/repo[/subpath][@ref]"),
+        typer.Argument(help=r"GitHub source: user/repo\[/subpath]\[@ref]"),
     ] = None,
     path: Annotated[
         Optional[str],
