@@ -81,7 +81,7 @@ def _make_fake_tarball(subpath: str, skill_name: str = "test-skill", version: st
             "purpose": "Test skill",
             "instructions": "./SKILL.md",
             "mcp": [],
-            "tools": {"builtin": [], "mcp": []},
+            "tools": {"builtin": []},
         },
     }).encode()
     skill_md_content = b"# Test skill instructions"
@@ -101,10 +101,9 @@ def _make_fake_tarball(subpath: str, skill_name: str = "test-skill", version: st
 
 
 class TestInstallFromGithub:
-    def _mock_response(self, tarball: bytes, sha: str = "abc1234def5678"):
+    def _mock_response(self, tarball: bytes):
         resp = MagicMock()
         resp.read.return_value = tarball
-        resp.headers = {"X-GitHub-Resolved-Sha": sha}
         resp.__enter__ = lambda s: s
         resp.__exit__ = MagicMock(return_value=False)
         return resp
@@ -194,3 +193,53 @@ class TestInstallFromGithub:
                 name = install_from_github("westbrookai/zipsa/skills/test-skill", force=True)
 
         assert name == "test-skill"
+
+    def test_install_raises_file_not_found_on_github_404(self, tmp_path):
+        """install_from_github raises FileNotFoundError on HTTP 404."""
+        import urllib.error
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = urllib.error.HTTPError(
+                    url=None, code=404, msg="Not Found", hdrs=None, fp=None
+                )
+                with pytest.raises(FileNotFoundError):
+                    install_from_github("westbrookai/nonexistent/skills/test-skill")
+
+    def test_install_raises_runtime_error_on_github_non_404(self, tmp_path):
+        """install_from_github raises RuntimeError on non-404 HTTP errors."""
+        import urllib.error
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = urllib.error.HTTPError(
+                    url=None, code=403, msg="Forbidden", hdrs=None, fp=None
+                )
+                with pytest.raises(RuntimeError):
+                    install_from_github("westbrookai/private-repo/skills/test-skill")
+
+    def test_install_raises_when_no_manifest_in_tarball(self, tmp_path):
+        """install_from_github raises FileNotFoundError when tarball lacks manifest.yaml."""
+        # Create a tarball with no manifest.yaml
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            content = b"# Just a readme"
+            info = tarfile.TarInfo(name="westbrookai-zipsa-abc1234/README.md")
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+        empty_tarball = buf.getvalue()
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_commit = MagicMock()
+                mock_commit.read.return_value = json.dumps({"sha": sha}).encode()
+                mock_commit.__enter__ = lambda s: s
+                mock_commit.__exit__ = MagicMock(return_value=False)
+
+                mock_tarball = MagicMock()
+                mock_tarball.read.return_value = empty_tarball
+                mock_tarball.__enter__ = lambda s: s
+                mock_tarball.__exit__ = MagicMock(return_value=False)
+
+                mock_open.side_effect = [mock_commit, mock_tarball]
+                with pytest.raises(FileNotFoundError, match="manifest"):
+                    install_from_github("westbrookai/zipsa/skills/nonexistent")

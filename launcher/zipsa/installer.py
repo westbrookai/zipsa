@@ -135,6 +135,8 @@ def _download_tarball(source: GitHubSource, dest: Path) -> None:
                 continue
 
             target = dest / file_rel
+            if not target.resolve().is_relative_to(dest.resolve()):
+                continue
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
