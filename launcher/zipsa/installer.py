@@ -223,6 +223,8 @@ def install_local(local_path: str, link: bool = False, force: bool = False) -> s
 
     try:
         skill = Skill.load(src)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"No manifest.yaml found at: {src}")
     except ValidationError as e:
         raise ValueError(f"Install failed: invalid manifest — {e}")
 
@@ -230,11 +232,11 @@ def install_local(local_path: str, link: bool = False, force: bool = False) -> s
     version = skill.manifest.metadata.version
     dest = skills_dir() / name
 
-    if dest.exists() and not force:
+    if (dest.exists() or dest.is_symlink()) and not force:
         raise FileExistsError(
             f"Skill '{name}' is already installed. Use --force to overwrite."
         )
-    if dest.exists():
+    if dest.exists() or dest.is_symlink():
         if dest.is_symlink():
             dest.unlink()
         else:

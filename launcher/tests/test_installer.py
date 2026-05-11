@@ -343,3 +343,28 @@ class TestInstallLocal:
         with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
             with pytest.raises(FileNotFoundError):
                 install_local(str(tmp_path / "nonexistent"), link=False)
+
+    def test_install_local_dangling_symlink_force_overwrites(self, tmp_path):
+        """force=True replaces a dangling symlink without raising FileExistsError."""
+        nonexistent_target = tmp_path / "gone"
+        dest_home = tmp_path / "home"
+        dest_home.mkdir()
+        (dest_home / "skills").mkdir()
+        dangling = dest_home / "skills" / "my-skill"
+        dangling.symlink_to(nonexistent_target)  # dangling symlink
+
+        src = _make_local_skill(tmp_path / "src")
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            name = install_local(str(src), link=False, force=True)
+        assert name == "my-skill"
+        assert not dangling.is_symlink()
+        assert dangling.is_dir()
+
+    def test_install_local_raises_when_no_manifest(self, tmp_path):
+        """install_local raises FileNotFoundError if directory has no manifest.yaml."""
+        src = tmp_path / "empty-skill"
+        src.mkdir()
+        dest_home = tmp_path / "home"
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
+            with pytest.raises(FileNotFoundError, match="manifest"):
+                install_local(str(src), link=False)
