@@ -59,3 +59,138 @@ class TestParseGithubSource:
     def test_empty_ref_raises(self):
         with pytest.raises(ValueError, match="Invalid"):
             parse_github_source("westbrookai/zipsa@")
+
+
+import io
+import json
+import os
+import tarfile
+from unittest.mock import patch, MagicMock
+import yaml
+from zipsa.installer import install_from_github
+
+
+def _make_fake_tarball(subpath: str, skill_name: str = "test-skill", version: str = "0.1.0") -> bytes:
+    """Build an in-memory tarball mimicking a GitHub API tarball."""
+    buf = io.BytesIO()
+    manifest_content = yaml.dump({
+        "apiVersion": "zipsa.dev/v1alpha1",
+        "kind": "Skill",
+        "metadata": {"name": skill_name, "version": version},
+        "spec": {
+            "purpose": "Test skill",
+            "instructions": "./SKILL.md",
+            "mcp": [],
+            "tools": {"builtin": [], "mcp": []},
+        },
+    }).encode()
+    skill_md_content = b"# Test skill instructions"
+
+    root = f"westbrookai-zipsa-abc1234"
+    prefix = f"{root}/{subpath}/" if subpath else f"{root}/"
+
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content in [
+            (f"{prefix}manifest.yaml", manifest_content),
+            (f"{prefix}SKILL.md", skill_md_content),
+        ]:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+class TestInstallFromGithub:
+    def _mock_response(self, tarball: bytes, sha: str = "abc1234def5678"):
+        resp = MagicMock()
+        resp.read.return_value = tarball
+        resp.headers = {"X-GitHub-Resolved-Sha": sha}
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def _mock_commit_response(self, sha: str = "abc1234def5678"):
+        resp = MagicMock()
+        resp.read.return_value = json.dumps({"sha": sha}).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_install_from_github_creates_skill_dir(self, tmp_path):
+        """install_from_github downloads and installs skill to skills_dir."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                name = install_from_github("westbrookai/zipsa/skills/test-skill")
+
+        assert name == "test-skill"
+        skill_dir = tmp_path / "skills" / "test-skill"
+        assert skill_dir.exists()
+        assert (skill_dir / "manifest.yaml").exists()
+        assert (skill_dir / "SKILL.md").exists()
+
+    def test_install_from_github_writes_install_json(self, tmp_path):
+        """install_from_github writes _install.json with commit_sha and version."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                install_from_github("westbrookai/zipsa/skills/test-skill")
+
+        install_json = tmp_path / "skills" / "test-skill" / "_install.json"
+        assert install_json.exists()
+        meta = json.loads(install_json.read_text())
+        assert meta["commit_sha"] == sha
+        assert meta["version"] == "0.1.0"
+        assert meta["type"] == "github"
+        assert "installed_at" in meta
+
+    def test_install_from_github_fails_if_already_installed(self, tmp_path):
+        """install_from_github raises FileExistsError if skill already installed."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                install_from_github("westbrookai/zipsa/skills/test-skill")
+
+            with pytest.raises(FileExistsError, match="already installed"):
+                with patch("urllib.request.urlopen") as mock_open:
+                    mock_open.side_effect = [
+                        self._mock_commit_response(sha),
+                        self._mock_response(tarball),
+                    ]
+                    install_from_github("westbrookai/zipsa/skills/test-skill")
+
+    def test_install_from_github_force_overwrites(self, tmp_path):
+        """install_from_github with force=True replaces existing installation."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                install_from_github("westbrookai/zipsa/skills/test-skill")
+                name = install_from_github("westbrookai/zipsa/skills/test-skill", force=True)
+
+        assert name == "test-skill"
