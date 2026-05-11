@@ -325,6 +325,10 @@ def install(
     ] = False,
 ):
     """Install a skill from GitHub or a local directory."""
+    if sum(bool(x) for x in [source, path, link]) > 1:
+        typer.echo("Error: --path, --link, and source are mutually exclusive", err=True)
+        raise typer.Exit(1)
+
     try:
         if path:
             name = install_local(path, link=False, force=force)

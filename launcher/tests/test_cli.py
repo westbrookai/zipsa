@@ -548,6 +548,8 @@ class TestConnectCommand:
 
 
 class TestInstallCommand:
+    """Test install command."""
+
     @patch("zipsa.cli.install_from_github")
     def test_install_github_source(self, mock_install):
         """install command with GitHub source calls install_from_github."""
@@ -564,6 +566,25 @@ class TestInstallCommand:
         result = runner.invoke(app, ["install", "--force", "westbrookai/zipsa/skills/daily-progress"])
         assert result.exit_code == 0
         mock_install.assert_called_once_with("westbrookai/zipsa/skills/daily-progress", force=True)
+
+    def test_install_no_args_exits_nonzero(self):
+        """install with no arguments exits 1."""
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 1
+
+    @patch("zipsa.cli.install_from_github")
+    def test_install_runtime_error_exits_nonzero(self, mock_install):
+        """install exits 1 on RuntimeError (e.g., HTTP 403)."""
+        mock_install.side_effect = RuntimeError("Failed to download: HTTP 403 Forbidden")
+        result = runner.invoke(app, ["install", "westbrookai/private-repo"])
+        assert result.exit_code == 1
+
+    @patch("zipsa.cli.install_local")
+    def test_install_mutually_exclusive_flags_exits_nonzero(self, mock_install):
+        """install exits 1 when both --path and --link are provided."""
+        result = runner.invoke(app, ["install", "--path", "./a", "--link", "./b"])
+        assert result.exit_code == 1
+        mock_install.assert_not_called()
 
     @patch("zipsa.cli.install_local")
     def test_install_with_path_flag(self, mock_install):
