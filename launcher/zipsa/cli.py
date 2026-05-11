@@ -13,6 +13,7 @@ from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
+from .installer import install_from_github, install_local
 from .paths import skill_runs_dir
 from .runtimes import list_runtimes
 
@@ -302,6 +303,44 @@ def runtimes():
     typer.echo("Available runtimes:\n")
     for runtime_name in available:
         typer.echo(f"  - {runtime_name}")
+
+
+@app.command()
+def install(
+    source: Annotated[
+        Optional[str],
+        typer.Argument(help="GitHub source: user/repo[/subpath][@ref]"),
+    ] = None,
+    path: Annotated[
+        Optional[str],
+        typer.Option("--path", help="Install local skill by copy"),
+    ] = None,
+    link: Annotated[
+        Optional[str],
+        typer.Option("--link", help="Install local skill by symlink"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite if already installed"),
+    ] = False,
+):
+    """Install a skill from GitHub or a local directory."""
+    try:
+        if path:
+            name = install_local(path, link=False, force=force)
+            typer.echo(f"Installed {name}")
+        elif link:
+            name = install_local(link, link=True, force=force)
+            typer.echo(f"Installed {name} (linked)")
+        elif source:
+            name = install_from_github(source, force=force)
+            typer.echo(f"Installed {name}")
+        else:
+            typer.echo("Error: provide a source, --path, or --link", err=True)
+            raise typer.Exit(1)
+    except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()

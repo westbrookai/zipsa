@@ -545,3 +545,53 @@ class TestConnectCommand:
         result = runner.invoke(app, ["connect", "skills/daily-progress", "nonexistent"])
 
         assert result.exit_code != 0
+
+
+class TestInstallCommand:
+    @patch("zipsa.cli.install_from_github")
+    def test_install_github_source(self, mock_install):
+        """install command with GitHub source calls install_from_github."""
+        mock_install.return_value = "daily-progress"
+        result = runner.invoke(app, ["install", "westbrookai/zipsa/skills/daily-progress"])
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with("westbrookai/zipsa/skills/daily-progress", force=False)
+        assert "daily-progress" in result.stdout
+
+    @patch("zipsa.cli.install_from_github")
+    def test_install_with_force_flag(self, mock_install):
+        """install --force passes force=True."""
+        mock_install.return_value = "daily-progress"
+        result = runner.invoke(app, ["install", "--force", "westbrookai/zipsa/skills/daily-progress"])
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with("westbrookai/zipsa/skills/daily-progress", force=True)
+
+    @patch("zipsa.cli.install_local")
+    def test_install_with_path_flag(self, mock_install):
+        """install --path calls install_local with link=False."""
+        mock_install.return_value = "my-skill"
+        result = runner.invoke(app, ["install", "--path", "./my-skill"])
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with("./my-skill", link=False, force=False)
+
+    @patch("zipsa.cli.install_local")
+    def test_install_with_link_flag(self, mock_install):
+        """install --link calls install_local with link=True."""
+        mock_install.return_value = "my-skill"
+        result = runner.invoke(app, ["install", "--link", "./my-skill"])
+        assert result.exit_code == 0
+        mock_install.assert_called_once_with("./my-skill", link=True, force=False)
+
+    @patch("zipsa.cli.install_from_github")
+    def test_install_file_exists_error_exits_nonzero(self, mock_install):
+        """install exits 1 when skill already installed."""
+        mock_install.side_effect = FileExistsError("already installed")
+        result = runner.invoke(app, ["install", "westbrookai/zipsa/skills/daily-progress"])
+        assert result.exit_code == 1
+        assert "already installed" in result.output
+
+    @patch("zipsa.cli.install_from_github")
+    def test_install_file_not_found_exits_nonzero(self, mock_install):
+        """install exits 1 when repo not found."""
+        mock_install.side_effect = FileNotFoundError("not found")
+        result = runner.invoke(app, ["install", "westbrookai/zipsa/skills/daily-progress"])
+        assert result.exit_code == 1
