@@ -613,14 +613,22 @@ class TestViewCommand:
 
 
 class TestConnectCommand:
-    """Test connect command."""
+    """Test connect command.
 
-    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
+    connect <server_name> scans all installed skills for an OAuth2 server
+    with that name and initiates authorization.
+    """
+
     @patch("zipsa.cli.OAuthManager")
+    @patch("zipsa.cli._skills_dir")
     @patch("zipsa.cli.Skill")
-    def test_connect_all_oauth_servers(self, mock_skill_cls, mock_oauth_manager_cls, mock_resolve):
-        """connect authorizes all oauth2 servers in skill."""
+    def test_connect_finds_server_across_skills(self, mock_skill_cls, mock_skills_dir, mock_oauth_cls, tmp_path):
+        """connect scans installed skills and authorizes matching OAuth server."""
         from zipsa.core.models import MCPServerHTTP, MCPServerAuth
+
+        skill_dir = tmp_path / "daily-progress"
+        skill_dir.mkdir()
+        mock_skills_dir.return_value = tmp_path
 
         mock_skill = Mock()
         mock_skill.manifest.spec.mcp = [
@@ -634,10 +642,9 @@ class TestConnectCommand:
         mock_skill_cls.load.return_value = mock_skill
 
         mock_manager = Mock()
-        mock_manager.ensure_credentials.return_value = "tok-123"
-        mock_oauth_manager_cls.return_value = mock_manager
+        mock_oauth_cls.return_value = mock_manager
 
-        result = runner.invoke(app, ["connect", "daily-progress"])
+        result = runner.invoke(app, ["connect", "notion"])
 
         assert result.exit_code == 0
         mock_manager.ensure_credentials.assert_called_once_with(
@@ -645,74 +652,15 @@ class TestConnectCommand:
         )
         assert "notion" in result.stdout
 
-    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
-    @patch("zipsa.cli.OAuthManager")
-    @patch("zipsa.cli.Skill")
-    def test_connect_specific_server(self, mock_skill_cls, mock_oauth_manager_cls, mock_resolve):
-        """connect with server_name only authorizes that server."""
-        from zipsa.core.models import MCPServerHTTP, MCPServerAuth
+    @patch("zipsa.cli._skills_dir")
+    def test_connect_server_not_found_exits_nonzero(self, mock_skills_dir, tmp_path):
+        """connect exits non-zero when no installed skill has the server."""
+        mock_skills_dir.return_value = tmp_path  # empty skills dir
 
-        mock_skill = Mock()
-        mock_skill.manifest.spec.mcp = [
-            MCPServerHTTP(
-                name="notion",
-                type="http",
-                url="https://mcp.notion.com/mcp",
-                auth=MCPServerAuth(type="oauth2"),
-            ),
-            MCPServerHTTP(
-                name="github",
-                type="http",
-                url="https://api.github.com/mcp",
-                auth=MCPServerAuth(type="oauth2"),
-            ),
-        ]
-        mock_skill_cls.load.return_value = mock_skill
-
-        mock_manager = Mock()
-        mock_manager.ensure_credentials.return_value = "tok"
-        mock_oauth_manager_cls.return_value = mock_manager
-
-        result = runner.invoke(app, ["connect", "daily-progress", "notion"])
-
-        assert result.exit_code == 0
-        calls = mock_manager.ensure_credentials.call_args_list
-        assert len(calls) == 1
-        assert calls[0][0][0] == "notion"
-
-    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
-    @patch("zipsa.cli.Skill")
-    def test_connect_no_oauth_servers(self, mock_skill_cls, mock_resolve):
-        """connect reports nothing to do if no oauth2 servers."""
-        mock_skill = Mock()
-        mock_skill.manifest.spec.mcp = []
-        mock_skill_cls.load.return_value = mock_skill
-
-        result = runner.invoke(app, ["connect", "daily-progress"])
-
-        assert result.exit_code == 0
-        assert "no" in result.stdout.lower() or "0" in result.stdout
-
-    @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
-    @patch("zipsa.cli.Skill")
-    def test_connect_unknown_server_name_exits_nonzero(self, mock_skill_cls, mock_resolve):
-        """connect with unknown server_name exits non-zero."""
-        from zipsa.core.models import MCPServerHTTP, MCPServerAuth
-
-        mock_skill = Mock()
-        mock_skill.manifest.spec.mcp = [
-            MCPServerHTTP(
-                name="notion",
-                type="http",
-                url="https://mcp.notion.com/mcp",
-                auth=MCPServerAuth(type="oauth2"),
-            )
-        ]
-        mock_skill_cls.load.return_value = mock_skill
-
-        result = runner.invoke(app, ["connect", "daily-progress", "nonexistent"])
+        result = runner.invoke(app, ["connect", "github"])
 
         assert result.exit_code != 0
+        assert "github" in result.output
 
 
 class TestInstallCommand:
@@ -883,8 +831,3 @@ class TestNameResolution:
         assert result.exit_code == 1
         assert "ghost" in result.output
 
-    @patch("zipsa.cli.resolve_skill")
-    def test_connect_exits_when_not_installed(self, mock_resolve):
-        mock_resolve.side_effect = SkillNotInstalledError("Skill 'ghost' not found.")
-        result = runner.invoke(app, ["connect", "ghost"])
-        assert result.exit_code == 1
