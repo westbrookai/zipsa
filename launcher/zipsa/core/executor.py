@@ -516,6 +516,13 @@ class DockerExecutor:
         for phase_idx, phase in enumerate(phases):
             retries = 0
             user_answer = None
+            yield {
+                "type": "zipsa_phase_start",
+                "phase": phase.id,
+                "phase_idx": phase_idx,
+                "total_phases": len(phases),
+                "goal": phase.goal,
+            }
 
             while True:
                 # Aggregate limit check at phase boundary

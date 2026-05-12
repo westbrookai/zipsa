@@ -143,6 +143,56 @@ class TestPrettyMode:
         assert "[Turn 2]" in out
 
 
+class TestPhaseStart:
+    def test_phase_header_shown_in_pretty_mode(self, capsys):
+        events = [
+            {
+                "type": "zipsa_phase_start",
+                "phase": "precheck",
+                "phase_idx": 0,
+                "total_phases": 4,
+                "goal": "Verify everything needed to run.",
+            }
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Phase 1/4" in out
+        assert "precheck" in out
+        assert "Verify everything needed to run." in out
+
+    def test_phase_start_resets_turn_counter(self, capsys):
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "first"}]}},
+            {
+                "type": "zipsa_phase_start",
+                "phase": "discover",
+                "phase_idx": 1,
+                "total_phases": 4,
+                "goal": "Find session files.",
+            },
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "second"}]}},
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        # Both turns should be [Turn 1] (counter resets at phase boundary)
+        assert out.count("[Turn 1]") == 2
+        assert "[Turn 2]" not in out
+
+    def test_phase_start_hidden_in_answer_mode(self, capsys):
+        events = [
+            {
+                "type": "zipsa_phase_start",
+                "phase": "precheck",
+                "phase_idx": 0,
+                "total_phases": 2,
+                "goal": "Some goal.",
+            }
+        ]
+        render(iter(events), OutputMode.answer)
+        out = capsys.readouterr().out
+        assert out.strip() == ""
+
+
 class TestAnswerMode:
     def test_answer_mode_prints_only_text(self, capsys):
         events = [
