@@ -82,9 +82,9 @@ No text outside this JSON block:
 
 ## Tool usage
 
-- Before using an MCP tool, verify the server is connected and the tool
-  exists. If a required tool is unavailable, stop with status=failed and
-  `error.code="mcp_unavailable"`.
+- Call MCP tools directly — do not use ToolSearch to check availability.
+  If a call returns "No such tool available" or a connection error, stop
+  with status=failed and `error.code="mcp_unavailable"`.
 - The same tool call with identical parameters 3+ times → stop with
   status=failed.
 - Tool errors retry once at most. Persistent failure → status=failed.
