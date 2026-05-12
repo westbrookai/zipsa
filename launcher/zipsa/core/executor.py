@@ -554,6 +554,7 @@ class DockerExecutor:
                     skill, user_message, claude_json_path, env,
                     allowed_tools_override=phase_allowed_tools,
                     extra_docker_opts=extra_docker_opts,
+                    phase_id=phase.id,
                 )
 
                 # Stream events, capture last assistant text + metrics
@@ -677,6 +678,7 @@ class DockerExecutor:
         mcp_debug_host: Optional[Path] = None,
         extra_docker_opts: Optional[list[str]] = None,
         allowed_tools_override: Optional[str] = None,
+        phase_id: Optional[str] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -705,10 +707,11 @@ class DockerExecutor:
         if shell:
             cmd.extend(["-it"])
 
-        cmd.extend([
-            "--name",
-            f"zipsa-{skill.name}-{id(self)}",
-        ])
+        name_parts = ["zipsa", skill.name]
+        if phase_id:
+            name_parts.append(phase_id)
+        name_parts.append(str(id(self)))
+        cmd.extend(["--name", "-".join(name_parts)])
 
         # Global env file (~/.zipsa/.env) takes lower precedence, added first
         _global_env = zipsa_paths.global_env_file()
