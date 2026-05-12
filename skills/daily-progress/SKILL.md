@@ -38,9 +38,10 @@ target date, and prepare the Notion database reference.
 
 Steps:
 
-1. **MCP availability**: confirm `mcp__notion__notion-search` is
-   available. If unavailable, stop with status=failed and
-   `error.code="mcp_unavailable"`.
+1. **MCP availability**: call `mcp__notion__notion-search` directly
+   with a minimal query (e.g. `query="zipsa-daily-log"`). If the call
+   returns an error or "No such tool available", stop with
+   status=failed and `error.code="mcp_unavailable"`.
 2. **Resolve target date**:
    - Parse the user query for an explicit date or relative term.
    - If the user asks for more than one day, stop with
@@ -88,13 +89,15 @@ session).
 
 Steps:
 
-1. List the root with `mcp__sessions__list_directory`.
-2. For each project subdirectory, list its `*.jsonl` files.
-3. For each session file, call `mcp__sessions__get_file_info` to read
-   its modification time.
-4. Keep files whose modification time falls within the target date in
+1. Call `mcp__sessions__search_files` once with
+   `path="/home/agent/workspace/sessions"` and `pattern="*.jsonl"` to
+   get all session files across all projects in a single request.
+2. For each file returned, call `mcp__sessions__get_file_info` to read
+   its modification time (these calls can be made in parallel).
+3. Keep files whose modification time falls within the target date in
    the configured timezone. Drop the rest.
-5. Group the surviving files by project directory.
+4. Group the surviving files by their parent directory name (the project
+   directory).
 
 `next_phase_input` schema:
 
