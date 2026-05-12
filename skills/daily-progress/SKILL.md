@@ -78,26 +78,53 @@ Steps:
 Find all Claude Code session files that had activity on the target
 date.
 
-The `sessions` MCP server exposes the Claude Code projects directory
-read-only. Each subdirectory corresponds to one project; the directory
-name is the project's working directory with non-alphanumeric
-characters replaced by `-`. Example:
-`-Users-neochoon-WestbrookAI-skill-runtime-poc`.
+The sessions directory is mounted at `/home/agent/workspace/sessions`.
+Each subdirectory corresponds to one project; the directory name is the
+project's working directory with non-alphanumeric characters replaced
+by `-`. Example: `-Users-neochoon-WestbrookAI-skill-runtime-poc`.
 
-Each subdirectory contains `*.jsonl` session files (one file per
-session).
+Each project subdirectory contains `*.jsonl` session files (one per
+session). Only files **directly inside** the project subdirectory are
+session files — ignore any files nested deeper.
 
 Steps:
 
-1. Call `mcp__sessions__search_files` once with
-   `path="/home/agent/workspace/sessions"` and `pattern="*.jsonl"` to
-   get all session files across all projects in a single request.
-2. For each file returned, call `mcp__sessions__get_file_info` to read
-   its modification time (these calls can be made in parallel).
-3. Keep files whose modification time falls within the target date in
-   the configured timezone. Drop the rest.
-4. Group the surviving files by their parent directory name (the project
-   directory).
+1. Convert the target date to a UTC time window using Bash:
+
+   ```bash
+   python3 -c "
+   from datetime import datetime
+   import zoneinfo
+   tz = zoneinfo.ZoneInfo('Australia/Sydney')
+   d = datetime.strptime('TARGET_DATE', '%Y-%m-%d')
+   start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
+   end   = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=tz)
+   print(start.timestamp(), end.timestamp())
+   "
+   ```
+
+2. Use `find` to list all `*.jsonl` files modified within that window:
+
+   ```bash
+   find /home/agent/workspace/sessions \
+     -maxdepth 2 -name '*.jsonl' \
+     -newer <start_sentinel> ! -newer <end_sentinel>
+   ```
+
+   To use timestamps with `find -newer`, create temporary sentinel
+   files with `touch -d`:
+
+   ```bash
+   touch -d @<start_ts> /tmp/zipsa_start
+   touch -d @<end_ts>   /tmp/zipsa_end
+   find /home/agent/workspace/sessions \
+     -maxdepth 2 -name '*.jsonl' \
+     -newer /tmp/zipsa_start ! -newer /tmp/zipsa_end
+   rm /tmp/zipsa_start /tmp/zipsa_end
+   ```
+
+3. From each matching path, extract the project directory name (the
+   component at depth 1 under sessions root) and group files by it.
 
 `next_phase_input` schema:
 
