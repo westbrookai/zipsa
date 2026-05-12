@@ -116,7 +116,14 @@ class DockerExecutor:
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
 
-            # Execute and return generator
+            # Multi-phase: delegate to phase loop
+            if skill.manifest.spec.phases:
+                return self._execute_phases(
+                    skill, user_input, env, run_dir, claude_json_path,
+                    mcp_debug, extra_docker_opts,
+                )
+
+            # Single-phase: existing path
             return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file, user_input)
 
         except Exception:
@@ -368,17 +375,6 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
-    @staticmethod
-    def _extract_skill_status(text: str | None) -> str | None:
-        """Extract the skill contract status field from the final assistant text."""
-        if not text:
-            return None
-        try:
-            data = json.loads(text.strip())
-            return data.get("status")
-        except (json.JSONDecodeError, ValueError):
-            return None
-
     def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits=None, user_input: str = "") -> None:
         """Extract metrics from output.jsonl and save to metadata.json.
 
@@ -449,7 +445,8 @@ class DockerExecutor:
         # Override is_error if skill's final JSON reports a non-ok status.
         # Claude Code reports is_error=False for a clean process exit even when
         # the skill itself returned status=failed in its contract JSON output.
-        skill_status = self._extract_skill_status(last_assistant_text)
+        skill_out = self._extract_skill_output(last_assistant_text)
+        skill_status = skill_out.get("status") if skill_out else None
         if skill_status and skill_status != "ok":
             metadata["is_error"] = True
             metadata["skill_status"] = skill_status
@@ -461,6 +458,176 @@ class DockerExecutor:
 
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
+
+    def _load_skill_state(self, skill: Skill) -> dict:
+        state_file = zipsa_paths.skill_data_dir(
+            skill.name, skill.manifest.metadata.version
+        ) / "state.json"
+        if state_file.exists():
+            try:
+                return json.loads(state_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {}
+
+    def _apply_skill_state(self, skill: Skill, updates: dict) -> None:
+        state = self._load_skill_state(skill)
+        for key, value in updates.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+        state_file = zipsa_paths.skill_data_dir(
+            skill.name, skill.manifest.metadata.version
+        ) / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _execute_phases(
+        self,
+        skill: Skill,
+        user_input: str,
+        env: dict[str, str],
+        run_dir: Optional[Path],
+        claude_json_path: Path,
+        mcp_debug: bool,
+        extra_docker_opts: Optional[list[str]],
+    ) -> Iterator[dict]:
+        from .models import PhaseSpec
+
+        phases = skill.manifest.spec.phases
+        if not phases:
+            # Implicit single-phase wrapper for legacy skills
+            phases = [PhaseSpec(
+                id="main",
+                goal=skill.manifest.spec.purpose,
+                allowed_tools=skill.get_allowed_tools().split(",") if skill.get_allowed_tools() else [],
+                limits=skill.manifest.spec.limits,
+            )]
+
+        agg_limits = skill.manifest.spec.limits
+        cumulative_turns = 0
+        cumulative_cost = 0.0
+        previous_output = None
+        skill_state = self._load_skill_state(skill)
+        last_phase_out: dict | None = None
+        skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
+
+        for phase_idx, phase in enumerate(phases):
+            retries = 0
+            user_answer = None
+
+            while True:
+                # Aggregate limit check at phase boundary
+                if agg_limits:
+                    if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "error": "Aggregate max_turns exceeded"}
+                        return
+                    if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "error": "Aggregate max_cost_usd exceeded"}
+                        return
+
+                phase_allowed_tools = ",".join(phase.allowed_tools)
+                user_message = self._build_user_message(
+                    skill, phase.id, phase.goal, phase_allowed_tools,
+                    previous_output, skill_state, user_input, user_answer,
+                )
+
+                # Per-phase artifact directory
+                dir_name = f"{phase_idx}-{phase.id}"
+                if retries > 0:
+                    dir_name = f"{dir_name}.retry-{retries}"
+                phase_dir = (run_dir / "phases" / dir_name) if run_dir else None
+                if phase_dir:
+                    phase_dir.mkdir(parents=True, exist_ok=True)
+
+                docker_cmd = self._build_docker_command(
+                    skill, user_message, claude_json_path, env,
+                    allowed_tools_override=phase_allowed_tools,
+                    extra_docker_opts=extra_docker_opts,
+                )
+
+                # Stream events, capture last assistant text + metrics
+                last_assistant_text = None
+                timed_out = False
+                try:
+                    for event in self._execute_skill(
+                        docker_cmd, claude_json_path, skill, phase_dir,
+                        skill_data_dir / ".env", user_message,
+                    ):
+                        if event.get("type") == "assistant":
+                            content = event.get("message", {}).get("content", [])
+                            for block in content:
+                                if block.get("type") == "text":
+                                    last_assistant_text = block.get("text", "")
+                                    break
+                        elif event.get("type") == "result":
+                            cumulative_turns += event.get("num_turns", 0) or 0
+                            cumulative_cost += event.get("total_cost_usd", 0) or 0
+                        yield event
+                except RuntimeError as exc:
+                    if "timed out" in str(exc).lower():
+                        timed_out = True
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "error": str(exc)}
+                        return  # state_updates NOT applied on timeout
+                    raise
+
+                if timed_out:
+                    return
+
+                # Extract and validate skill output
+                phase_out = self._extract_skill_output(last_assistant_text) or {}
+
+                # Phase field validation
+                reported_phase = phase_out.get("phase")
+                if reported_phase and reported_phase != phase.id:
+                    phase_out = {
+                        "status": "failed",
+                        "phase": phase.id,
+                        "result": None,
+                        "state_updates": None,
+                        "next_phase_input": None,
+                        "user_facing_summary": (
+                            f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
+                        ),
+                        "needs_input": None,
+                        "error": {"code": "phase_id_mismatch"},
+                    }
+
+                status = phase_out.get("status", "failed")
+
+                if status == "ok":
+                    if phase_out.get("state_updates"):
+                        self._apply_skill_state(skill, phase_out["state_updates"])
+                        skill_state = self._load_skill_state(skill)
+                    previous_output = phase_out.get("next_phase_input")
+                    last_phase_out = phase_out
+                    break
+
+                elif status == "needs_input":
+                    if retries >= 3:
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "error": "needs_input exceeded 3 retries"}
+                        return
+                    question = phase_out.get("needs_input", {})
+                    prompt_text = question.get("prompt") or question.get("question") or str(question)
+                    print(f"\n[{phase.id}] {prompt_text}")
+                    user_answer = input("> ").strip()
+                    retries += 1
+                    continue  # per-phase limits reset, aggregate accumulates
+
+                else:  # failed | out_of_scope — state_updates NOT applied
+                    last_phase_out = phase_out
+                    yield {"type": "zipsa_phase_error", "phase": phase.id,
+                           "status": status, "output": phase_out}
+                    return
+
+        # All phases completed
+        if last_phase_out:
+            yield {"type": "zipsa_run_complete", "result": last_phase_out}
 
     def _write_env_file(self, output_dir: Path, env: dict[str, str]) -> Path:
         """Write env vars to output_dir/.env and return the path."""
@@ -502,6 +669,7 @@ class DockerExecutor:
         shell: bool = False,
         mcp_debug_host: Optional[Path] = None,
         extra_docker_opts: Optional[list[str]] = None,
+        allowed_tools_override: Optional[str] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -577,7 +745,7 @@ class DockerExecutor:
         else:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
-            allowed_tools = skill.get_allowed_tools()
+            allowed_tools = allowed_tools_override if allowed_tools_override is not None else skill.get_allowed_tools()
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # Collect container paths for all stdio MCP mounts so Claude Code
@@ -628,33 +796,124 @@ class DockerExecutor:
 # Instructions
 {skill.instructions}
 
-{mcp_paths_section}# Available tools
-You may ONLY use these tools: {skill.get_allowed_tools()}
-If a task requires other tools, refuse politely.
-
-# Behavior rules
+{mcp_paths_section}# Behavior rules
 - Single-task focused: only do what your purpose describes
 - Be concise: no preamble, just answer
 - Decline gracefully for off-topic requests
 """
 
-        now = datetime.now().astimezone()
-        tz_offset = now.strftime("%z")
-        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
-        execution_context = (
-            f"date: {now.strftime('%Y-%m-%d')}\n"
-            f"time: {now.strftime('%H:%M:%S')}\n"
-            f"timezone: {now.strftime('%Z')} ({tz_offset_fmt})"
-        )
-
         meta = skill.manifest.metadata
         return template.format(
             contract=contract,
-            execution_context=execution_context,
             skill_name=meta.name,
             skill_version=meta.version,
             skill_body=skill_body,
         )
+
+    def _build_user_message(
+        self,
+        skill: Skill,
+        phase_id: str,
+        phase_goal: str,
+        phase_allowed_tools: str,
+        previous_phase_output: str | None,
+        skill_state: dict,
+        user_query: str,
+        user_answer: str | None = None,
+    ) -> str:
+        prompts_dir = Path(__file__).parent.parent / "system-prompts"
+        template = (prompts_dir / "user-message-template.md").read_text(encoding="utf-8")
+
+        now = datetime.now().astimezone()
+        tz_offset = now.strftime("%z")
+        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
+
+        query = user_query
+        if user_answer is not None:
+            query = f"{user_query}\n\nuser_answer: {user_answer}"
+
+        config_json = json.dumps(skill.manifest.spec.config, ensure_ascii=False)
+        state_json = json.dumps(skill_state, ensure_ascii=False)
+        prev_output = json.dumps(previous_phase_output, ensure_ascii=False)
+
+        return template.format(
+            date=now.strftime("%Y-%m-%d"),
+            time=now.strftime("%H:%M:%S"),
+            timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
+            phase_id=phase_id,
+            phase_goal=phase_goal,
+            allowed_tools=phase_allowed_tools,
+            previous_phase_output=prev_output,
+            skill_state=state_json,
+            user_query=query,
+            config=config_json,
+        )
+
+    @staticmethod
+    def _extract_skill_output(text: str | None) -> dict | None:
+        """Extract skill contract JSON from final assistant text.
+
+        Tries four strategies in order:
+        1. Direct json.loads on stripped text
+        2. Extract last ```json ... ``` fenced block
+        3. Find last {...} object containing a "status" key
+        4. Fail with error.code=invalid_output_format
+        """
+        import re
+        if not text:
+            return None
+
+        # Strategy 1: direct parse
+        try:
+            data = json.loads(text.strip())
+            if isinstance(data, dict) and "status" in data:
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Strategy 2: last ```json ... ``` block
+        blocks = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
+        if blocks:
+            try:
+                data = json.loads(blocks[-1].strip())
+                if isinstance(data, dict) and "status" in data:
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Strategy 3: last {...} containing "status"
+        brace_matches = list(re.finditer(r"\{", text))
+        for m in reversed(brace_matches):
+            depth = 0
+            for i, ch in enumerate(text[m.start():]):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[m.start(): m.start() + i + 1]
+                        try:
+                            data = json.loads(candidate)
+                            if isinstance(data, dict) and "status" in data:
+                                return data
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+                        break
+
+        # Strategy 4: failed to extract
+        return {
+            "status": "failed",
+            "phase": "unknown",
+            "result": None,
+            "state_updates": None,
+            "next_phase_input": None,
+            "user_facing_summary": "Skill output could not be parsed.",
+            "needs_input": None,
+            "error": {
+                "code": "invalid_output_format",
+                "raw_output": (text or "")[:2000],
+            },
+        }
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.

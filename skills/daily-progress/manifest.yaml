@@ -2,18 +2,18 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.1.0
+  version: 0.2.0
   author: westbrookai
   description: |
-    Summarize today's Claude Code sessions across all projects
+    Summarize Claude Code sessions for a single day across all projects
     and log them to a Notion daily progress database.
   tags: [productivity, notion, claude-code]
 
 spec:
   purpose: |
-    For the current date, find all Claude Code sessions that had activity today,
-    summarize what was worked on per project, and write a structured entry to
-    the Westbrook AI HQ Notion workspace.
+    Find Claude Code sessions that had activity on a target date
+    (default: yesterday), summarize the work per project, and write a
+    structured entry per project to the configured Notion database.
 
   instructions: ./SKILL.md
 
@@ -22,8 +22,7 @@ spec:
 
   # MCP servers used by this skill
   mcp:
-    # Local stdio: read Claude Code session logs
-    # Container path auto-generated as /home/agent/workspace/sessions
+    # Local stdio: read Claude Code session logs (read-only)
     - name: sessions
       type: stdio
       command: npx
@@ -33,9 +32,10 @@ spec:
         host: "~/.claude/projects"
         mode: ro
       allowed_tools:
-        - read_file
+        - search_files
+        - get_file_info
         - list_directory
-        - directory_tree
+        - read_file
 
     # Remote http: write to Notion
     - name: notion
@@ -50,24 +50,76 @@ spec:
         - notion-update-page
         - notion-fetch
 
-    - name: githubcopilot
-      type: http
-      url: https://api.githubcopilot.com/mcp
-      headersHelper: "echo \"{\\\"Authorization\\\": \\\"Bearer $GITHUB_PERSONAL_ACCESS_TOKEN\\\"}\""
-      env:
-        - GITHUB_PERSONAL_ACCESS_TOKEN
-
   tools:
     builtin: []
 
-  # Skill-specific configuration
+  # Skill-specific configuration. Skill author defines, user may override.
   config:
     workspace_name: "Westbrook AI HQ"
     db_name: "zipsa-daily-log"
-    db_search_strategy: notion_search
     timezone: "Australia/Sydney"
+    default_target_date: yesterday   # yesterday | today
 
+  # Cross-run state schema (managed by launcher via state_updates)
+  state_schema:
+    db_id: string                    # Notion database ID once resolved
+    last_run_date: string            # ISO date of the most recent run
+
+  # Phased execution. Each phase runs in its own sandboxed turn budget.
+  # SKILL.md must contain a section per phase id.
+  phases:
+    - id: precheck
+      goal: |
+        Verify MCP connections, resolve target date from the user query,
+        and locate or create the Notion database.
+      allowed_tools:
+        - mcp__notion__notion-search
+        - mcp__notion__notion-fetch
+        - mcp__notion__notion-create-database
+        - mcp__notion__notion-create-pages
+      limits:
+        max_turns: 5
+        max_cost_usd: 0.05
+        timeout_seconds: 60
+
+    - id: discover
+      goal: |
+        Find Claude Code session files modified on the target date.
+      allowed_tools:
+        - mcp__sessions__list_directory
+        - mcp__sessions__get_file_info
+        - mcp__sessions__search_files
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.06
+        timeout_seconds: 60
+
+    - id: analyze
+      goal: |
+        Read each discovered session and extract per-project information:
+        session goals, tools used, and key outcomes.
+      allowed_tools:
+        - mcp__sessions__read_file
+      limits:
+        max_turns: 14
+        max_cost_usd: 0.25
+        timeout_seconds: 180
+
+    - id: persist
+      goal: |
+        Write or update one Notion entry per project for the target date.
+      allowed_tools:
+        - mcp__notion__notion-search
+        - mcp__notion__notion-fetch
+        - mcp__notion__notion-create-pages
+        - mcp__notion__notion-update-page
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.15
+        timeout_seconds: 120
+
+  # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 30
-    max_cost_usd: 0.50
-    timeout_seconds: 60
+    max_turns: 35
+    max_cost_usd: 0.60
+    timeout_seconds: 420

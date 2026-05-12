@@ -71,6 +71,15 @@ class SkillLimits(BaseModel):
     timeout_seconds: Optional[int] = None
 
 
+class PhaseSpec(BaseModel):
+    """Single phase declaration within a multi-phase skill."""
+
+    id: str
+    goal: str
+    allowed_tools: list[str] = Field(default_factory=list)
+    limits: Optional[SkillLimits] = None
+
+
 class SkillSpec(BaseModel):
     """Skill specification."""
 
@@ -82,6 +91,9 @@ class SkillSpec(BaseModel):
     limits: Optional[SkillLimits] = None
     config: dict = Field(default_factory=dict)  # Skill-specific config
     network: Optional[dict] = None  # Network allow list
+    # Multi-phase support (v1: documentation only, v2: strict validation)
+    phases: list[PhaseSpec] = Field(default_factory=list)
+    state_schema: dict = Field(default_factory=dict)  # v1: docs only
 
 
 class SkillManifest(BaseModel):

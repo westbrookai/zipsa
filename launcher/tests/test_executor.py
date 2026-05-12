@@ -42,8 +42,9 @@ class TestDockerExecutor:
         assert "v1.0.0" in prompt
         assert skill.manifest.spec.purpose in prompt
         assert "Test Skill" in prompt  # From SKILL.md
-        assert "Read,Write" in prompt  # Allowed tools
         assert "Single-task focused" in prompt  # Behavior rules
+        # allowed_tools moved to user message execution_context — not in system prompt
+        assert "Read,Write" not in prompt
 
     def test_build_system_prompt_injects_mcp_server_paths(self):
         """System prompt should include MCP server root paths for stdio servers with mounts."""
@@ -622,3 +623,144 @@ class TestSaveMetadata:
 
         metadata = json.loads((run_dir / "metadata.json").read_text())
         assert metadata["is_error"] is False
+
+
+class TestExtractSkillOutput:
+    """Test _extract_skill_output multi-strategy JSON extraction."""
+
+    def test_strategy1_direct_json(self):
+        """Strategy 1: direct json.loads on stripped text."""
+        executor = DockerExecutor()
+        text = '{"status": "ok", "phase": "precheck", "result": null, "state_updates": null, "next_phase_input": null, "user_facing_summary": "Done.", "needs_input": null, "error": null}'
+        out = executor._extract_skill_output(text)
+        assert out is not None
+        assert out["status"] == "ok"
+
+    def test_strategy2_fenced_json_block(self):
+        """Strategy 2: extract from ```json ... ``` block."""
+        executor = DockerExecutor()
+        text = 'Some thinking.\n```json\n{"status": "failed", "phase": "discover", "result": null, "state_updates": null, "next_phase_input": null, "user_facing_summary": "err", "needs_input": null, "error": null}\n```'
+        out = executor._extract_skill_output(text)
+        assert out is not None
+        assert out["status"] == "failed"
+
+    def test_strategy3_embedded_json_object(self):
+        """Strategy 3: find last {...} with 'status' key."""
+        executor = DockerExecutor()
+        text = 'I completed the task. {"status": "ok", "phase": "analyze", "result": "done", "state_updates": null, "next_phase_input": null, "user_facing_summary": "ok", "needs_input": null, "error": null}'
+        out = executor._extract_skill_output(text)
+        assert out is not None
+        assert out["status"] == "ok"
+
+    def test_strategy4_fallback_invalid_output(self):
+        """Strategy 4: fallback when no parseable JSON with status."""
+        executor = DockerExecutor()
+        text = "I could not complete the task due to an error."
+        out = executor._extract_skill_output(text)
+        assert out is not None
+        assert out["status"] == "failed"
+        assert out["error"]["code"] == "invalid_output_format"
+        assert "I could not complete" in out["error"]["raw_output"]
+
+    def test_none_input_returns_none(self):
+        """None input returns None."""
+        executor = DockerExecutor()
+        assert executor._extract_skill_output(None) is None
+
+
+class TestBuildUserMessage:
+    """Test _build_user_message constructs correct execution context."""
+
+    def test_user_message_contains_phase_fields(self):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="Verify MCP connections.",
+            phase_allowed_tools="mcp__notion__notion-search",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log today",
+        )
+
+        assert "phase_id: precheck" in msg
+        assert "phase_goal: Verify MCP connections." in msg
+        assert "allowed_tools: mcp__notion__notion-search" in msg
+        assert "user_query: log today" in msg
+        assert "Execute phase: precheck" in msg
+
+    def test_user_answer_appended_to_user_query(self):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="goal",
+            phase_allowed_tools="",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log today",
+            user_answer="yesterday",
+        )
+
+        assert "user_answer: yesterday" in msg
+
+    def test_previous_phase_output_null_on_first_phase(self):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="goal",
+            phase_allowed_tools="",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log",
+        )
+
+        assert "previous_phase_output: null" in msg
+
+
+class TestSkillState:
+    """Test skill state persistence."""
+
+    def test_load_returns_empty_dict_if_no_state_file(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            state = executor._load_skill_state(skill)
+
+        assert state == {}
+
+    def test_apply_and_load_skill_state(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            executor._apply_skill_state(skill, {"db_id": "abc123", "last_run_date": "2026-05-12"})
+            state = executor._load_skill_state(skill)
+
+        assert state["db_id"] == "abc123"
+        assert state["last_run_date"] == "2026-05-12"
+
+    def test_apply_null_value_deletes_key(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            executor._apply_skill_state(skill, {"db_id": "abc123"})
+            executor._apply_skill_state(skill, {"db_id": None})
+            state = executor._load_skill_state(skill)
+
+        assert "db_id" not in state
