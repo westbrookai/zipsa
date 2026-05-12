@@ -44,6 +44,13 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
     if event_type in ("system", "rate_limit_event"):
         return None
 
+    if event_type == "zipsa_phase_error":
+        if mode == OutputMode.json:
+            return None  # already printed in json mode above
+        phase_id = event.get("phase", "?")
+        error = event.get("error", "unknown error")
+        return f"\n\033[91m✗ Phase '{phase_id}' aborted: {error}\033[0m"
+
     if event_type == "zipsa_phase_start":
         if mode != OutputMode.pretty:
             return None

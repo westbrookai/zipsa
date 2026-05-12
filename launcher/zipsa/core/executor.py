@@ -516,6 +516,18 @@ class DockerExecutor:
         for phase_idx, phase in enumerate(phases):
             retries = 0
             user_answer = None
+
+            # Aggregate limit check before starting (and before printing the header)
+            if agg_limits:
+                if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
+                    yield {"type": "zipsa_phase_error", "phase": phase.id,
+                           "error": "Aggregate max_turns exceeded"}
+                    return
+                if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
+                    yield {"type": "zipsa_phase_error", "phase": phase.id,
+                           "error": f"Aggregate cost limit exceeded (${cumulative_cost:.4f} >= ${agg_limits.max_cost_usd:.2f})"}
+                    return
+
             yield {
                 "type": "zipsa_phase_start",
                 "phase": phase.id,
@@ -525,16 +537,6 @@ class DockerExecutor:
             }
 
             while True:
-                # Aggregate limit check at phase boundary
-                if agg_limits:
-                    if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
-                        yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": "Aggregate max_turns exceeded"}
-                        return
-                    if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
-                        yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": "Aggregate max_cost_usd exceeded"}
-                        return
 
                 phase_allowed_tools = ",".join(phase.allowed_tools)
                 user_message = self._build_user_message(
