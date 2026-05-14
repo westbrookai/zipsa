@@ -29,15 +29,15 @@ jobs:
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "Tag version: ${VERSION}"
 
-    - name: Validate Dockerfile LABEL version matches tag
+    - name: Validate Dockerfile ARG IMAGE_VERSION matches tag
       run: |
-        LABEL_VERSION=$(grep 'LABEL version=' runtime/Dockerfile | sed 's/.*LABEL version="\(.*\)"/\1/')
+        LABEL_VERSION=$(grep 'ARG IMAGE_VERSION=' runtime/Dockerfile | sed 's/.*ARG IMAGE_VERSION="\(.*\)"/\1/')
         TAG_VERSION=${{ steps.version.outputs.version }}
-        echo "Dockerfile LABEL version: ${LABEL_VERSION}"
-        echo "Git tag version:          ${TAG_VERSION}"
+        echo "Dockerfile ARG IMAGE_VERSION: ${LABEL_VERSION}"
+        echo "Git tag version:              ${TAG_VERSION}"
         if [ "${LABEL_VERSION}" != "${TAG_VERSION}" ]; then
-          echo "ERROR: Dockerfile LABEL version (${LABEL_VERSION}) does not match git tag version (${TAG_VERSION})"
-          echo "Update LABEL version in runtime/Dockerfile before tagging."
+          echo "ERROR: Dockerfile ARG IMAGE_VERSION (${LABEL_VERSION}) does not match git tag version (${TAG_VERSION})"
+          echo "Update ARG IMAGE_VERSION in runtime/Dockerfile before tagging."
           exit 1
         fi
         echo "OK: versions match (${TAG_VERSION})"
@@ -73,5 +73,6 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        build-args: IMAGE_VERSION=${{ steps.version.outputs.version }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
