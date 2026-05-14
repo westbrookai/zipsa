@@ -33,8 +33,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"zipsa launcher {_LAUNCHER_VERSION}")
-        typer.echo(f"zipsa runtime  {_RUNTIME_VERSION}")
+        typer.echo(f"zipsa {_LAUNCHER_VERSION} (runtime {_RUNTIME_VERSION})")
         raise typer.Exit()
 
 
