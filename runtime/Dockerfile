@@ -8,7 +8,7 @@
 #-----------------------------------------------------------
 
 # Image version (injected at publish time via --build-arg)
-ARG IMAGE_VERSION="0.4.4"
+ARG ZIPSA_RUNTIME_VERSION="0.4.5"
 
 # System packages (apt)
 ARG CURL_VERSION="7.88.1-10+deb12u14"
@@ -84,7 +84,7 @@ RUN claude --version && codex --version && gemini --version
 FROM debian:bookworm-slim AS runtime
 
 # Reuse ARG declarations in runtime stage
-ARG IMAGE_VERSION
+ARG ZIPSA_RUNTIME_VERSION
 ARG CURL_VERSION
 ARG CA_CERTIFICATES_VERSION
 ARG GIT_VERSION
@@ -97,8 +97,8 @@ ARG PIPX_VERSION
 # Metadata
 LABEL maintainer="your-email@example.com"
 LABEL description="SKILL Runtime with Claude Code, Codex, and Gemini CLI (Multi-stage)"
-LABEL version="${IMAGE_VERSION}"
-ENV IMAGE_VERSION=${IMAGE_VERSION}
+LABEL version="${ZIPSA_RUNTIME_VERSION}"
+ENV ZIPSA_RUNTIME_VERSION=${ZIPSA_RUNTIME_VERSION}
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -173,6 +173,12 @@ RUN apt-get update && \
         tree=2.1.0-1 \
         ripgrep=13.0.0-4+b2 \
         fd-find=8.6.0-3 \
+        wget=1.21.3-1+deb12u1 \
+        netcat-openbsd=1.219-1 \
+        lsof=4.95.0-1 \
+        strace=6.1-0.1 \
+        htop=3.2.2-2 \
+        unzip=6.0-28 \
         && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
