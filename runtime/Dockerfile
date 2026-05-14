@@ -173,6 +173,12 @@ RUN apt-get update && \
         tree=2.1.0-1 \
         ripgrep=13.0.0-4+b2 \
         fd-find=8.6.0-3 \
+        wget=1.21.3-1+deb12u1 \
+        netcat-openbsd=1.219-1 \
+        lsof=4.95.0-1 \
+        strace=6.1-0.1 \
+        htop=3.2.2-2 \
+        unzip=6.0-28 \
         && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
