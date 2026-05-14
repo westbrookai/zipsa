@@ -223,6 +223,43 @@ class TestDockerExecutor:
         # Host cwd should NOT be mounted
         assert ":/workspace" not in cmd_str
 
+    def test_build_docker_command_npm_volume_mounted(self):
+        """npm_volume mounts the volume at /npm-cache and sets NPM_CONFIG_CACHE."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
+        skill = Skill.load(manifest_path)
+        claude_json_path = skill.build_claude_json()
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+            npm_volume="zipsa-test-skill-abc123-npm",
+        )
+
+        cmd_str = " ".join(cmd)
+        assert "zipsa-test-skill-abc123-npm:/npm-cache" in cmd_str
+        assert "NPM_CONFIG_CACHE=/npm-cache" in cmd_str
+
+    def test_build_docker_command_no_npm_volume_by_default(self):
+        """Without npm_volume, no npm-cache mount is added."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
+        skill = Skill.load(manifest_path)
+        claude_json_path = skill.build_claude_json()
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
+
+        cmd_str = " ".join(cmd)
+        assert "/npm-cache" not in cmd_str
+        assert "NPM_CONFIG_CACHE" not in cmd_str
+
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_run_creates_claude_config(self, mock_popen, tmp_path):
         """Run should create .claude.json in ~/.zipsa/<name>@<version>/."""

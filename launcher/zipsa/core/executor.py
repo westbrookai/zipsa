@@ -513,131 +513,150 @@ class DockerExecutor:
         last_phase_out: dict | None = None
         skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
 
-        for phase_idx, phase in enumerate(phases):
-            retries = 0
-            user_answer = None
+        # Create ephemeral npm cache volume shared across all phases.
+        # Only created when the skill declares stdio MCP servers (which use npx).
+        npm_volume: str | None = None
+        has_stdio_mcp = any(s.type == "stdio" for s in skill.manifest.spec.mcp)
+        if has_stdio_mcp:
+            npm_volume = f"zipsa-{skill.name}-{id(self)}-npm"
+            subprocess.run(
+                ["docker", "volume", "create", npm_volume],
+                check=True,
+                capture_output=True,
+            )
 
-            # Aggregate limit check before starting (and before printing the header)
-            if agg_limits:
-                if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
-                    yield {"type": "zipsa_phase_error", "phase": phase.id,
-                           "error": "Aggregate max_turns exceeded"}
-                    return
-                if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
-                    yield {"type": "zipsa_phase_error", "phase": phase.id,
-                           "error": f"Aggregate cost limit exceeded (${cumulative_cost:.4f} >= ${agg_limits.max_cost_usd:.2f})"}
-                    return
+        try:
+            for phase_idx, phase in enumerate(phases):
+                retries = 0
+                user_answer = None
 
-            yield {
-                "type": "zipsa_phase_start",
-                "phase": phase.id,
-                "phase_idx": phase_idx,
-                "total_phases": len(phases),
-                "goal": phase.goal,
-            }
-
-            while True:
-
-                phase_allowed_tools = ",".join(phase.allowed_tools)
-                user_message = self._build_user_message(
-                    skill, phase.id, phase.goal, phase_allowed_tools,
-                    previous_output, skill_state, user_input, user_answer,
-                )
-
-                # Per-phase artifact directory
-                dir_name = f"{phase_idx}-{phase.id}"
-                if retries > 0:
-                    dir_name = f"{dir_name}.retry-{retries}"
-                phase_dir = (run_dir / "phases" / dir_name) if run_dir else None
-                if phase_dir:
-                    phase_dir.mkdir(parents=True, exist_ok=True)
-
-                docker_cmd = self._build_docker_command(
-                    skill, user_message, claude_json_path, env,
-                    allowed_tools_override=phase_allowed_tools,
-                    extra_docker_opts=extra_docker_opts,
-                    phase_id=phase.id,
-                )
-
-                # Stream events, capture last assistant text + metrics
-                last_assistant_text = None
-                timed_out = False
-                try:
-                    for event in self._execute_skill(
-                        docker_cmd, claude_json_path, skill, phase_dir,
-                        skill_data_dir / ".env", user_message,
-                    ):
-                        if event.get("type") == "assistant":
-                            content = event.get("message", {}).get("content", [])
-                            for block in content:
-                                if block.get("type") == "text":
-                                    last_assistant_text = block.get("text", "")
-                                    break
-                        elif event.get("type") == "result":
-                            cumulative_turns += event.get("num_turns", 0) or 0
-                            cumulative_cost += event.get("total_cost_usd", 0) or 0
-                        yield event
-                except RuntimeError as exc:
-                    if "timed out" in str(exc).lower():
-                        timed_out = True
+                # Aggregate limit check before starting (and before printing the header)
+                if agg_limits:
+                    if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
                         yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": str(exc)}
-                        return  # state_updates NOT applied on timeout
-                    raise
-
-                if timed_out:
-                    return
-
-                # Extract and validate skill output
-                phase_out = self._extract_skill_output(last_assistant_text) or {}
-
-                # Phase field validation
-                reported_phase = phase_out.get("phase")
-                if reported_phase and reported_phase != phase.id:
-                    phase_out = {
-                        "status": "failed",
-                        "phase": phase.id,
-                        "result": None,
-                        "state_updates": None,
-                        "next_phase_input": None,
-                        "user_facing_summary": (
-                            f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
-                        ),
-                        "needs_input": None,
-                        "error": {"code": "phase_id_mismatch"},
-                    }
-
-                status = phase_out.get("status", "failed")
-
-                if status == "ok":
-                    if phase_out.get("state_updates"):
-                        self._apply_skill_state(skill, phase_out["state_updates"])
-                        skill_state = self._load_skill_state(skill)
-                    previous_output = phase_out.get("next_phase_input")
-                    last_phase_out = phase_out
-                    break
-
-                elif status == "needs_input":
-                    if retries >= 3:
-                        yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": "needs_input exceeded 3 retries"}
+                               "error": "Aggregate max_turns exceeded"}
                         return
-                    question = phase_out.get("needs_input", {})
-                    prompt_text = question.get("prompt") or question.get("question") or str(question)
-                    print(f"\n[{phase.id}] {prompt_text}")
-                    user_answer = input("> ").strip()
-                    retries += 1
-                    continue  # per-phase limits reset, aggregate accumulates
+                    if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "error": f"Aggregate cost limit exceeded (${cumulative_cost:.4f} >= ${agg_limits.max_cost_usd:.2f})"}
+                        return
 
-                else:  # failed | out_of_scope — state_updates NOT applied
-                    last_phase_out = phase_out
-                    yield {"type": "zipsa_phase_error", "phase": phase.id,
-                           "status": status, "output": phase_out}
-                    return
+                yield {
+                    "type": "zipsa_phase_start",
+                    "phase": phase.id,
+                    "phase_idx": phase_idx,
+                    "total_phases": len(phases),
+                    "goal": phase.goal,
+                }
 
-        # All phases completed
-        if last_phase_out:
-            yield {"type": "zipsa_run_complete", "result": last_phase_out}
+                while True:
+                    phase_allowed_tools = ",".join(phase.allowed_tools)
+                    user_message = self._build_user_message(
+                        skill, phase.id, phase.goal, phase_allowed_tools,
+                        previous_output, skill_state, user_input, user_answer,
+                    )
+
+                    # Per-phase artifact directory
+                    dir_name = f"{phase_idx}-{phase.id}"
+                    if retries > 0:
+                        dir_name = f"{dir_name}.retry-{retries}"
+                    phase_dir = (run_dir / "phases" / dir_name) if run_dir else None
+                    if phase_dir:
+                        phase_dir.mkdir(parents=True, exist_ok=True)
+
+                    docker_cmd = self._build_docker_command(
+                        skill, user_message, claude_json_path, env,
+                        allowed_tools_override=phase_allowed_tools,
+                        extra_docker_opts=extra_docker_opts,
+                        phase_id=phase.id,
+                        npm_volume=npm_volume,
+                    )
+
+                    # Stream events, capture last assistant text + metrics
+                    last_assistant_text = None
+                    timed_out = False
+                    try:
+                        for event in self._execute_skill(
+                            docker_cmd, claude_json_path, skill, phase_dir,
+                            skill_data_dir / ".env", user_message,
+                        ):
+                            if event.get("type") == "assistant":
+                                content = event.get("message", {}).get("content", [])
+                                for block in content:
+                                    if block.get("type") == "text":
+                                        last_assistant_text = block.get("text", "")
+                                        break
+                            elif event.get("type") == "result":
+                                cumulative_turns += event.get("num_turns", 0) or 0
+                                cumulative_cost += event.get("total_cost_usd", 0) or 0
+                            yield event
+                    except RuntimeError as exc:
+                        if "timed out" in str(exc).lower():
+                            timed_out = True
+                            yield {"type": "zipsa_phase_error", "phase": phase.id,
+                                   "error": str(exc)}
+                            return  # state_updates NOT applied on timeout
+                        raise
+
+                    if timed_out:
+                        return
+
+                    # Extract and validate skill output
+                    phase_out = self._extract_skill_output(last_assistant_text) or {}
+
+                    # Phase field validation
+                    reported_phase = phase_out.get("phase")
+                    if reported_phase and reported_phase != phase.id:
+                        phase_out = {
+                            "status": "failed",
+                            "phase": phase.id,
+                            "result": None,
+                            "state_updates": None,
+                            "next_phase_input": None,
+                            "user_facing_summary": (
+                                f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
+                            ),
+                            "needs_input": None,
+                            "error": {"code": "phase_id_mismatch"},
+                        }
+
+                    status = phase_out.get("status", "failed")
+
+                    if status == "ok":
+                        if phase_out.get("state_updates"):
+                            self._apply_skill_state(skill, phase_out["state_updates"])
+                            skill_state = self._load_skill_state(skill)
+                        previous_output = phase_out.get("next_phase_input")
+                        last_phase_out = phase_out
+                        break
+
+                    elif status == "needs_input":
+                        if retries >= 3:
+                            yield {"type": "zipsa_phase_error", "phase": phase.id,
+                                   "error": "needs_input exceeded 3 retries"}
+                            return
+                        question = phase_out.get("needs_input", {})
+                        prompt_text = question.get("prompt") or question.get("question") or str(question)
+                        print(f"\n[{phase.id}] {prompt_text}")
+                        user_answer = input("> ").strip()
+                        retries += 1
+                        continue  # per-phase limits reset, aggregate accumulates
+
+                    else:  # failed | out_of_scope — state_updates NOT applied
+                        last_phase_out = phase_out
+                        yield {"type": "zipsa_phase_error", "phase": phase.id,
+                               "status": status, "output": phase_out}
+                        return
+
+            # All phases completed
+            if last_phase_out:
+                yield {"type": "zipsa_run_complete", "result": last_phase_out}
+        finally:
+            if npm_volume:
+                subprocess.run(
+                    ["docker", "volume", "rm", npm_volume],
+                    capture_output=True,
+                )
 
     def _write_env_file(self, output_dir: Path, env: dict[str, str]) -> Path:
         """Write env vars to output_dir/.env and return the path."""
@@ -681,6 +700,7 @@ class DockerExecutor:
         extra_docker_opts: Optional[list[str]] = None,
         allowed_tools_override: Optional[str] = None,
         phase_id: Optional[str] = None,
+        npm_volume: Optional[str] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -731,6 +751,10 @@ class DockerExecutor:
         # when the file itself is a bind-mount point.
         skill_data_dir = claude_json_path.parent
         cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
+
+        # Ephemeral npm cache volume shared across phases (avoids re-downloading per phase)
+        if npm_volume:
+            cmd.extend(["-v", f"{npm_volume}:/npm-cache", "-e", "NPM_CONFIG_CACHE=/npm-cache"])
 
         # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
