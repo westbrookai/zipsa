@@ -13,6 +13,8 @@ class OutputMode(str, Enum):
 
 # ANSI color codes
 _GRAY = "\033[90m"
+_CYAN = "\033[96m"
+_BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 
@@ -41,6 +43,24 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
 
     if event_type in ("system", "rate_limit_event"):
         return None
+
+    if event_type == "zipsa_phase_error":
+        if mode == OutputMode.json:
+            return None  # already printed in json mode above
+        phase_id = event.get("phase", "?")
+        error = event.get("error", "unknown error")
+        return f"\n\033[91m✗ Phase '{phase_id}' aborted: {error}\033[0m"
+
+    if event_type == "zipsa_phase_start":
+        if mode != OutputMode.pretty:
+            return None
+        phase_id = event.get("phase", "")
+        phase_idx = event.get("phase_idx", 0)
+        total = event.get("total_phases", 1)
+        goal = event.get("goal", "")
+        bar = "━" * 50
+        header = f"{_CYAN}{_BOLD}━━━ Phase {phase_idx + 1}/{total}: {phase_id} {bar}{_RESET}"
+        return (f"\n{header}\n{_GRAY}{goal}{_RESET}", 0)
 
     if event_type == "assistant":
         message = event.get("message", {})

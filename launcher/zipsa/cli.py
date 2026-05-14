@@ -19,6 +19,10 @@ from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_di
 from .runtimes import list_runtimes
 
 
+_LAUNCHER_VERSION = pkg_version("zipsa")
+_RUNTIME_VERSION = (Path(__file__).parent.parent / "RUNTIME_VERSION").read_text().strip()
+_DEFAULT_IMAGE = f"ghcr.io/westbrookai/zipsa-runtime:{_RUNTIME_VERSION}"
+
 app = typer.Typer(
     name="zipsa",
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
@@ -29,7 +33,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"zipsa {pkg_version('zipsa')}")
+        typer.echo(f"zipsa {_LAUNCHER_VERSION} (runtime {_RUNTIME_VERSION})")
         raise typer.Exit()
 
 
@@ -89,7 +93,7 @@ def run(
     image: Annotated[
         str,
         typer.Option("--image", "-i", help="Docker image to use"),
-    ] = "ghcr.io/westbrookai/zipsa-runtime:latest",
+    ] = _DEFAULT_IMAGE,
     env: Annotated[
         Optional[list[str]],
         typer.Option("--env", "-e", help="Environment variables (KEY=value)"),
@@ -492,49 +496,60 @@ def uninstall(
 
 @app.command()
 def connect(
-    name: Annotated[
-        str,
-        typer.Argument(help="Installed skill name"),
-    ],
     server_name: Annotated[
-        Optional[str],
-        typer.Argument(help="MCP server name to authorize (default: all OAuth servers)"),
-    ] = None,
+        str,
+        typer.Argument(help="MCP server name to authorize (e.g. notion, github)"),
+    ],
 ):
-    """Pre-authorize OAuth credentials for a skill's HTTP MCP servers."""
+    """Pre-authorize OAuth credentials for an MCP server.
+
+    Scans all installed skills for a server with the given name and initiates
+    OAuth authorization. Credentials are stored per server and reused across skills.
+
+    Example: zipsa connect notion
+    """
+    # Scan installed skills for an OAuth server matching server_name
+    skills_root = _skills_dir()
+    matched_server = None
+
+    if skills_root.exists():
+        for skill_dir in sorted(skills_root.iterdir()):
+            try:
+                skill = Skill.load(skill_dir)
+                for s in skill.manifest.spec.mcp:
+                    if (
+                        s.name == server_name
+                        and s.type == "http"
+                        and getattr(s, "auth", None)
+                        and s.auth.type == "oauth2"
+                    ):
+                        matched_server = s
+                        break
+            except Exception:
+                continue
+            if matched_server:
+                break
+
+    if not matched_server:
+        typer.echo(
+            f"Error: No installed skill has an OAuth2 MCP server named '{server_name}'.",
+            err=True,
+        )
+        typer.echo(
+            "Install a skill that uses this server first, e.g.:",
+            err=True,
+        )
+        typer.echo(
+            f"  zipsa install <source>",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     try:
-        skill = Skill.load(resolve_skill(name))
-
-        oauth_servers = [
-            s for s in skill.manifest.spec.mcp
-            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
-        ]
-
-        if server_name:
-            oauth_servers = [s for s in oauth_servers if s.name == server_name]
-            if not oauth_servers:
-                typer.echo(
-                    f"Error: Server '{server_name}' not found or is not an OAuth2 server",
-                    err=True,
-                )
-                raise typer.Exit(1)
-
-        if not oauth_servers:
-            typer.echo("No OAuth servers found in skill")
-            return
-
         manager = OAuthManager()
-        for server in oauth_servers:
-            typer.echo(f"Authorizing {server.name}...")
-            manager.ensure_credentials(server.name, server.url)
-            typer.echo(f"✓ {server.name}: authorized")
-
-    except SkillNotInstalledError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-    except FileNotFoundError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+        typer.echo(f"Authorizing {server_name}...")
+        manager.ensure_credentials(matched_server.name, matched_server.url)
+        typer.echo(f"✓ {server_name}: authorized")
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
