@@ -19,6 +19,10 @@ from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_di
 from .runtimes import list_runtimes
 
 
+_LAUNCHER_VERSION = pkg_version("zipsa")
+_RUNTIME_VERSION = (Path(__file__).parent.parent / "RUNTIME_VERSION").read_text().strip()
+_DEFAULT_IMAGE = f"ghcr.io/westbrookai/zipsa-runtime:{_RUNTIME_VERSION}"
+
 app = typer.Typer(
     name="zipsa",
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
@@ -29,7 +33,8 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"zipsa {pkg_version('zipsa')}")
+        typer.echo(f"zipsa launcher {_LAUNCHER_VERSION}")
+        typer.echo(f"zipsa runtime  {_RUNTIME_VERSION}")
         raise typer.Exit()
 
 
@@ -89,7 +94,7 @@ def run(
     image: Annotated[
         str,
         typer.Option("--image", "-i", help="Docker image to use"),
-    ] = "ghcr.io/westbrookai/zipsa-runtime:latest",
+    ] = _DEFAULT_IMAGE,
     env: Annotated[
         Optional[list[str]],
         typer.Option("--env", "-e", help="Environment variables (KEY=value)"),

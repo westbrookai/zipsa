@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch, MagicMock, patch as _patch
 import pytest
 from typer.testing import CliRunner
 from zipsa.cli import app, _find_run_dir
+import zipsa.cli as cli
 from zipsa.paths import SkillNotInstalledError
 
 
@@ -58,7 +59,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_executor_cls.assert_called_once_with(
             runtime="codex",
-            image="ghcr.io/westbrookai/zipsa-runtime:latest",
+            image=cli._DEFAULT_IMAGE,
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
