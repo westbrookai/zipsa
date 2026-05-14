@@ -10,19 +10,19 @@ spec:
     builtin:
       - WebFetch
       - Bash
-    mcp:
-      - filesystem:read_file
-      - notion:create-page
   mcp:
     - name: filesystem
       type: stdio
       command: npx
-      args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+      args: ["-y", "@modelcontextprotocol/server-filesystem"]
       mount:
         host: ~/Documents
-        container: /mnt/docs
         mode: ro
+      allowed_tools:
+        - read_file
     - name: notion
       type: http
       url: https://mcp.notion.com/mcp
       connection: notion
+      allowed_tools:
+        - create-page

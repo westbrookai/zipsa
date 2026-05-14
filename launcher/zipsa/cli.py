@@ -1,16 +1,21 @@
 """CLI for zipsa launcher."""
 
 import json
-import os
-import sys
+import re
+import shutil
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
+from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
+from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
+from .core.renderer import OutputMode, render
 from .core.skill import Skill
+from .installer import install_from_github, install_local
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError
 from .runtimes import list_runtimes
 
 
@@ -18,140 +23,60 @@ app = typer.Typer(
     name="zipsa",
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
     add_completion=False,
+    no_args_is_help=True,
 )
 
-# ANSI color codes
-GRAY = "\033[90m"
-RESET = "\033[0m"
 
-# Global turn counter
-_current_turn = 0
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"zipsa {pkg_version('zipsa')}")
+        raise typer.Exit()
 
 
-def format_event(event: dict) -> Optional[str]:
-    """Format important events for user-friendly display.
+@app.callback()
+def main(
+    version: Annotated[
+        Optional[bool],
+        typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show version and exit"),
+    ] = None,
+) -> None:
+    pass
 
-    Returns formatted string or None if event should be skipped.
+
+_RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
+
+
+def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
+    """Find a run directory under runs_dir.
+
+    If run_id is None, returns the lexicographically latest directory.
+    If run_id is given, matches it as a prefix against directory names.
+
+    Raises ValueError on missing, ambiguous, or empty runs directory.
     """
-    global _current_turn
+    if not runs_dir.exists():
+        raise ValueError("No runs found")
+    dirs = sorted([d for d in runs_dir.iterdir() if d.is_dir() and _RUN_DIR_RE.match(d.name)])
+    if not dirs:
+        raise ValueError("No runs found")
 
-    event_type = event.get("type")
+    if run_id is None:
+        return dirs[-1]
 
-    # Skip system and rate_limit events
-    if event_type in ("system", "rate_limit_event"):
-        return None
-
-    # Assistant messages
-    if event_type == "assistant":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        content_type = first_content.get("type")
-
-        # Thinking - indicates new turn
-        if content_type == "thinking":
-            _current_turn += 1
-            thinking = first_content.get("thinking", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Thinking:{RESET} {thinking}"
-
-        # Tool use (same turn, no turn increment)
-        elif content_type == "tool_use":
-            tool_name = first_content.get("name", "Unknown")
-            tool_input = first_content.get("input", {})
-
-            # Format input nicely
-            if "url" in tool_input:
-                detail = f"url={tool_input['url']}"
-            elif "query" in tool_input:
-                detail = f"query=\"{tool_input['query']}\""
-            elif "prompt" in tool_input:
-                detail = f"prompt=\"{tool_input['prompt']}\""
-            else:
-                # Show first key-value pair
-                items = list(tool_input.items())
-                if items:
-                    key, val = items[0]
-                    detail = f"{key}={val}"
-                else:
-                    detail = ""
-
-            return f"\n{GRAY}Tool:{RESET} {tool_name}\n  {detail}"
-
-        # Final text response (new turn if no thinking)
-        elif content_type == "text":
-            _current_turn += 1
-            text = first_content.get("text", "")
-            return f"\n{GRAY}[Turn {_current_turn}]{RESET}\n{GRAY}Answer:{RESET} {text}"
-
-    # Tool results (user role)
-    elif event_type == "user":
-        message = event.get("message", {})
-        content = message.get("content", [])
-
-        if not content:
-            return None
-
-        first_content = content[0]
-        if first_content.get("type") == "tool_result":
-            # Get result from tool_use_result if available
-            tool_result = event.get("tool_use_result", {})
-
-            # tool_use_result can be a string (error messages) or dict (structured data)
-            if isinstance(tool_result, str):
-                # String result (often error messages)
-                return f"{GRAY}Result:{RESET} {tool_result}"
-            elif isinstance(tool_result, dict):
-                # Structured result - extract meaningful info
-                if "matches" in tool_result:
-                    matches = tool_result["matches"]
-                    return f"{GRAY}Result:{RESET} Found {', '.join(matches)}"
-                elif "result" in tool_result:
-                    result = tool_result["result"]
-                    return f"{GRAY}Result:{RESET} {result}"
-                elif "code" in tool_result:
-                    code = tool_result.get("code")
-                    code_text = tool_result.get("codeText", "")
-                    return f"{GRAY}Result:{RESET} HTTP {code} {code_text}"
-                else:
-                    # Generic dict result
-                    return f"{GRAY}Result:{RESET} Success"
-            else:
-                # Fallback to content field
-                content_result = first_content.get("content", "")
-                if isinstance(content_result, str):
-                    return f"{GRAY}Result:{RESET} {content_result}"
-                else:
-                    return f"{GRAY}Result:{RESET} Success"
-
-    # Final result summary
-    elif event_type == "result":
-        is_error = event.get("is_error", False)
-        duration_ms = event.get("duration_ms", 0)
-        num_turns = event.get("num_turns", 0)
-        cost = event.get("total_cost_usd", 0)
-
-        status = "Error" if is_error else "Success"
-        duration_s = duration_ms / 1000
-
-        summary = f"\n{'='*50}\n"
-        summary += f"{status}\n"
-        summary += f"Duration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n"
-        summary += f"{'='*50}"
-
-        return summary
-
-    return None
+    matches = [d for d in dirs if d.name.startswith(run_id)]
+    if not matches:
+        raise ValueError(f"No run matching '{run_id}' found")
+    if len(matches) > 1:
+        names = ", ".join(m.name for m in matches)
+        raise ValueError(f"Ambiguous run ID '{run_id}': matches {names}")
+    return matches[0]
 
 
 @app.command()
 def run(
-    skill_dir: Annotated[
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
     ],
     user_input: Annotated[
         Optional[str],
@@ -165,10 +90,6 @@ def run(
         str,
         typer.Option("--image", "-i", help="Docker image to use"),
     ] = "ghcr.io/westbrookai/zipsa-runtime:latest",
-    workspace: Annotated[
-        Optional[Path],
-        typer.Option("--workspace", "-w", help="Workspace directory"),
-    ] = None,
     env: Annotated[
         Optional[list[str]],
         typer.Option("--env", "-e", help="Environment variables (KEY=value)"),
@@ -185,12 +106,20 @@ def run(
         bool,
         typer.Option("--mcp-debug", help="Write MCP debug logs to runs/<timestamp>/mcp-debug.log"),
     ] = False,
+    docker_opt: Annotated[
+        Optional[list[str]],
+        typer.Option("--docker-opt", help="Extra docker run options (e.g. --docker-opt='-p 56535:56535')"),
+    ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
 ):
     """Execute a skill with the specified runtime."""
     try:
         # Load skill
-        skill = Skill.load(skill_dir)
-        typer.echo(f"Loaded skill: {skill.name}")
+        skill = Skill.load(resolve_skill(name))
+        typer.echo(f"Loaded skill: {skill.name}", err=True)
 
         # Validate input
         if not shell and not user_input:
@@ -211,26 +140,21 @@ def run(
         executor = DockerExecutor(
             runtime=runtime,
             image=image,
-            workspace=workspace or Path.cwd(),
         )
 
         # Execute skill or start shell
-        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug)
+        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
 
         if output is None:
             # Dry run mode
             return
 
-        # Reset turn counter for new execution
-        global _current_turn
-        _current_turn = 0
+        # Stream output through renderer
+        render(output, output_mode)
 
-        # Stream output
-        for event in output:
-            formatted = format_event(event)
-            if formatted:
-                typer.echo(formatted)
-
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -243,22 +167,76 @@ def run(
 
 
 @app.command()
-def validate(
-    skill_dir: Annotated[
+def view(
+    name: Annotated[
         str,
-        typer.Argument(help="Path to skill directory or manifest.yaml"),
+        typer.Argument(help="Installed skill name"),
+    ],
+    run_id: Annotated[
+        Optional[str],
+        typer.Argument(help="Run ID prefix to replay (default: latest run)"),
+    ] = None,
+    output_mode: Annotated[
+        OutputMode,
+        typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
+    ] = OutputMode.pretty,
+):
+    """Replay the output of a past skill run."""
+    try:
+        skill = Skill.load(resolve_skill(name))
+        runs_dir = skill_runs_dir(skill.name, skill.manifest.metadata.version)
+        run_dir = _find_run_dir(runs_dir, run_id)
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except ValidationError as e:
+        typer.echo(f"Error: Invalid manifest - {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+
+    output_jsonl = run_dir / "output.jsonl"
+    if not output_jsonl.exists():
+        typer.echo(f"Run '{run_dir.name}' has no output.jsonl", err=True)
+        raise typer.Exit(1)
+
+    def events():
+        with open(output_jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        typer.echo(f"Warning: skipped malformed line in {output_jsonl}", err=True)
+
+    render(events(), output_mode)
+
+
+@app.command()
+def validate(
+    name: Annotated[
+        str,
+        typer.Argument(help="Installed skill name"),
     ],
 ):
     """Validate a skill manifest."""
     try:
-        skill = Skill.load(skill_dir)
+        skill = Skill.load(resolve_skill(name))
         typer.echo(f"✓ Skill '{skill.name}' is valid")
         typer.echo(f"  Version: {skill.manifest.metadata.version}")
         typer.echo(f"  Purpose: {skill.manifest.spec.purpose}")
         typer.echo(f"  MCP Servers: {len(skill.manifest.spec.mcp)}")
-        tool_count = len(skill.manifest.spec.tools.builtin) + len(skill.manifest.spec.tools.mcp)
+        tool_count = len(skill.manifest.spec.tools.builtin)
         typer.echo(f"  Tools: {tool_count}")
 
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except FileNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -274,13 +252,115 @@ def validate(
 
 
 @app.command(name="list")
-def list_skills(
+def list_installed():
+    """List installed skills with run statistics."""
+    sd = _skills_dir()
+    if not sd.exists():
+        typer.echo("No installed skills.")
+        return
+
+    home = zipsa_home()
+    home_subdirs = list(home.iterdir()) if home.exists() else []
+
+    installed = []
+    for item in sorted(sd.iterdir()):
+        if not item.is_dir() and not item.is_symlink():
+            continue
+        manifest_path = item / "manifest.yaml"
+        if not manifest_path.exists():
+            continue
+        try:
+            skill = Skill.load(item)
+        except Exception:
+            continue
+
+        install_json = item / "_install.json"
+        install_meta = {}
+        if install_json.exists():
+            try:
+                install_meta = json.loads(install_json.read_text())
+            except Exception:
+                pass
+
+        # Compute run stats from zipsa_home()/<name>@<version>/runs/
+        total_runs = 0
+        successful_runs = 0
+        for run_data_dir in home_subdirs:
+            if not run_data_dir.is_dir():
+                continue
+            if not run_data_dir.name.startswith(f"{skill.name}@"):
+                continue
+            runs_dir = run_data_dir / "runs"
+            if not runs_dir.exists():
+                continue
+            for run_dir in runs_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                meta_file = run_dir / "metadata.json"
+                if not meta_file.exists():
+                    continue
+                try:
+                    meta = json.loads(meta_file.read_text())
+                except Exception:
+                    continue
+                total_runs += 1
+                if not meta.get("is_error", True):
+                    successful_runs += 1
+
+        installed.append({
+            "skill": skill,
+            "meta": install_meta,
+            "total_runs": total_runs,
+            "successful_runs": successful_runs,
+            "is_link": item.is_symlink(),
+            "item": item,
+        })
+
+    if not installed:
+        typer.echo("No installed skills.")
+        return
+
+    typer.echo(f"Installed skills ({len(installed)}):\n")
+
+    for entry in installed:
+        skill = entry["skill"]
+        meta = entry["meta"]
+
+        name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
+        version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
+        if entry["is_link"]:
+            label = typer.style(" (linked)", fg=typer.colors.YELLOW)
+        else:
+            label = ""
+        typer.echo(f"  {name}{version}{label}")
+
+        if entry["total_runs"] == 0:
+            typer.echo(typer.style("    never run", fg=typer.colors.BRIGHT_BLACK))
+        else:
+            success_pct = int(entry["successful_runs"] / entry["total_runs"] * 100)
+            pct_color = typer.colors.GREEN if success_pct >= 80 else typer.colors.YELLOW if success_pct >= 50 else typer.colors.RED
+            runs_str = typer.style(f"{entry['total_runs']} runs", fg=typer.colors.WHITE)
+            pct_str = typer.style(f"{success_pct}% success", fg=pct_color)
+            typer.echo(f"    {runs_str} · {pct_str}")
+
+        if entry["is_link"]:
+            path_str = typer.style(str(entry["item"].resolve()), fg=typer.colors.BRIGHT_BLACK)
+            typer.echo(f"    {typer.style('Linked from:', fg=typer.colors.BRIGHT_BLACK)} {path_str}")
+        elif meta.get("source"):
+            src_str = typer.style(meta["source"], fg=typer.colors.BRIGHT_BLACK)
+            typer.echo(f"    {typer.style('Source:', fg=typer.colors.BRIGHT_BLACK)} {src_str}")
+
+        typer.echo()
+
+
+@app.command(name="discover")
+def discover(
     skills_dir: Annotated[
         str,
         typer.Argument(help="Directory containing skills"),
     ] = ".",
 ):
-    """List all skills in a directory."""
+    """Scan a directory and list all skills found."""
     try:
         skills_path = Path(skills_dir)
         if not skills_path.exists():
@@ -326,6 +406,8 @@ def list_skills(
             typer.echo(f"    Path: {skill['path']}")
             typer.echo()
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
@@ -339,6 +421,123 @@ def runtimes():
     typer.echo("Available runtimes:\n")
     for runtime_name in available:
         typer.echo(f"  - {runtime_name}")
+
+
+@app.command()
+def install(
+    source: Annotated[
+        Optional[str],
+        typer.Argument(help=r"GitHub source: user/repo\[/subpath]\[@ref]"),
+    ] = None,
+    path: Annotated[
+        Optional[str],
+        typer.Option("--path", help="Install local skill by copy"),
+    ] = None,
+    link: Annotated[
+        Optional[str],
+        typer.Option("--link", help="Install local skill by symlink"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite if already installed"),
+    ] = False,
+):
+    """Install a skill from GitHub or a local directory."""
+    if sum(bool(x) for x in [source, path, link]) > 1:
+        typer.echo("Error: --path, --link, and source are mutually exclusive", err=True)
+        raise typer.Exit(1)
+
+    try:
+        if path:
+            name = install_local(path, link=False, force=force)
+            typer.echo(f"Installed {name}")
+        elif link:
+            name = install_local(link, link=True, force=force)
+            typer.echo(f"Installed {name} (linked)")
+        elif source:
+            name = install_from_github(source, force=force)
+            typer.echo(f"Installed {name}")
+        else:
+            typer.echo("Error: provide a source, --path, or --link", err=True)
+            raise typer.Exit(1)
+    except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def uninstall(
+    name: Annotated[
+        str,
+        typer.Argument(help="Installed skill name"),
+    ],
+):
+    """Uninstall a skill (preserves run history)."""
+    dest = installed_skill_dir(name)
+    if not dest.exists() and not dest.is_symlink():
+        typer.echo(f"Error: Skill '{name}' is not installed.", err=True)
+        raise typer.Exit(1)
+
+    try:
+        if dest.is_symlink():
+            dest.unlink()
+        else:
+            shutil.rmtree(dest)
+    except OSError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Uninstalled {name}")
+
+
+@app.command()
+def connect(
+    name: Annotated[
+        str,
+        typer.Argument(help="Installed skill name"),
+    ],
+    server_name: Annotated[
+        Optional[str],
+        typer.Argument(help="MCP server name to authorize (default: all OAuth servers)"),
+    ] = None,
+):
+    """Pre-authorize OAuth credentials for a skill's HTTP MCP servers."""
+    try:
+        skill = Skill.load(resolve_skill(name))
+
+        oauth_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
+        ]
+
+        if server_name:
+            oauth_servers = [s for s in oauth_servers if s.name == server_name]
+            if not oauth_servers:
+                typer.echo(
+                    f"Error: Server '{server_name}' not found or is not an OAuth2 server",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+        if not oauth_servers:
+            typer.echo("No OAuth servers found in skill")
+            return
+
+        manager = OAuthManager()
+        for server in oauth_servers:
+            typer.echo(f"Authorizing {server.name}...")
+            manager.ensure_credentials(server.name, server.url)
+            typer.echo(f"✓ {server.name}: authorized")
+
+    except SkillNotInstalledError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def main():

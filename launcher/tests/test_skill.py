@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 from zipsa.core.skill import Skill
+from zipsa.paths import zipsa_home
 
 
 class TestSkillLoad:
@@ -95,7 +96,7 @@ class TestMCPConfig:
         assert config == {"mcpServers": {}}
 
     def test_build_mcp_config_stdio(self):
-        """Stdio MCP server should be in config."""
+        """Stdio MCP server should be in config (passthrough, no auto-appended path)."""
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
@@ -106,7 +107,6 @@ class TestMCPConfig:
         assert config["mcpServers"]["filesystem"]["args"] == [
             "-y",
             "@modelcontextprotocol/server-filesystem",
-            "/workspace",
         ]
 
     def test_build_mcp_config_http(self):
@@ -141,7 +141,7 @@ class TestAllowedTools:
         assert tools == "Read,Write"
 
     def test_get_allowed_tools_mcp_format(self):
-        """MCP tools should be converted to mcp__server__method format."""
+        """MCP server allowed_tools become mcp__server__method format."""
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
 
@@ -151,7 +151,7 @@ class TestAllowedTools:
         assert "WebFetch" in tools
         assert "Bash" in tools
 
-        # Should have MCP tools with correct format
+        # MCP tools from server.allowed_tools
         assert "mcp__filesystem__read_file" in tools
         assert "mcp__notion__create-page" in tools
 
@@ -162,12 +162,17 @@ class TestAllowedTools:
 
         tools = skill.get_allowed_tools().split(",")
 
-        # First two should be builtin
         assert tools[0] == "WebFetch"
         assert tools[1] == "Bash"
-
-        # Rest should be MCP
         assert tools[2].startswith("mcp__")
+
+    def test_get_allowed_tools_empty_allowed_tools(self):
+        """Server with no allowed_tools contributes nothing to the list."""
+        manifest_path = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(manifest_path)
+
+        tools = skill.get_allowed_tools()
+        assert tools == ""
 
 
 class TestClaudeJson:
@@ -231,9 +236,9 @@ class TestClaudeJson:
         config = json.loads(claude_json_path.read_text())
 
         assert config["hasCompletedOnboarding"] is True
-        assert "/workspace" in config["projects"]
-        assert config["projects"]["/workspace"]["hasTrustDialogAccepted"] is True
-        assert "mcpServers" in config["projects"]["/workspace"]
+        assert "/home/agent/workspace" in config["projects"]
+        assert config["projects"]["/home/agent/workspace"]["hasTrustDialogAccepted"] is True
+        assert "mcpServers" in config["projects"]["/home/agent/workspace"]
 
     def test_build_claude_json_with_stdio_mcp(self, tmp_path):
         """Stdio MCP servers should be in /workspace project mcpServers."""
@@ -267,13 +272,53 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "filesystem" in mcp_servers
         assert mcp_servers["filesystem"]["command"] == "npx"
         assert mcp_servers["filesystem"]["args"] == [
             "-y",
             "@modelcontextprotocol/server-filesystem",
+        ]
+
+    def test_build_claude_json_stdio_mount_appends_container_path(self, tmp_path):
+        """Stdio server with mount should have container path auto-appended to args."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mcp": [
+                    {
+                        "name": "sessions",
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["@modelcontextprotocol/server-filesystem@2025.11.25"],
+                        "mount": {"host": "~/.claude/projects", "mode": "ro"},
+                    }
+                ],
+                "tools": {"builtin": [], "mcp": []},
+            },
+        }
+
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test instructions")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+
+        config = json.loads(claude_json_path.read_text())
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
+
+        assert mcp_servers["sessions"]["args"] == [
+            "@modelcontextprotocol/server-filesystem@2025.11.25",
+            "/home/agent/workspace/sessions",
         ]
 
     def test_build_claude_json_with_http_mcp(self, tmp_path):
@@ -307,7 +352,7 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "notion" in mcp_servers
         assert mcp_servers["notion"]["type"] == "http"
@@ -346,7 +391,7 @@ class TestClaudeJson:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
 
         config = json.loads(claude_json_path.read_text())
-        mcp_servers = config["projects"]["/workspace"]["mcpServers"]
+        mcp_servers = config["projects"]["/home/agent/workspace"]["mcpServers"]
 
         assert "github" in mcp_servers
         assert mcp_servers["github"]["type"] == "http"
@@ -355,7 +400,7 @@ class TestClaudeJson:
         assert mcp_servers["github"]["headersHelper"] == "echo \"{\\\"Authorization\\\": \\\"Bearer $TOKEN\\\"}\""
 
     def test_build_claude_json_uses_default_home_dir(self, tmp_path):
-        """build_claude_json with no args should write to ~/.zipsa/<name>@<version>/."""
+        """build_claude_json with no args should write to ZIPSA_HOME/<name>@<version>/."""
         skill_dir = tmp_path / "test-skill"
         skill_dir.mkdir()
         manifest = {
@@ -374,11 +419,9 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test instructions")
 
         skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            claude_json_path = skill.build_claude_json()
-
-        expected_dir = tmp_path / ".zipsa" / "my-skill@2.0.0"
+        expected_dir = zipsa_home() / "my-skill@2.0.0"
         assert claude_json_path == expected_dir / ".claude.json"
         assert claude_json_path.exists()
         assert (expected_dir / ".claude.json.org").exists()
@@ -409,3 +452,91 @@ class TestClaudeJson:
         assert claude_json_path == output_dir / ".claude.json"
         assert claude_json_path.exists()
         assert (output_dir / ".claude.json.org").exists()
+
+
+def _make_skill(tmp_path: Path, mcp_entries: str) -> Skill:
+    """Helper: create a minimal skill with given mcp yaml block."""
+    import yaml
+    skill_dir = tmp_path / "test-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# Test\n")
+    (skill_dir / "manifest.yaml").write_text(f"""
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: test-skill
+  version: 1.0.0
+spec:
+  purpose: Test
+  instructions: ./SKILL.md
+  mcp:
+{mcp_entries}
+  tools:
+    builtin: []
+""")
+    return Skill.load(skill_dir)
+
+
+class TestBuildClaudeJsonOauth:
+    """Test auto headersHelper generation for oauth2 servers."""
+
+    def test_oauth2_auto_generates_headers_helper(self, tmp_path):
+        """oauth2 server without explicit headersHelper gets auto-generated one."""
+        skill = _make_skill(tmp_path, """
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        notion = config["projects"]["/home/agent/workspace"]["mcpServers"]["notion"]
+        assert "headersHelper" in notion
+        assert "ZIPSA_TOKEN_NOTION" in notion["headersHelper"]
+        assert "Authorization" in notion["headersHelper"]
+        assert "Bearer" in notion["headersHelper"]
+        # Must use double quotes so shell expands $ZIPSA_TOKEN_NOTION
+        assert notion["headersHelper"].startswith('echo "')
+        assert "'" not in notion["headersHelper"]
+
+    def test_oauth2_explicit_headers_helper_not_overridden(self, tmp_path):
+        """oauth2 server with explicit headersHelper keeps it unchanged."""
+        skill = _make_skill(tmp_path, """
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+      headersHelper: 'echo {"X-Custom": "value"}'
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        notion = config["projects"]["/home/agent/workspace"]["mcpServers"]["notion"]
+        assert notion["headersHelper"] == 'echo {"X-Custom": "value"}'
+
+    def test_no_auth_no_headers_helper(self, tmp_path):
+        """HTTP server without auth gets no auto-generated headersHelper."""
+        skill = _make_skill(tmp_path, """
+    - name: api
+      type: http
+      url: https://api.example.com/mcp
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        api = config["projects"]["/home/agent/workspace"]["mcpServers"]["api"]
+        assert "headersHelper" not in api
+
+    def test_token_var_uppercased_server_name(self, tmp_path):
+        """Token env var uses uppercased server name with hyphens replaced by underscores."""
+        skill = _make_skill(tmp_path, """
+    - name: github-copilot
+      type: http
+      url: https://api.example.com/mcp
+      auth:
+        type: oauth2
+""")
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+        config = json.loads(claude_json_path.read_text())
+        server = config["projects"]["/home/agent/workspace"]["mcpServers"]["github-copilot"]
+        assert "ZIPSA_TOKEN_GITHUB_COPILOT" in server["headersHelper"]

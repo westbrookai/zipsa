@@ -124,3 +124,36 @@ class TestClaudeRuntime:
         assert "--debug" in cmd
         assert "--debug-file" in cmd
         assert "/home/agent/mcp-debug.log" in cmd
+
+    def test_build_command_with_extra_dirs(self):
+        """Build command should include --add-dir for each extra dir."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="Hello",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+            extra_dirs=["/host-claude-projects", "/mnt/docs"],
+        )
+
+        assert cmd.count("--add-dir") == 2
+        assert "/host-claude-projects" in cmd
+        assert "/mnt/docs" in cmd
+
+    def test_build_command_no_extra_dirs_by_default(self):
+        """Build command should not include --add-dir when extra_dirs is empty."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="Hello",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+        )
+
+        assert "--add-dir" not in cmd

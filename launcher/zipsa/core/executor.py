@@ -2,14 +2,19 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from .skill import Skill
 from ..runtimes import get_runtime
+from ..auth.oauth import OAuthManager
+from .. import paths as zipsa_paths
+
+
+CONTAINER_WORKSPACE = "/home/agent/workspace"
 
 
 class DockerExecutor:
@@ -19,18 +24,15 @@ class DockerExecutor:
         self,
         runtime: str = "claude",
         image: str = "ghcr.io/westbrookai/zipsa-runtime:latest",
-        workspace: Optional[Path] = None,
     ):
         """Initialize Docker executor.
 
         Args:
             runtime: Runtime to use (claude, codex, gemini)
             image: Docker image to run
-            workspace: Workspace directory (defaults to current directory)
         """
         self.runtime = get_runtime(runtime)
         self.image = image
-        self.workspace = workspace or Path.cwd()
 
     def run(
         self,
@@ -40,6 +42,7 @@ class DockerExecutor:
         dry_run: bool = False,
         shell: bool = False,
         mcp_debug: bool = False,
+        extra_docker_opts: Optional[list[str]] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -63,16 +66,17 @@ class DockerExecutor:
             for env_var in server.env:
                 # Only add if not already set and exists in host environment
                 if env_var not in env:
-                    import os
                     if env_var in os.environ:
                         env[env_var] = os.environ[env_var]
                     else:
                         print(f"Warning: MCP server '{server.name}' requires environment variable '{env_var}' but it's not set")
 
+        # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers (skip for dry-run)
+        if not dry_run:
+            self._ensure_oauth_credentials(skill, env)
+
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
-        skill_data_dir = (
-            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
-        )
+        skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
         skill_data_dir.mkdir(parents=True, exist_ok=True)
 
         # Create run directory for logging (skip for dry-run and shell mode)
@@ -83,7 +87,10 @@ class DockerExecutor:
             run_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate .claude.json in centralized directory
-        claude_json_path = skill.build_claude_json(output_dir=skill_data_dir)
+        claude_json_path = skill.build_claude_json(
+            output_dir=skill_data_dir,
+            container_workspace=CONTAINER_WORKSPACE,
+        )
 
         # Prepare MCP debug file path (host side) if requested
         mcp_debug_host = None
@@ -97,6 +104,7 @@ class DockerExecutor:
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env, shell=shell,
                 mcp_debug_host=mcp_debug_host,
+                extra_docker_opts=extra_docker_opts,
             )
 
             if dry_run:
@@ -109,7 +117,7 @@ class DockerExecutor:
                 return None
 
             # Execute and return generator
-            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file)
+            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file, user_input)
 
         except Exception:
             raise
@@ -126,6 +134,7 @@ class DockerExecutor:
         skill: Skill,
         run_dir: Optional[Path],
         env_file: Optional[Path] = None,
+        user_input: str = "",
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
@@ -134,6 +143,8 @@ class DockerExecutor:
             claude_json_path: Path to .claude.json file (not cleaned up after execution)
             skill: Skill being executed
             run_dir: Directory to save run logs (None to skip logging)
+            env_file: Environment file path (optional)
+            user_input: User's input/query for this execution
 
         Yields:
             Parsed output events
@@ -292,7 +303,7 @@ class DockerExecutor:
             if run_dir:
                 try:
                     self._save_summary(run_dir)
-                    self._save_metadata(run_dir, skill, cost_exceeded, limits)
+                    self._save_metadata(run_dir, skill, cost_exceeded, limits, user_input=user_input)
                 except Exception as e:
                     # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
@@ -357,7 +368,18 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
-    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits = None) -> None:
+    @staticmethod
+    def _extract_skill_status(text: str | None) -> str | None:
+        """Extract the skill contract status field from the final assistant text."""
+        if not text:
+            return None
+        try:
+            data = json.loads(text.strip())
+            return data.get("status")
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits=None, user_input: str = "") -> None:
         """Extract metrics from output.jsonl and save to metadata.json.
 
         Extracts execution metrics from the result event.
@@ -367,6 +389,7 @@ class DockerExecutor:
             skill: Skill that was executed
             cost_exceeded: Whether cost limit was exceeded
             limits: Skill limits configuration
+            user_input: User's input/query for this execution
         """
         output_file = run_dir / "output.jsonl"
         metadata_file = run_dir / "metadata.json"
@@ -374,15 +397,22 @@ class DockerExecutor:
         if not output_file.exists():
             return
 
-        # Find result event
+        # Scan all events: find result event and last assistant text
         result_event = None
+        last_assistant_text = None
         with open(output_file, 'r') as f:
             for line in f:
                 try:
                     event = json.loads(line.strip())
-                    if event.get("type") == "result":
+                    event_type = event.get("type")
+                    if event_type == "result":
                         result_event = event
-                        break
+                    elif event_type == "assistant":
+                        content = event.get("message", {}).get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                last_assistant_text = block.get("text", "")
+                                break
                 except json.JSONDecodeError:
                     continue
 
@@ -394,7 +424,8 @@ class DockerExecutor:
                 "skill_version": skill.manifest.metadata.version,
                 "timestamp": datetime.now().isoformat(),
                 "is_error": True,
-                "error": "No result event found - execution may have failed"
+                "error": "No result event found - execution may have failed",
+                "user_input": user_input
             }
         else:
             # Extract from result event
@@ -411,8 +442,17 @@ class DockerExecutor:
                 "stop_reason": result_event.get("stop_reason"),
                 "terminal_reason": result_event.get("terminal_reason"),
                 "usage": result_event.get("usage", {}),
-                "model_usage": result_event.get("modelUsage", {})
+                "model_usage": result_event.get("modelUsage", {}),
+                "user_input": user_input
             }
+
+        # Override is_error if skill's final JSON reports a non-ok status.
+        # Claude Code reports is_error=False for a clean process exit even when
+        # the skill itself returned status=failed in its contract JSON output.
+        skill_status = self._extract_skill_status(last_assistant_text)
+        if skill_status and skill_status != "ok":
+            metadata["is_error"] = True
+            metadata["skill_status"] = skill_status
 
         # Add limit information if applicable
         if limits and limits.max_cost_usd:
@@ -429,7 +469,29 @@ class DockerExecutor:
         with open(env_file, "w") as f:
             for key, value in env.items():
                 f.write(f"{key}={value}\n")
+        env_file.chmod(0o600)
         return env_file
+
+    def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
+        """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
+        oauth_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
+        ]
+        if not oauth_servers:
+            return
+
+        manager = OAuthManager()
+        print("Checking credentials...")
+
+        for server in oauth_servers:
+            token_var = f"ZIPSA_TOKEN_{server.name.upper().replace('-', '_')}"
+            if token_var in env:
+                print(f"  {server.name}: token already set")
+                continue
+            token = manager.ensure_credentials(server.name, server.url)
+            env[token_var] = token
+            print(f"  {server.name}: authorized")
 
     def _build_docker_command(
         self,
@@ -439,6 +501,7 @@ class DockerExecutor:
         env: dict[str, str],
         shell: bool = False,
         mcp_debug_host: Optional[Path] = None,
+        extra_docker_opts: Optional[list[str]] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -458,6 +521,11 @@ class DockerExecutor:
             "--rm",
         ]
 
+        # Extra docker options (e.g. port forwarding for OAuth flows)
+        # Each opt is shell-split so "-p 56535:56535" works as well as ["-p", "56535:56535"]
+        for opt in (extra_docker_opts or []):
+            cmd.extend(shlex.split(opt))
+
         # Add interactive TTY flags for shell mode
         if shell:
             cmd.extend(["-it"])
@@ -468,45 +536,27 @@ class DockerExecutor:
         ])
 
         # Global env file (~/.zipsa/.env) takes lower precedence, added first
-        global_env_file = Path.home() / ".zipsa" / ".env"
-        if global_env_file.exists():
-            cmd.extend(["--env-file", str(global_env_file)])
+        _global_env = zipsa_paths.global_env_file()
+        if _global_env.exists():
+            cmd.extend(["--env-file", str(_global_env)])
 
         # Per-execution env file (~/.zipsa/<name>@<version>/.env), added last to take precedence
-        skill_data_dir = (
-            Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}"
-        )
+        skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
         env_file = self._write_env_file(skill_data_dir, env)
         cmd.extend(["--env-file", str(env_file)])
 
-        # Volume mounts
-        cmd.extend(
-            [
-                "-v",
-                f"{self.workspace}:/workspace",
-            ]
-        )
+        # Mount skill data directory read-only to /.zipsa.
+        # .claude.json is copied into the container overlay FS at startup (see bash wrapper
+        # below) so Claude Code can atomically rename it without hitting EBUSY — which occurs
+        # when the file itself is a bind-mount point.
+        skill_data_dir = claude_json_path.parent
+        cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
 
-        # Mount .claude.json (contains MCP config + onboarding settings)
-        # Note: Must be writable - claude updates this file during execution
-        cmd.extend(["-v", f"{claude_json_path}:/home/agent/.claude.json"])
-
-        # Mount .claude.json.org (read-only original for comparison)
-        claude_json_org_path = claude_json_path.parent / ".claude.json.org"
-        if claude_json_org_path.exists():
-            cmd.extend(["-v", f"{claude_json_org_path}:/home/agent/.claude.json.org:ro"])
-
-        # Mount global credentials if they exist
-        # Note: Must be writable - claude may refresh tokens during execution
-        global_creds = Path.home() / ".zipsa" / ".credentials.json"
-        if global_creds.exists():
-            cmd.extend(["-v", f"{global_creds}:/home/agent/.claude/.credentials.json"])
-
-        # MCP stdio mounts (from manifest)
+        # MCP stdio mounts (from manifest) — container path auto-generated
         for server in skill.manifest.spec.mcp:
             if server.type == "stdio" and server.mount:
                 host_path = Path(server.mount.host).expanduser().resolve()
-                container_path = server.mount.container
+                container_path = f"{CONTAINER_WORKSPACE}/{server.name}"
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
@@ -517,14 +567,26 @@ class DockerExecutor:
         # Image
         cmd.append(self.image)
 
-        # Shell mode: just run bash
+        # Preamble copies .claude.json from the read-only /.zipsa mount into the
+        # container's overlay FS so Claude Code can atomically rename it.
+        cp_preamble = "cp /.zipsa/.claude.json /home/agent/.claude.json"
+
         if shell:
-            cmd.append("bash")
+            # exec replaces the copy-shell with a fresh interactive bash
+            cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
         else:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
             allowed_tools = skill.get_allowed_tools()
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
+
+            # Collect container paths for all stdio MCP mounts so Claude Code
+            # includes them in its ListRoots response (needed by secure-filesystem-server)
+            extra_dirs = [
+                f"{CONTAINER_WORKSPACE}/{server.name}"
+                for server in skill.manifest.spec.mcp
+                if server.type == "stdio" and server.mount
+            ]
 
             # MCP config is now in .claude.json (mounted to /home/agent/.claude.json)
             runtime_cmd = self.runtime.build_command(
@@ -532,25 +594,33 @@ class DockerExecutor:
                 user_input=user_input,
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools,
-                workspace=Path("/workspace"),
+                workspace=Path(CONTAINER_WORKSPACE),
                 env=env,
                 mcp_debug_file=mcp_debug_container,
+                extra_dirs=extra_dirs,
             )
 
-            cmd.extend(runtime_cmd)
+            cmd.extend(["bash", "-c", f"{cp_preamble} && {shlex.join(runtime_cmd)}"])
 
         return cmd
 
     def _build_system_prompt(self, skill: Skill) -> str:
-        """Build system prompt from skill metadata.
+        prompts_dir = Path(__file__).parent.parent / "system-prompts"
+        contract = (prompts_dir / "runtime-contract.md").read_text(encoding="utf-8")
+        template = (prompts_dir / "system-prompt-template.md").read_text(encoding="utf-8")
 
-        Args:
-            skill: Skill instance
+        mcp_paths_section = ""
+        mounted_servers = [
+            s for s in skill.manifest.spec.mcp
+            if s.type == "stdio" and s.mount
+        ]
+        if mounted_servers:
+            lines = ["# MCP Server Paths"]
+            for server in mounted_servers:
+                lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
+            mcp_paths_section = "\n".join(lines) + "\n\n"
 
-        Returns:
-            Complete system prompt string
-        """
-        return f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
+        skill_body = f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
 
 # Purpose
 {skill.manifest.spec.purpose}
@@ -558,7 +628,7 @@ class DockerExecutor:
 # Instructions
 {skill.instructions}
 
-# Available tools
+{mcp_paths_section}# Available tools
 You may ONLY use these tools: {skill.get_allowed_tools()}
 If a task requires other tools, refuse politely.
 
@@ -567,6 +637,24 @@ If a task requires other tools, refuse politely.
 - Be concise: no preamble, just answer
 - Decline gracefully for off-topic requests
 """
+
+        now = datetime.now().astimezone()
+        tz_offset = now.strftime("%z")
+        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
+        execution_context = (
+            f"date: {now.strftime('%Y-%m-%d')}\n"
+            f"time: {now.strftime('%H:%M:%S')}\n"
+            f"timezone: {now.strftime('%Z')} ({tz_offset_fmt})"
+        )
+
+        meta = skill.manifest.metadata
+        return template.format(
+            contract=contract,
+            execution_context=execution_context,
+            skill_name=meta.name,
+            skill_version=meta.version,
+            skill_body=skill_body,
+        )
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
@@ -584,7 +672,7 @@ If a task requires other tools, refuse politely.
         print(json.dumps(mcp_config, indent=2))
         print()
         # Show env file keys (values hidden)
-        env_file = Path.home() / ".zipsa" / f"{skill.name}@{skill.manifest.metadata.version}" / ".env"
+        env_file = zipsa_paths.skill_env_file(skill.name, skill.manifest.metadata.version)
         if env_file.exists():
             keys = [line.split("=")[0] for line in env_file.read_text().splitlines() if "=" in line]
             if keys:

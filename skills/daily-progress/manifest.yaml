@@ -23,22 +23,32 @@ spec:
   # MCP servers used by this skill
   mcp:
     # Local stdio: read Claude Code session logs
+    # Container path auto-generated as /home/agent/workspace/sessions
     - name: sessions
       type: stdio
       command: npx
       args:
-        - "@modelcontextprotocol/server-filesystem@2026.1.14"
-        - "/host-claude-projects"
+        - "@modelcontextprotocol/server-filesystem@2025.11.25"
       mount:
         host: "~/.claude/projects"
-        container: "/host-claude-projects"
         mode: ro
+      allowed_tools:
+        - read_file
+        - list_directory
+        - directory_tree
 
     # Remote http: write to Notion
     - name: notion
       type: http
       url: https://mcp.notion.com/mcp
-
+      auth:
+        type: oauth2
+      allowed_tools:
+        - notion-search
+        - notion-create-database
+        - notion-create-pages
+        - notion-update-page
+        - notion-fetch
 
     - name: githubcopilot
       type: http
@@ -47,18 +57,8 @@ spec:
       env:
         - GITHUB_PERSONAL_ACCESS_TOKEN
 
-  # Tools whitelist — only these are allowed
   tools:
     builtin: []
-    mcp:
-      - sessions:read_file
-      - sessions:list_directory
-      - sessions:directory_tree
-      - notion:notion-search
-      - notion:notion-create-database
-      - notion:notion-create-pages
-      - notion:notion-update-page
-      - notion:notion-fetch
 
   # Skill-specific configuration
   config:

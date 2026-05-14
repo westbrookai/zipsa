@@ -112,48 +112,52 @@ class Skill:
         """Build --allowedTools comma-separated string.
 
         Converts:
-        - builtin: ["Read", "Write"] -> "Read,Write"
-        - mcp: ["server:method"] -> "mcp__server__method"
+        - spec.tools.builtin: ["Read", "Write"] -> "Read,Write"
+        - spec.mcp[n].allowed_tools: ["read_file"] -> "mcp__<server>__read_file"
 
         Returns:
             Comma-separated tool names
         """
-        tools = []
+        tools = list(self.manifest.spec.tools.builtin)
 
-        # Builtin tools (as-is)
-        tools.extend(self.manifest.spec.tools.builtin)
-
-        # MCP tools (convert "server:method" to "mcp__server__method")
-        for mcp_tool in self.manifest.spec.tools.mcp:
-            # Replace : with __
-            tool_name = mcp_tool.replace(":", "__")
-            tools.append(f"mcp__{tool_name}")
+        for server in self.manifest.spec.mcp:
+            for tool in server.allowed_tools:
+                tools.append(f"mcp__{server.name}__{tool}")
 
         return ",".join(tools)
 
-    def build_claude_json(self, output_dir: Optional[Path] = None) -> Path:
+    def build_claude_json(
+        self,
+        output_dir: Optional[Path] = None,
+        container_workspace: str = "/home/agent/workspace",
+    ) -> Path:
         """Generate .claude.json file for skill.
 
         Args:
             output_dir: Directory to write files into.
                         Defaults to ~/.zipsa/<name>@<version>/.
+            container_workspace: Container working directory.
+                        Stdio servers with mounts get their container path
+                        auto-appended as /home/agent/workspace/<server-name>.
 
         Returns:
             Path to created .claude.json file
         """
         if output_dir is None:
-            output_dir = (
-                Path.home() / ".zipsa" / f"{self.name}@{self.manifest.metadata.version}"
-            )
+            from zipsa.paths import skill_data_dir as _skill_data_dir
+            output_dir = _skill_data_dir(self.name, self.manifest.metadata.version)
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
         mcp_servers = {}
         for server in self.manifest.spec.mcp:
             if server.type == "stdio":
+                args = list(server.args)
+                if server.mount:
+                    args.append(f"{container_workspace}/{server.name}")
                 mcp_servers[server.name] = {
                     "command": server.command,
-                    "args": server.args,
+                    "args": args,
                 }
             elif server.type == "http":
                 server_config: dict = {
@@ -162,14 +166,19 @@ class Skill:
                 }
                 if server.connection:
                     server_config["connection"] = server.connection
-                if server.headersHelper:
-                    server_config["headersHelper"] = server.headersHelper
+                # Auto-generate headersHelper for oauth2 servers if not explicitly set
+                headers_helper = server.headersHelper
+                if not headers_helper and server.auth and server.auth.type == "oauth2":
+                    token_var = f"ZIPSA_TOKEN_{server.name.upper().replace('-', '_')}"
+                    headers_helper = f'echo "{{\\"Authorization\\": \\"Bearer ${token_var}\\"}}"'
+                if headers_helper:
+                    server_config["headersHelper"] = headers_helper
                 mcp_servers[server.name] = server_config
 
         claude_config = {
             "hasCompletedOnboarding": True,
             "projects": {
-                "/workspace": {
+                container_workspace: {
                     "hasTrustDialogAccepted": True,
                     "mcpServers": mcp_servers,
                 }

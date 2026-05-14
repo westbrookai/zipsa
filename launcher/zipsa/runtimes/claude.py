@@ -26,6 +26,7 @@ class ClaudeRuntime(AgentRuntime):
         workspace: Path,
         env: dict[str, str],
         mcp_debug_file: Optional[str] = None,
+        extra_dirs: Optional[list[str]] = None,
     ) -> list[str]:
         """Build Claude Code CLI command.
 
@@ -44,6 +45,8 @@ class ClaudeRuntime(AgentRuntime):
             "--output-format=stream-json",
             "--verbose",
         ]
+        for d in (extra_dirs or []):
+            cmd.extend(["--add-dir", d])
         if mcp_debug_file:
             cmd.extend(["--debug", "--debug-file", mcp_debug_file])
         return cmd

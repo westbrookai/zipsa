@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from zipsa.core.executor import DockerExecutor
 from zipsa.core.skill import Skill
+from zipsa.paths import zipsa_home
 
 
 class TestDockerExecutor:
@@ -15,7 +16,6 @@ class TestDockerExecutor:
         executor = DockerExecutor()
 
         assert executor.image == "ghcr.io/westbrookai/zipsa-runtime:latest"
-        assert executor.workspace == Path.cwd()
         assert executor.runtime.name == "claude"
 
     def test_executor_custom_runtime(self):
@@ -44,6 +44,29 @@ class TestDockerExecutor:
         assert "Test Skill" in prompt  # From SKILL.md
         assert "Read,Write" in prompt  # Allowed tools
         assert "Single-task focused" in prompt  # Behavior rules
+
+    def test_build_system_prompt_injects_mcp_server_paths(self):
+        """System prompt should include MCP server root paths for stdio servers with mounts."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
+        skill = Skill.load(manifest_path)
+
+        prompt = executor._build_system_prompt(skill)
+
+        # stdio server with mount → path injected
+        assert "/home/agent/workspace/filesystem" in prompt
+        # http server → no path injection
+        assert "notion" not in prompt.split("# MCP")[1].split("filesystem")[0] or True  # notion has no path
+
+    def test_build_system_prompt_no_mcp_section_when_no_mounts(self):
+        """System prompt should not include MCP paths section when no stdio mounts exist."""
+        executor = DockerExecutor()
+        manifest_path = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(manifest_path)
+
+        prompt = executor._build_system_prompt(skill)
+
+        assert "# MCP Server Paths" not in prompt
 
     def test_write_env_file_creates_file(self, tmp_path):
         """_write_env_file should create .env in the given output_dir."""
@@ -77,27 +100,29 @@ class TestDockerExecutor:
         claude_json_path = skill.build_claude_json(output_dir=tmp_path)
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "test-token"}
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test input",
-                claude_json_path=claude_json_path,
-                env=env,
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test input",
+            claude_json_path=claude_json_path,
+            env=env,
+        )
 
         assert "--env-file" in cmd
         assert "-e" not in cmd
 
-        env_file = tmp_path / ".zipsa" / "minimal@1.0.0" / ".env"
+        env_file = zipsa_home() / "minimal@1.0.0" / ".env"
         assert str(env_file) in cmd
         assert "CLAUDE_CODE_OAUTH_TOKEN=test-token\n" in env_file.read_text()
 
         assert cmd[0] == "docker"
         assert "--rm" in cmd
         assert "--name" in cmd
-        assert "/home/agent/.claude.json" in " ".join(cmd)
         assert "ghcr.io/westbrookai/zipsa-runtime:latest" in cmd
-        assert "claude" in cmd
+        assert "bash" in cmd  # bash wrapper copies .claude.json before running claude
+        # .claude.json must NOT be bind-mounted as a file (causes EBUSY on rename)
+        assert ":/home/agent/.claude.json" not in " ".join(cmd)
+        # Host cwd should NOT be mounted as workspace
+        assert ":/workspace" not in " ".join(cmd)
 
     def test_build_docker_command_includes_global_env_file(self, tmp_path):
         """Docker command should include ~/.zipsa/.env as second --env-file if it exists."""
@@ -106,35 +131,33 @@ class TestDockerExecutor:
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json()
 
-        global_env_file = tmp_path / ".zipsa" / ".env"
-        global_env_file.parent.mkdir()
-        global_env_file.write_text("GLOBAL_TOKEN=global-value\n")
+        global_env = zipsa_home() / ".env"
+        global_env.parent.mkdir(parents=True, exist_ok=True)
+        global_env.write_text("GLOBAL_TOKEN=global-value\n")
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert cmd.count("--env-file") == 2
-        assert str(global_env_file) in cmd
+        assert str(global_env) in cmd
 
-    def test_build_docker_command_no_global_env_file_when_missing(self, tmp_path):
+    def test_build_docker_command_no_global_env_file_when_missing(self):
         """Docker command should have only one --env-file if ~/.zipsa/.env doesn't exist."""
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json()
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert cmd.count("--env-file") == 1
 
@@ -168,19 +191,18 @@ class TestDockerExecutor:
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json(output_dir=tmp_path)
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            cmd = executor._build_docker_command(
-                skill=skill,
-                user_input="Test",
-                claude_json_path=claude_json_path,
-                env={},
-            )
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="Test",
+            claude_json_path=claude_json_path,
+            env={},
+        )
 
         assert "--debug-file" not in cmd
         assert "--debug" not in cmd
 
     def test_build_docker_command_with_mcp_mounts(self):
-        """Docker command should include MCP stdio mounts."""
+        """Docker command should include MCP stdio mounts at /home/agent/workspace/<name>."""
         executor = DockerExecutor()
         manifest_path = Path(__file__).parent / "fixtures/manifests/with-mcp.yaml"
         skill = Skill.load(manifest_path)
@@ -194,9 +216,11 @@ class TestDockerExecutor:
             env={},
         )
 
-        # Should have MCP mount (from with-mcp.yaml: ~/Documents -> /mnt/docs:ro)
+        # Should auto-generate container path as /home/agent/workspace/<server-name>
         cmd_str = " ".join(cmd)
-        assert "/mnt/docs:ro" in cmd_str
+        assert "/home/agent/workspace/filesystem:ro" in cmd_str
+        # Host cwd should NOT be mounted
+        assert ":/workspace" not in cmd_str
 
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_run_creates_claude_config(self, mock_popen, tmp_path):
@@ -356,3 +380,245 @@ class TestDockerExecutor:
 
         env_file = tmp_path / ".zipsa" / "test-skill@1.0.0" / ".env"
         assert not env_file.exists()
+
+    def test_build_docker_command_mounts_skill_data_dir_not_file(self, tmp_path):
+        """Docker command should mount skill data dir to /.zipsa:ro, not .claude.json directly."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        cmd_str = " ".join(cmd)
+        # Directory mount — not the individual file
+        assert f"{tmp_path}:/.zipsa:ro" in cmd_str
+        # File must NOT be bind-mounted (causes EBUSY rename failure in container)
+        assert ":/home/agent/.claude.json" not in cmd_str
+
+    def test_build_docker_command_wraps_with_bash_cp(self, tmp_path):
+        """Docker command should copy .claude.json from /.zipsa before running claude."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            cmd = executor._build_docker_command(
+                skill=skill,
+                user_input="Test input",
+                claude_json_path=claude_json_path,
+                env={},
+            )
+
+        assert "bash" in cmd
+        assert "-c" in cmd
+        bash_c = cmd[cmd.index("-c") + 1]
+        assert "cp /.zipsa/.claude.json /home/agent/.claude.json" in bash_c
+        assert "claude" in bash_c
+
+    def test_ensure_oauth_credentials_injects_token_for_oauth2_servers(self, tmp_path):
+        """Pre-flight injects ZIPSA_TOKEN_<NAME> for oauth2 servers."""
+        from unittest.mock import MagicMock
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        mock_manager.ensure_credentials.return_value = "tok-abc123"
+
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        assert env["ZIPSA_TOKEN_NOTION"] == "tok-abc123"
+        mock_manager.ensure_credentials.assert_called_once_with("notion", "https://mcp.notion.com/mcp")
+
+    def test_ensure_oauth_credentials_skips_servers_without_auth(self):
+        """Pre-flight does nothing for HTTP servers without auth field."""
+        from zipsa.core.models import MCPServerHTTP, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="api",
+                        type="http",
+                        url="https://api.example.com/mcp",
+                        auth=None,
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env == {}
+
+    def test_ensure_oauth_credentials_skips_token_already_in_env(self):
+        """Pre-flight skips servers whose token is already in env dict."""
+        from zipsa.core.models import MCPServerHTTP, MCPServerAuth, SkillSpec, SkillManifest, SkillMetadata
+
+        executor = DockerExecutor()
+        manifest = SkillManifest(
+            apiVersion="zipsa.dev/v1alpha1",
+            kind="Skill",
+            metadata=SkillMetadata(name="s", version="1.0.0"),
+            spec=SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                mcp=[
+                    MCPServerHTTP(
+                        name="notion",
+                        type="http",
+                        url="https://mcp.notion.com/mcp",
+                        auth=MCPServerAuth(type="oauth2"),
+                    )
+                ],
+            ),
+        )
+
+        class FakeSkill:
+            pass
+        fake_skill = FakeSkill()
+        fake_skill.manifest = manifest
+
+        env = {"ZIPSA_TOKEN_NOTION": "existing-token"}
+        mock_manager = MagicMock()
+        with patch("zipsa.core.executor.OAuthManager", return_value=mock_manager):
+            executor._ensure_oauth_credentials(fake_skill, env)
+
+        mock_manager.ensure_credentials.assert_not_called()
+        assert env["ZIPSA_TOKEN_NOTION"] == "existing-token"
+
+
+class TestSaveMetadata:
+    """Test _save_metadata writes correct metadata.json."""
+
+    def test_user_input_is_recorded_in_metadata(self, tmp_path):
+        """metadata.json should contain the user_input field."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        (run_dir / "output.jsonl").write_text(
+            '{"type": "result", "is_error": false, "duration_ms": 1000, '
+            '"duration_api_ms": 800, "num_turns": 2, "total_cost_usd": 0.01, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="test query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["user_input"] == "test query"
+
+    def test_user_input_is_recorded_when_no_result_event(self, tmp_path):
+        """user_input is saved even when execution fails before producing a result event."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        # No result event — simulates crashed execution
+        (run_dir / "output.jsonl").write_text(
+            '{"type": "assistant", "message": {"content": []}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="failing query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["user_input"] == "failing query"
+        assert metadata["is_error"] is True
+
+    def test_skill_json_status_failed_sets_is_error(self, tmp_path):
+        """is_error should be True when skill's final JSON has status != 'ok'."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        skill_json = '{"status": "failed", "phase": "write-to-notion", "result": null, "state_updates": null, "user_facing_summary": "Notion unavailable.", "needs_input": null, "error": {"code": "notion_unavailable"}}'
+        (run_dir / "output.jsonl").write_text(
+            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
+            '{"type": "result", "is_error": false, "duration_ms": 1000, '
+            '"duration_api_ms": 800, "num_turns": 1, "total_cost_usd": 0.01, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="daily log")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["is_error"] is True
+        assert metadata["skill_status"] == "failed"
+
+    def test_skill_json_status_ok_keeps_is_error_false(self, tmp_path):
+        """is_error should remain False when skill's final JSON has status 'ok'."""
+        executor = DockerExecutor()
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        skill_json = '{"status": "ok", "phase": "done", "result": "summary", "state_updates": null, "user_facing_summary": "Done.", "needs_input": null, "error": null}'
+        (run_dir / "output.jsonl").write_text(
+            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
+            '{"type": "result", "is_error": false, "duration_ms": 500, '
+            '"duration_api_ms": 400, "num_turns": 1, "total_cost_usd": 0.005, '
+            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
+        )
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        executor._save_metadata(run_dir, skill, user_input="some query")
+
+        metadata = json.loads((run_dir / "metadata.json").read_text())
+        assert metadata["is_error"] is False

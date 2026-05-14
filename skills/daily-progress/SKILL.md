@@ -10,7 +10,7 @@ Read Claude Code session logs from today, group them by project, summarize the w
 
 - **Workspace**: `Westbrook AI HQ`
 - **Database name**: `zipsa-daily-log`
-- **Session source**: `/host-claude-projects/` (mounted read-only from host's `~/.claude/projects/`)
+- **Session source**: `sessions` MCP server (path injected at runtime)
 - **Timezone for "today"**: `Australia/Sydney`
 
 ## Steps
@@ -39,13 +39,13 @@ After creating, capture the database ID.
 
 ### 2. Discover today's sessions
 
-The host directory `/host-claude-projects/` contains one subdirectory per Claude Code project. Each subdirectory's name is the project's working directory with non-alphanumeric characters replaced by `-`. Example: `-Users-neochoon-WestbrookAI-skill-runtime-poc`.
+The `sessions` MCP server exposes the Claude Code projects directory. Its root path is provided in the `# MCP Server Paths` section of your system prompt. Each subdirectory corresponds to one Claude Code project; the name is the project's working directory with non-alphanumeric characters replaced by `-`. Example: `-Users-neochoon-WestbrookAI-skill-runtime-poc`.
 
 Each subdirectory contains `*.jsonl` session files. One file per session.
 
 To find today's sessions:
 
-1. List directories under `/host-claude-projects/`.
+1. List directories under the `sessions` server root path.
 2. For each directory, list `*.jsonl` files.
 3. For each file, read the first ~20 lines to get the session start time, then check the file modification time (or a recent line's timestamp) to determine if there was activity today (in `Australia/Sydney` timezone).
 4. Skip files with no activity today.
