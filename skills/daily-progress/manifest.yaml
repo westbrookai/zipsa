@@ -79,7 +79,7 @@ spec:
         - mcp__notion__notion-create-pages
       limits:
         max_turns: 5
-        max_cost_usd: 0.05
+        max_cost_usd: 0.12
         timeout_seconds: 60
 
     - id: discover
@@ -92,7 +92,7 @@ spec:
         - Bash(python3:*)
       limits:
         max_turns: 4
-        max_cost_usd: 0.04
+        max_cost_usd: 0.10
         timeout_seconds: 30
 
     - id: analyze
@@ -102,9 +102,9 @@ spec:
       allowed_tools:
         - mcp__sessions__read_file
       limits:
-        max_turns: 14
-        max_cost_usd: 0.25
-        timeout_seconds: 180
+        max_turns: 25
+        max_cost_usd: 1.00
+        timeout_seconds: 300
 
     - id: persist
       goal: |
@@ -116,11 +116,11 @@ spec:
         - mcp__notion__notion-update-page
       limits:
         max_turns: 8
-        max_cost_usd: 0.15
+        max_cost_usd: 0.30
         timeout_seconds: 120
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 35
-    max_cost_usd: 0.60
-    timeout_seconds: 420
+    max_turns: 50
+    max_cost_usd: 1.60
+    timeout_seconds: 600
