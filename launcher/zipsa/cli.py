@@ -267,6 +267,7 @@ def list_installed():
     home_subdirs = list(home.iterdir()) if home.exists() else []
 
     installed = []
+    invalid: list[tuple[str, str]] = []
     for item in sorted(sd.iterdir()):
         if not item.is_dir() and not item.is_symlink():
             continue
@@ -275,7 +276,13 @@ def list_installed():
             continue
         try:
             skill = Skill.load(item)
-        except Exception:
+        except ValidationError as e:
+            first = e.errors()[0]
+            loc = ".".join(str(p) for p in first["loc"])
+            invalid.append((item.name, f"{loc}: {first['msg']}"))
+            continue
+        except Exception as e:
+            invalid.append((item.name, str(e).splitlines()[0]))
             continue
 
         install_json = item / "_install.json"
@@ -320,11 +327,14 @@ def list_installed():
             "item": item,
         })
 
-    if not installed:
+    if not installed and not invalid:
         typer.echo("No installed skills.")
         return
 
-    typer.echo(f"Installed skills ({len(installed)}):\n")
+    if installed:
+        typer.echo(f"Installed skills ({len(installed)}):\n")
+    else:
+        typer.echo("No valid installed skills.\n")
 
     for entry in installed:
         skill = entry["skill"]
@@ -354,6 +364,15 @@ def list_installed():
             src_str = typer.style(meta["source"], fg=typer.colors.BRIGHT_BLACK)
             typer.echo(f"    {typer.style('Source:', fg=typer.colors.BRIGHT_BLACK)} {src_str}")
 
+        typer.echo()
+
+    if invalid:
+        header = typer.style(
+            f"Invalid manifests ({len(invalid)}):", fg=typer.colors.YELLOW, bold=True
+        )
+        typer.echo(header)
+        for name, reason in invalid:
+            typer.echo(f"  {typer.style(name, fg=typer.colors.YELLOW)} — {reason}")
         typer.echo()
 
 
