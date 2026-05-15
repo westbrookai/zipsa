@@ -979,3 +979,70 @@ class TestDevOverlayIntegration:
         assert not any("agenthud" in s for s in cmd)
         joined = " ".join(cmd)
         assert "npm link" not in joined
+
+
+class TestSpecMountsApplied:
+    """spec.mounts entries are added to the docker run command as -v args."""
+
+    def _make_skill_with_mounts(self, tmp_path, mounts: list[dict]):
+        """Build a tiny skill manifest with given spec.mounts."""
+        import yaml
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "mounts": mounts,
+            },
+        }))
+        (skill_dir / "SKILL.md").write_text("# Test")
+        return Skill.load(skill_dir)
+
+    def test_single_mount_added(self, tmp_path):
+        skill = self._make_skill_with_mounts(tmp_path, [
+            {"host": str(tmp_path / "data"), "container": "/data", "mode": "ro"},
+        ])
+        executor = DockerExecutor()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x", claude_json_path=claude_json_path, env={},
+        )
+        assert f"{tmp_path / 'data'}:/data:ro" in cmd
+
+    def test_tilde_in_host_expanded(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        skill = self._make_skill_with_mounts(tmp_path, [
+            {"host": "~/myhome", "container": "/myhome", "mode": "ro"},
+        ])
+        executor = DockerExecutor()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x", claude_json_path=claude_json_path, env={},
+        )
+        assert f"{tmp_path}/myhome:/myhome:ro" in cmd
+
+    def test_multiple_mounts_added(self, tmp_path):
+        skill = self._make_skill_with_mounts(tmp_path, [
+            {"host": str(tmp_path / "a"), "container": "/a", "mode": "ro"},
+            {"host": str(tmp_path / "b"), "container": "/b", "mode": "rw"},
+        ])
+        executor = DockerExecutor()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x", claude_json_path=claude_json_path, env={},
+        )
+        assert f"{tmp_path / 'a'}:/a:ro" in cmd
+        assert f"{tmp_path / 'b'}:/b:rw" in cmd
+
+    def test_empty_mounts_no_extra_args(self, tmp_path):
+        skill = self._make_skill_with_mounts(tmp_path, [])
+        executor = DockerExecutor()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x", claude_json_path=claude_json_path, env={},
+        )
+        assert not any(":/a:" in s or ":/b:" in s for s in cmd)

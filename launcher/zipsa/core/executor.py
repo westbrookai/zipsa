@@ -827,6 +827,11 @@ class DockerExecutor:
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
+        # Generic spec.mounts entries — explicit container path, independent of MCP
+        for m in skill.manifest.spec.mounts:
+            host_path = Path(m.host).expanduser().resolve()
+            cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+
         # MCP debug file mount (bind-mount host log file into container)
         if mcp_debug_host:
             cmd.extend(["-v", f"{mcp_debug_host}:/home/agent/mcp-debug.log"])
