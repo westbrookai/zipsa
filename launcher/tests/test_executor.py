@@ -895,3 +895,87 @@ class TestSingleShotPhaseAllow:
         # test-skill's manifest declares Read, Write
         assert "Read" in data["allowed_tools"]
         assert "Write" in data["allowed_tools"]
+
+
+class TestDevOverlayIntegration:
+    """ZIPSA_DEV_OVERLAY adds mounts, preamble, and env to docker commands."""
+
+    def test_overlay_mounts_appear_in_docker_cmd(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text(_yaml.dump({
+            "mounts": ["/host/agenthud:/host/agenthud:rw"],
+        }))
+        monkeypatch.setenv("ZIPSA_DEV_OVERLAY", str(overlay_file))
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        assert "/host/agenthud:/host/agenthud:rw" in cmd
+
+    def test_overlay_preamble_extends_cp_preamble(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text(_yaml.dump({
+            "preamble": ["cd /x", "npm link"],
+        }))
+        monkeypatch.setenv("ZIPSA_DEV_OVERLAY", str(overlay_file))
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        joined = " ".join(cmd)
+        # Original cp preamble preserved
+        assert "cp /.zipsa/.claude.json" in joined
+        # Overlay preamble appended (joined with &&)
+        assert "cd /x && npm link" in joined
+
+    def test_overlay_env_merged_into_env_file(self, tmp_path, monkeypatch):
+        import yaml as _yaml
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text(_yaml.dump({
+            "env": {"AGENTHUD_DEV": "1", "DEBUG": "true"},
+        }))
+        monkeypatch.setenv("ZIPSA_DEV_OVERLAY", str(overlay_file))
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json()
+
+        executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=claude_json_path, env={"EXISTING": "yes"},
+        )
+        env_file = zipsa_home() / "minimal@1.0.0" / ".env"
+        contents = env_file.read_text()
+        assert "AGENTHUD_DEV=1" in contents
+        assert "DEBUG=true" in contents
+        assert "EXISTING=yes" in contents
+
+    def test_no_overlay_when_env_unset(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ZIPSA_DEV_OVERLAY", raising=False)
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        assert not any("agenthud" in s for s in cmd)
+        joined = " ".join(cmd)
+        assert "npm link" not in joined

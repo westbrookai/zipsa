@@ -58,3 +58,6 @@ coverage/
 # zipsa runtime and execution files
 .zipsa-mcp-*.json
 .zipsa/
+
+# Per-developer overlay files (ZIPSA_DEV_OVERLAY). Not for distribution.
+/dev-overlays/

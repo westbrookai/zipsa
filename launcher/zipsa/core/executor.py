@@ -8,6 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
+from .dev_overlay import load_dev_overlay
 from .skill import Skill
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
@@ -33,6 +34,21 @@ class DockerExecutor:
         """
         self.runtime = get_runtime(runtime)
         self.image = image
+        self.dev_overlay = load_dev_overlay()
+        if self.dev_overlay is not None:
+            desc = self.dev_overlay.description or "(no description)"
+            mounts_n = len(self.dev_overlay.mounts)
+            preamble_n = (
+                len(self.dev_overlay.preamble)
+                if isinstance(self.dev_overlay.preamble, list)
+                else (1 if self.dev_overlay.preamble else 0)
+            )
+            env_n = len(self.dev_overlay.env)
+            print(
+                f"[zipsa] dev overlay active: {desc} "
+                f"(mounts={mounts_n}, preamble={preamble_n}, env={env_n})",
+                file=sys.stderr,
+            )
 
     def run(
         self,
@@ -777,9 +793,13 @@ class DockerExecutor:
         if _global_env.exists():
             cmd.extend(["--env-file", str(_global_env)])
 
-        # Per-execution env file (~/.zipsa/<name>@<version>/.env), added last to take precedence
+        # Per-execution env file (~/.zipsa/<name>@<version>/.env), added last to take precedence.
+        # Dev overlay env is merged in (overlay can override skill-supplied env).
         skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
-        env_file = self._write_env_file(skill_data_dir, env)
+        merged_env = dict(env)
+        if self.dev_overlay is not None:
+            merged_env.update(self.dev_overlay.env)
+        env_file = self._write_env_file(skill_data_dir, merged_env)
         cmd.extend(["--env-file", str(env_file)])
 
         # Mount skill data directory read-only to /.zipsa.
@@ -811,6 +831,11 @@ class DockerExecutor:
         if mcp_debug_host:
             cmd.extend(["-v", f"{mcp_debug_host}:/home/agent/mcp-debug.log"])
 
+        # Dev overlay mounts (last so they can shadow earlier ones if path collides)
+        if self.dev_overlay is not None:
+            for mount in self.dev_overlay.mounts:
+                cmd.extend(["-v", mount])
+
         # Image
         cmd.append(self.image)
 
@@ -822,6 +847,8 @@ class DockerExecutor:
             "mkdir -p /home/agent/.claude && "
             "cp /.zipsa/settings.json /home/agent/.claude/settings.json"
         )
+        if self.dev_overlay is not None and self.dev_overlay.preamble_str:
+            cp_preamble = f"{cp_preamble} && {self.dev_overlay.preamble_str}"
 
         if shell:
             # exec replaces the copy-shell with a fresh interactive bash
