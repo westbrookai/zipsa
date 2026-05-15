@@ -208,6 +208,32 @@ class TestListCommand:
         assert "daily-progress" in result.output
         assert "0.1.0" in result.output
 
+    def test_list_surfaces_invalid_manifests(self, tmp_path):
+        """Manifests that fail validation should be reported, not silently skipped."""
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        bad_dir = zipsa_home / "skills" / "broken-skill"
+        bad_dir.mkdir(parents=True)
+        # Bare 'Bash' is invalid under strict mode
+        (bad_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "broken-skill", "version": "0.1.0"},
+            "spec": {
+                "purpose": "Test",
+                "instructions": "./SKILL.md",
+                "tools": {"builtin": ["Bash"]},
+            },
+        }))
+        (bad_dir / "SKILL.md").write_text("# x")
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0
+        assert "Invalid manifests" in result.output
+        assert "broken-skill" in result.output
+
     def test_list_empty_when_no_skills_installed(self, tmp_path):
         """list reports no installed skills."""
         zipsa_home = tmp_path / ".zipsa"

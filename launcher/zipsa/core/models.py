@@ -1,7 +1,38 @@
 """Pydantic models for skill manifest parsing and validation."""
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional
+
+
+_BASH_PATTERN_RE = re.compile(r"^Bash\(([^)]+):\*\)$")
+
+
+def _validate_bash_entries(entries: list[str]) -> list[str]:
+    """Reject bare 'Bash' and malformed Bash() patterns.
+
+    Allowed forms:
+        - Non-Bash tool names (passed through unchanged)
+        - 'Bash(*)' — explicit wildcard
+        - 'Bash(<prefix>:*)' — prefix-restricted
+
+    Raises:
+        ValueError if a bare 'Bash' or malformed 'Bash(...)' entry is found.
+    """
+    for entry in entries:
+        if entry == "Bash":
+            raise ValueError(
+                "bare 'Bash' is not allowed; use 'Bash(*)' for wildcard "
+                "or 'Bash(<prefix>:*)' to restrict commands"
+            )
+        if entry.startswith("Bash(") and entry != "Bash(*)":
+            if not _BASH_PATTERN_RE.match(entry):
+                raise ValueError(
+                    f"invalid Bash pattern {entry!r}; expected 'Bash(<prefix>:*)' "
+                    "or 'Bash(*)'"
+                )
+    return entries
 
 
 class SkillMetadata(BaseModel):
@@ -62,6 +93,11 @@ class SkillTools(BaseModel):
 
     builtin: list[str] = Field(default_factory=list)  # Built-in Claude Code tools
 
+    @field_validator("builtin")
+    @classmethod
+    def _check_bash_pattern(cls, v: list[str]) -> list[str]:
+        return _validate_bash_entries(v)
+
 
 class SkillLimits(BaseModel):
     """Resource limits for skill execution."""
@@ -78,6 +114,11 @@ class PhaseSpec(BaseModel):
     goal: str
     allowed_tools: list[str] = Field(default_factory=list)
     limits: Optional[SkillLimits] = None
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _check_bash_pattern(cls, v: list[str]) -> list[str]:
+        return _validate_bash_entries(v)
 
 
 class SkillSpec(BaseModel):

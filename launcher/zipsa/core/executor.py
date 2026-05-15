@@ -113,6 +113,9 @@ class DockerExecutor:
                 return None
 
             if shell:
+                # Hook needs an allow file even in shell mode (where the user
+                # may invoke claude manually). Use the skill's full tool set.
+                self._write_default_phase_allow_file(claude_json_path.parent, skill)
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
 
@@ -123,7 +126,8 @@ class DockerExecutor:
                     mcp_debug, extra_docker_opts,
                 )
 
-            # Single-phase: existing path
+            # Single-phase: PreToolUse hook needs phase-allow.json too.
+            self._write_default_phase_allow_file(claude_json_path.parent, skill)
             return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file, user_input)
 
         except Exception:
@@ -551,6 +555,9 @@ class DockerExecutor:
 
                 while True:
                     phase_allowed_tools = ",".join(phase.allowed_tools)
+                    self._write_phase_allow_file(
+                        claude_json_path.parent, phase.id, list(phase.allowed_tools),
+                    )
                     user_message = self._build_user_message(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input, user_answer,
@@ -668,6 +675,36 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    def _write_phase_allow_file(
+        self,
+        output_dir: Path,
+        phase_id: str,
+        allowed_tools: list[str],
+    ) -> Path:
+        """Write the per-phase tool allow list consumed by the PreToolUse hook.
+
+        The file lives next to .claude.json so it's already covered by the
+        /.zipsa read-only mount.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "phase-allow.json"
+        path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
+        return path
+
+    def _write_default_phase_allow_file(self, output_dir: Path, skill: "Skill") -> Path:
+        """Write phase-allow.json for single-shot (no-phases) skills.
+
+        The hook is mounted unconditionally, so single-shot skills also need
+        an allow list — otherwise every tool call would be denied. Use the
+        skill's full declared tool set (spec.tools.builtin + per-MCP-server
+        allowed_tools, prefixed as mcp__<server>__<tool>).
+        """
+        tools = list(skill.manifest.spec.tools.builtin)
+        for server in skill.manifest.spec.mcp:
+            for t in server.allowed_tools:
+                tools.append(f"mcp__{server.name}__{t}")
+        return self._write_phase_allow_file(output_dir, "main", tools)
+
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
         """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
         oauth_servers = [
@@ -752,6 +789,12 @@ class DockerExecutor:
         skill_data_dir = claude_json_path.parent
         cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
 
+        # Mount the PreToolUse hook script (read-only). The hook reads
+        # /.zipsa/phase-allow.json (regenerated per phase) to enforce the
+        # phase's tool whitelist and Bash command prefixes.
+        hook_script = Path(__file__).parent.parent / "hooks" / "pretooluse.py"
+        cmd.extend(["-v", f"{hook_script}:/zipsa-hooks/pretooluse.py:ro"])
+
         # Ephemeral npm cache volume shared across phases (avoids re-downloading per phase)
         if npm_volume:
             cmd.extend(["-v", f"{npm_volume}:/npm-cache", "-e", "NPM_CONFIG_CACHE=/npm-cache"])
@@ -772,8 +815,13 @@ class DockerExecutor:
         cmd.append(self.image)
 
         # Preamble copies .claude.json from the read-only /.zipsa mount into the
-        # container's overlay FS so Claude Code can atomically rename it.
-        cp_preamble = "cp /.zipsa/.claude.json /home/agent/.claude.json"
+        # container's overlay FS so Claude Code can atomically rename it. Also
+        # installs settings.json (with PreToolUse hook config) into ~/.claude/.
+        cp_preamble = (
+            "cp /.zipsa/.claude.json /home/agent/.claude.json && "
+            "mkdir -p /home/agent/.claude && "
+            "cp /.zipsa/settings.json /home/agent/.claude/settings.json"
+        )
 
         if shell:
             # exec replaces the copy-shell with a fresh interactive bash

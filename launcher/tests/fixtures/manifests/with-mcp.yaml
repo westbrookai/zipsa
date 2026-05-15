@@ -9,7 +9,7 @@ spec:
   tools:
     builtin:
       - WebFetch
-      - Bash
+      - Bash(*)
   mcp:
     - name: filesystem
       type: stdio

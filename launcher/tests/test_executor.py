@@ -801,3 +801,97 @@ class TestSkillState:
             state = executor._load_skill_state(skill)
 
         assert "db_id" not in state
+
+
+class TestPreToolUseHookMount:
+    """Executor must mount the PreToolUse hook script and per-phase allow file."""
+
+    def test_hook_script_is_mounted(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="x",
+            claude_json_path=claude_json_path,
+            env={},
+        )
+
+        cmd_str = " ".join(cmd)
+        # Hook script must be mounted at fixed container path
+        assert "/zipsa-hooks/pretooluse.py:ro" in cmd_str
+        # The host source must be the launcher's hooks/pretooluse.py
+        assert "zipsa/hooks/pretooluse.py" in cmd_str
+
+    def test_phase_allow_path_env_set_when_provided(self, tmp_path):
+        """When phase_id is provided, executor should also pass ZIPSA_PHASE_ALLOW path env."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        # Generate the per-phase allow file (executor should mount its dir under /.zipsa)
+        phase_allow = claude_json_path.parent / "phase-allow.json"
+        phase_allow.write_text(json.dumps({"phase_id": "discover", "allowed_tools": ["Bash(find:*)"]}))
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="x",
+            claude_json_path=claude_json_path,
+            env={},
+            phase_id="discover",
+        )
+        cmd_str = " ".join(cmd)
+        # phase-allow.json comes through the existing /.zipsa mount; hook reads default path
+        assert "/.zipsa" in cmd_str
+        # No env var override needed when default container path is used
+
+
+class TestWritePhaseAllowFile:
+    """Executor should write phase-allow.json before each phase runs."""
+
+    def test_phase_allow_file_written(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+
+        executor._write_phase_allow_file(
+            output_dir=tmp_path,
+            phase_id="discover",
+            allowed_tools=["Bash(find:*)", "Bash(rm:*)"],
+        )
+
+        path = tmp_path / "phase-allow.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data == {
+            "phase_id": "discover",
+            "allowed_tools": ["Bash(find:*)", "Bash(rm:*)"],
+        }
+
+
+class TestSingleShotPhaseAllow:
+    """Single-shot (no phases) skills must also write phase-allow.json so the
+    PreToolUse hook can find the skill's full tool list."""
+
+    def test_single_shot_writes_phase_allow_with_all_tools(self, tmp_path):
+        """build_claude_json side-effect writes phase-allow.json with the full
+        skill tool list so the hook permits whatever the skill declared."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        # Executor exposes a helper that writes the default (single-shot)
+        # phase-allow.json containing every tool the skill is allowed to use.
+        executor._write_default_phase_allow_file(claude_json_path.parent, skill)
+
+        path = tmp_path / "phase-allow.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data["phase_id"] == "main"
+        # test-skill's manifest declares Read, Write
+        assert "Read" in data["allowed_tools"]
+        assert "Write" in data["allowed_tools"]
