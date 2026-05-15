@@ -51,8 +51,7 @@ spec:
         - notion-fetch
 
   tools:
-    builtin:
-      - Bash
+    builtin: []
 
   # Skill-specific configuration. Skill author defines, user may override.
   config:
@@ -87,7 +86,10 @@ spec:
       goal: |
         Find Claude Code session files modified on the target date.
       allowed_tools:
-        - Bash
+        - Bash(touch:*)
+        - Bash(find:*)
+        - Bash(rm:*)
+        - Bash(python3:*)
       limits:
         max_turns: 4
         max_cost_usd: 0.04
