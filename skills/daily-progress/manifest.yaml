@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.2.0
+  version: 0.3.0
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -20,23 +20,15 @@ spec:
   model:
     name: claude-opus-4-7
 
+  # Bind-mount Claude's session logs at their default location so agenthud
+  # picks them up without any extra configuration.
+  mounts:
+    - host: ~/.claude/projects
+      container: /home/agent/.claude/projects
+      mode: ro
+
   # MCP servers used by this skill
   mcp:
-    # Local stdio: read Claude Code session logs (read-only)
-    - name: sessions
-      type: stdio
-      command: npx
-      args:
-        - "@modelcontextprotocol/server-filesystem@2025.11.25"
-      mount:
-        host: "~/.claude/projects"
-        mode: ro
-      allowed_tools:
-        - search_files
-        - get_file_info
-        - list_directory
-        - read_file
-
     # Remote http: write to Notion
     - name: notion
       type: http
@@ -59,6 +51,7 @@ spec:
     db_name: "zipsa-daily-log"
     timezone: "Australia/Sydney"
     default_target_date: yesterday   # yesterday | today
+    agenthud_version: "0.8.4"        # pinned for reproducibility
 
   # Cross-run state schema (managed by launcher via state_updates)
   state_schema:
@@ -70,8 +63,8 @@ spec:
   phases:
     - id: precheck
       goal: |
-        Verify MCP connections, resolve target date from the user query,
-        and locate or create the Notion database.
+        Verify Notion is reachable, resolve target date from the user
+        query, and locate or create the Notion database.
       allowed_tools:
         - mcp__notion__notion-search
         - mcp__notion__notion-fetch
@@ -82,29 +75,16 @@ spec:
         max_cost_usd: 0.12
         timeout_seconds: 60
 
-    - id: discover
+    - id: report
       goal: |
-        Find Claude Code session files modified on the target date.
+        Run agenthud to fetch a structured per-project activity report for
+        the target date, then group/summarize for Notion.
       allowed_tools:
-        - Bash(touch:*)
-        - Bash(find:*)
-        - Bash(rm:*)
-        - Bash(python3:*)
+        - Bash(npx:*)
       limits:
-        max_turns: 4
-        max_cost_usd: 0.10
-        timeout_seconds: 30
-
-    - id: analyze
-      goal: |
-        Read each discovered session and extract per-project information:
-        session goals, tools used, and key outcomes.
-      allowed_tools:
-        - mcp__sessions__read_file
-      limits:
-        max_turns: 25
-        max_cost_usd: 1.00
-        timeout_seconds: 300
+        max_turns: 6
+        max_cost_usd: 0.30
+        timeout_seconds: 180
 
     - id: persist
       goal: |
@@ -121,6 +101,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 50
-    max_cost_usd: 1.60
-    timeout_seconds: 600
+    max_turns: 22
+    max_cost_usd: 0.80
+    timeout_seconds: 420
