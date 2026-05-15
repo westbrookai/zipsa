@@ -8,6 +8,7 @@ from zipsa.core.models import (
     MCPServerStdio,
     MCPServerHTTP,
     MCPServerAuth,
+    PhaseSpec,
     SkillTools,
     VolumeMount,
 )
@@ -204,12 +205,12 @@ class TestSkillManifest:
             "spec": {
                 "purpose": "Test",
                 "instructions": "./SKILL.md",
-                "tools": {"builtin": ["WebFetch", "Bash"]},
+                "tools": {"builtin": ["WebFetch", "Bash(*)"]},
             },
         }
         manifest = SkillManifest.model_validate(data)
         assert "WebFetch" in manifest.spec.tools.builtin
-        assert "Bash" in manifest.spec.tools.builtin
+        assert "Bash(*)" in manifest.spec.tools.builtin
 
     def test_mcp_server_allowed_tools(self):
         """MCP server allowed_tools lives on the server definition."""
@@ -275,3 +276,45 @@ class TestSkillManifest:
         }
         with pytest.raises(ValidationError):
             SkillManifest.model_validate(data)
+
+
+class TestBashToolPatternValidation:
+    """Bash tool entries must use Bash(*) or Bash(prefix:*); bare 'Bash' is rejected."""
+
+    def test_phase_bare_bash_rejected(self):
+        with pytest.raises(ValidationError, match="Bash"):
+            PhaseSpec(id="x", goal="g", allowed_tools=["Bash"])
+
+    def test_phase_bash_wildcard_ok(self):
+        phase = PhaseSpec(id="x", goal="g", allowed_tools=["Bash(*)"])
+        assert "Bash(*)" in phase.allowed_tools
+
+    def test_phase_bash_prefix_ok(self):
+        phase = PhaseSpec(
+            id="x", goal="g", allowed_tools=["Bash(git:*)", "Bash(find:*)"]
+        )
+        assert len(phase.allowed_tools) == 2
+
+    def test_phase_invalid_bash_syntax_rejected(self):
+        with pytest.raises(ValidationError, match="Bash"):
+            PhaseSpec(id="x", goal="g", allowed_tools=["Bash(git)"])
+
+    def test_phase_other_tools_pass_through(self):
+        phase = PhaseSpec(
+            id="x",
+            goal="g",
+            allowed_tools=["Read", "Edit", "mcp__notion__notion-search"],
+        )
+        assert len(phase.allowed_tools) == 3
+
+    def test_skilltools_bare_bash_rejected(self):
+        with pytest.raises(ValidationError, match="Bash"):
+            SkillTools(builtin=["Bash"])
+
+    def test_skilltools_bash_wildcard_ok(self):
+        tools = SkillTools(builtin=["Bash(*)"])
+        assert tools.builtin == ["Bash(*)"]
+
+    def test_skilltools_other_tools_ok(self):
+        tools = SkillTools(builtin=["Read", "Edit"])
+        assert tools.builtin == ["Read", "Edit"]

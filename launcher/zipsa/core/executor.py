@@ -551,6 +551,9 @@ class DockerExecutor:
 
                 while True:
                     phase_allowed_tools = ",".join(phase.allowed_tools)
+                    self._write_phase_allow_file(
+                        claude_json_path.parent, phase.id, list(phase.allowed_tools),
+                    )
                     user_message = self._build_user_message(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input, user_answer,
@@ -668,6 +671,22 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    def _write_phase_allow_file(
+        self,
+        output_dir: Path,
+        phase_id: str,
+        allowed_tools: list[str],
+    ) -> Path:
+        """Write the per-phase tool allow list consumed by the PreToolUse hook.
+
+        The file lives next to .claude.json so it's already covered by the
+        /.zipsa read-only mount.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "phase-allow.json"
+        path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
+        return path
+
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
         """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
         oauth_servers = [
@@ -751,6 +770,12 @@ class DockerExecutor:
         # when the file itself is a bind-mount point.
         skill_data_dir = claude_json_path.parent
         cmd.extend(["-v", f"{skill_data_dir}:/.zipsa:ro"])
+
+        # Mount the PreToolUse hook script (read-only). The hook reads
+        # /.zipsa/phase-allow.json (regenerated per phase) to enforce the
+        # phase's tool whitelist and Bash command prefixes.
+        hook_script = Path(__file__).parent.parent / "hooks" / "pretooluse.py"
+        cmd.extend(["-v", f"{hook_script}:/zipsa-hooks/pretooluse.py:ro"])
 
         # Ephemeral npm cache volume shared across phases (avoids re-downloading per phase)
         if npm_volume:

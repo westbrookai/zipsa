@@ -181,6 +181,19 @@ class Skill:
                 container_workspace: {
                     "hasTrustDialogAccepted": True,
                     "mcpServers": mcp_servers,
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "*",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "/zipsa-hooks/pretooluse.py",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
                 }
             },
         }

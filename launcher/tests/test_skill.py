@@ -149,7 +149,7 @@ class TestAllowedTools:
 
         # Should have builtin tools
         assert "WebFetch" in tools
-        assert "Bash" in tools
+        assert "Bash(*)" in tools
 
         # MCP tools from server.allowed_tools
         assert "mcp__filesystem__read_file" in tools
@@ -163,7 +163,7 @@ class TestAllowedTools:
         tools = skill.get_allowed_tools().split(",")
 
         assert tools[0] == "WebFetch"
-        assert tools[1] == "Bash"
+        assert tools[1] == "Bash(*)"
         assert tools[2].startswith("mcp__")
 
     def test_get_allowed_tools_empty_allowed_tools(self):
@@ -239,6 +239,33 @@ class TestClaudeJson:
         assert "/home/agent/workspace" in config["projects"]
         assert config["projects"]["/home/agent/workspace"]["hasTrustDialogAccepted"] is True
         assert "mcpServers" in config["projects"]["/home/agent/workspace"]
+
+    def test_build_claude_json_includes_pretooluse_hook(self, tmp_path):
+        """The generated .claude.json must register the zipsa PreToolUse hook."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+
+        manifest = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md"},
+        }
+        import yaml
+        (skill_dir / "manifest.yaml").write_text(yaml.dump(manifest))
+        (skill_dir / "SKILL.md").write_text("Test")
+
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        config = json.loads(claude_json_path.read_text())
+
+        project = config["projects"]["/home/agent/workspace"]
+        assert "hooks" in project
+        pretool_hooks = project["hooks"]["PreToolUse"]
+        assert len(pretool_hooks) == 1
+        assert pretool_hooks[0]["matcher"] == "*"
+        commands = [h["command"] for h in pretool_hooks[0]["hooks"]]
+        assert "/zipsa-hooks/pretooluse.py" in commands
 
     def test_build_claude_json_with_stdio_mcp(self, tmp_path):
         """Stdio MCP servers should be in /workspace project mcpServers."""
