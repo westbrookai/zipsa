@@ -97,13 +97,14 @@ spec:
         - GITHUB_TOKEN
 
   # Tool whitelist
+  # MCP tools are declared per-server inside each spec.mcp[].allowed_tools.
+  # Built-in (Claude Code) tools go here:
   tools:
     builtin:
       - Read
       - Write
-    mcp:
-      - filesystem:read_file
-      - notion:notion-create-pages
+      - Bash(git:*)        # Bash requires explicit prefix or wildcard
+      - Bash(*)            # explicit wildcard if you really need everything
 
   # Resource limits
   limits:
@@ -218,27 +219,96 @@ runtimes:
 
 ### 6. Tool Allowlist
 
-**Builtin tools:**
+The allowlist is **enforced** by a PreToolUse hook the launcher injects
+into every container. Anything not on the list is denied at runtime, so
+keep it tight.
+
+**Built-in tools** (Claude Code's own tools):
 ```yaml
 tools:
   builtin:
     - Read
     - Write
-    - Bash
     - Grep
     - Glob
+    - Bash(git:*)        # see "Bash command restriction" below
 ```
 
-**MCP tools:**
+**MCP tools** are declared on each MCP server, not under `tools`:
 ```yaml
-tools:
+spec:
   mcp:
-    - server-name:method-name
-    - filesystem:read_file
-    - notion:notion-create-pages
+    - name: filesystem
+      type: stdio
+      command: npx
+      args: ["@modelcontextprotocol/server-filesystem"]
+      allowed_tools:
+        - read_file
+        - list_directory
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      allowed_tools:
+        - notion-create-pages
 ```
 
-Format: `server-name:method-name` (converted to `mcp__server-name__method-name` internally)
+The hook sees them as `mcp__<server>__<tool>` (e.g. `mcp__notion__notion-create-pages`).
+
+#### Bash command restriction
+
+`Bash` is too powerful to whitelist as-is, so bare `Bash` is rejected at
+manifest-load time. Declare what commands are actually needed:
+
+| Form | Effect |
+|---|---|
+| `Bash(*)` | wildcard — every command allowed (use sparingly) |
+| `Bash(git:*)` | only commands whose first word is `git` |
+| `Bash` | rejected — must be one of the above |
+
+Compound commands are checked per segment: `find . && rm /tmp/x` requires
+both `Bash(find:*)` and `Bash(rm:*)`. Constructs that could circumvent
+the prefix check (`bash -c`, `sh -c`, `eval`, `$(...)`, backticks) are
+always denied.
+
+### 7. Phased Execution (optional)
+
+Skills can split work into phases, each with its own goal, tool list,
+and resource budget. Each phase runs in its own container; the previous
+phase's `next_phase_input` is passed to the next.
+
+```yaml
+spec:
+  phases:
+    - id: discover
+      goal: Find session files modified today
+      allowed_tools:
+        - Bash(find:*)
+        - Bash(touch:*)
+      limits:
+        max_turns: 4
+        max_cost_usd: 0.10
+        timeout_seconds: 30
+
+    - id: analyze
+      goal: Read each session and summarize per project
+      allowed_tools:
+        - mcp__sessions__read_file
+      limits:
+        max_turns: 25
+        max_cost_usd: 1.00
+
+  # Aggregate budget across all phases (run aborts if exceeded)
+  limits:
+    max_turns: 50
+    max_cost_usd: 1.60
+    timeout_seconds: 600
+```
+
+Without `phases:`, the skill runs once with the full `tools.builtin` +
+per-server `allowed_tools` set. With phases, each phase's `allowed_tools`
+overrides what the agent can call during that phase.
+
+See `skills/daily-progress/` for a full multi-phase example.
 
 ---
 
@@ -334,10 +404,10 @@ mcp:
     type: stdio
     command: npx
     args: ["@modelcontextprotocol/server-filesystem", "/workspace"]
+    allowed_tools: [read_file, write_file]
 
 tools:
   builtin: [Read, Write]
-  mcp: [filesystem:read_file, filesystem:write_file]
 ```
 
 ### Pattern 2: API Integration
@@ -350,9 +420,7 @@ mcp:
     url: https://api.example.com/mcp
     headersHelper: "echo \"{\\\"Authorization\\\": \\\"Bearer $API_KEY\\\"}\""
     env: [MY_API_KEY]
-
-tools:
-  mcp: [myapi:search, myapi:create]
+    allowed_tools: [search, create]
 ```
 
 ### Pattern 3: Multi-Source Data
@@ -363,15 +431,11 @@ mcp:
   - name: filesystem
     type: stdio
     # ... filesystem config
+    allowed_tools: [read_file]
   - name: notion
     type: http
     # ... notion config
-
-tools:
-  mcp:
-    - filesystem:read_file
-    - notion:notion-search
-    - notion:notion-create-pages
+    allowed_tools: [notion-search, notion-create-pages]
 ```
 
 ---
@@ -405,8 +469,16 @@ npx @modelcontextprotocol/server-filesystem --help  # Test server
 
 ### Tool not allowed
 ```bash
-# Error: "Tool X is not allowed"
-# Add to tools.builtin or tools.mcp in manifest.yaml
+# Hook denial in agent output: "tool 'X' not in allowed list for this phase"
+# Fix: add the tool to the current phase's allowed_tools (or tools.builtin
+# for single-shot skills, or the relevant mcp server's allowed_tools).
+```
+
+### Bash command denied
+```bash
+# Hook denial: "command 'curl' not allowed; allowed: Bash(git:*), Bash(rm:*)"
+# Fix: add Bash(curl:*) to the phase's allowed_tools, or use Bash(*) to
+# permit any command (dangerous — only for trusted skills).
 ```
 
 ### Environment variable not set
