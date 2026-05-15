@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.3.0
+  version: 0.3.1
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -56,6 +56,7 @@ spec:
   # Cross-run state schema (managed by launcher via state_updates)
   state_schema:
     db_id: string                    # Notion database ID once resolved
+    data_source_id: string           # Notion data source ID (required for create-pages)
     last_run_date: string            # ISO date of the most recent run
 
   # Phased execution. Each phase runs in its own sandboxed turn budget.
@@ -95,12 +96,12 @@ spec:
         - mcp__notion__notion-create-pages
         - mcp__notion__notion-update-page
       limits:
-        max_turns: 8
-        max_cost_usd: 0.30
-        timeout_seconds: 120
+        max_turns: 12
+        max_cost_usd: 0.40
+        timeout_seconds: 150
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 22
-    max_cost_usd: 0.80
-    timeout_seconds: 420
+    max_turns: 26
+    max_cost_usd: 0.90
+    timeout_seconds: 450
