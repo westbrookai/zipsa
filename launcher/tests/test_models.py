@@ -9,6 +9,7 @@ from zipsa.core.models import (
     MCPServerHTTP,
     MCPServerAuth,
     PhaseSpec,
+    SkillMount,
     SkillTools,
     VolumeMount,
 )
@@ -318,3 +319,66 @@ class TestBashToolPatternValidation:
     def test_skilltools_other_tools_ok(self):
         tools = SkillTools(builtin=["Read", "Edit"])
         assert tools.builtin == ["Read", "Edit"]
+
+
+class TestSkillMount:
+    """spec.mounts entry — generic host:container bind mount, independent of MCP servers."""
+
+    def test_minimal_mount(self):
+        m = SkillMount(host="~/data", container="/data")
+        assert m.host == "~/data"
+        assert m.container == "/data"
+        assert m.mode == "ro"   # safe default
+
+    def test_explicit_rw(self):
+        m = SkillMount(host="~/data", container="/data", mode="rw")
+        assert m.mode == "rw"
+
+    def test_missing_host_rejected(self):
+        with pytest.raises(ValidationError):
+            SkillMount(container="/data")
+
+    def test_missing_container_rejected(self):
+        with pytest.raises(ValidationError):
+            SkillMount(host="~/data")
+
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValidationError):
+            SkillMount(host="~/data", container="/data", mode="bogus")
+
+    def test_container_must_be_absolute(self):
+        with pytest.raises(ValidationError, match="absolute"):
+            SkillMount(host="~/data", container="relative/path")
+
+
+class TestSpecMounts:
+    """spec.mounts is an optional list of SkillMount entries."""
+
+    def test_defaults_empty(self):
+        data = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {"purpose": "T", "instructions": "./SKILL.md"},
+        }
+        manifest = SkillManifest.model_validate(data)
+        assert manifest.spec.mounts == []
+
+    def test_multiple_mounts_parsed(self):
+        data = {
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {
+                "purpose": "T",
+                "instructions": "./SKILL.md",
+                "mounts": [
+                    {"host": "~/.claude/projects", "container": "/home/agent/claude-projects", "mode": "ro"},
+                    {"host": "~/data", "container": "/data", "mode": "rw"},
+                ],
+            },
+        }
+        manifest = SkillManifest.model_validate(data)
+        assert len(manifest.spec.mounts) == 2
+        assert manifest.spec.mounts[0].container == "/home/agent/claude-projects"
+        assert manifest.spec.mounts[1].mode == "rw"
