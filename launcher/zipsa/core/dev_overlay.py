@@ -54,8 +54,10 @@ def load_dev_overlay() -> Optional[DevOverlay]:
     """Load and validate the overlay file pointed to by ZIPSA_DEV_OVERLAY.
 
     Returns None when the env var is unset or empty. Raises FileNotFoundError
-    when the path is set but doesn't exist. Raises pydantic.ValidationError
-    when the file is malformed.
+    when the path is set but doesn't exist. Raises PermissionError when the
+    file isn't owned by the current user or is group/world-writable (someone
+    else could inject mounts or shell snippets into the dev's container).
+    Raises pydantic.ValidationError when the file is malformed.
     """
     raw = os.environ.get("ZIPSA_DEV_OVERLAY")
     if not raw:
@@ -63,5 +65,18 @@ def load_dev_overlay() -> Optional[DevOverlay]:
     path = Path(raw).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"ZIPSA_DEV_OVERLAY path not found: {path}")
+
+    st = path.stat()
+    if st.st_uid != os.getuid():
+        raise PermissionError(
+            f"overlay {path} is owned by uid={st.st_uid}, not the current user "
+            f"(uid={os.getuid()})"
+        )
+    if st.st_mode & 0o022:
+        raise PermissionError(
+            f"overlay {path} is group/world-writable (mode={oct(st.st_mode & 0o777)}); "
+            "tighten with `chmod go-w`"
+        )
+
     data = yaml.safe_load(path.read_text()) or {}
     return DevOverlay.model_validate(data)

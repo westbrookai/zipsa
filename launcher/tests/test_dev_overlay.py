@@ -93,6 +93,57 @@ class TestDevOverlayPreamble:
         assert o.preamble_str == ""
 
 
+class TestOverlayFilePermissions:
+    """Reject overlay files that aren't owned by the current user, or that
+    are writable by group/others — both would let another local actor
+    inject mounts/preamble into the dev's container."""
+
+    def test_rejects_world_writable_file(self, tmp_path):
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text("mounts: []\n")
+        overlay_file.chmod(0o666)   # world-writable
+        with patch.dict(os.environ, {"ZIPSA_DEV_OVERLAY": str(overlay_file)}):
+            with pytest.raises(PermissionError, match="writable"):
+                load_dev_overlay()
+
+    def test_rejects_group_writable_file(self, tmp_path):
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text("mounts: []\n")
+        overlay_file.chmod(0o664)   # group-writable
+        with patch.dict(os.environ, {"ZIPSA_DEV_OVERLAY": str(overlay_file)}):
+            with pytest.raises(PermissionError, match="writable"):
+                load_dev_overlay()
+
+    def test_accepts_owner_only_writable(self, tmp_path):
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text("mounts: []\n")
+        overlay_file.chmod(0o600)   # owner-only
+        with patch.dict(os.environ, {"ZIPSA_DEV_OVERLAY": str(overlay_file)}):
+            assert load_dev_overlay() is not None
+
+    def test_accepts_owner_writable_world_readable(self, tmp_path):
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text("mounts: []\n")
+        overlay_file.chmod(0o644)   # readable by others, only owner can write
+        with patch.dict(os.environ, {"ZIPSA_DEV_OVERLAY": str(overlay_file)}):
+            assert load_dev_overlay() is not None
+
+    def test_rejects_file_owned_by_other_user(self, tmp_path, monkeypatch):
+        """If the file's owner uid doesn't match the current process,
+        someone else could have planted it — reject."""
+        overlay_file = tmp_path / "overlay.yaml"
+        overlay_file.write_text("mounts: []\n")
+        overlay_file.chmod(0o600)
+
+        # We can't easily chown to another user without root, so spoof getuid.
+        real_uid = overlay_file.stat().st_uid
+        monkeypatch.setattr("zipsa.core.dev_overlay.os.getuid", lambda: real_uid + 1)
+
+        with patch.dict(os.environ, {"ZIPSA_DEV_OVERLAY": str(overlay_file)}):
+            with pytest.raises(PermissionError, match="owned by"):
+                load_dev_overlay()
+
+
 class TestDevOverlayMountValidation:
     """Mount entries must be 'host:container[:mode]' strings."""
 
