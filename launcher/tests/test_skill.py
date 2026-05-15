@@ -240,8 +240,12 @@ class TestClaudeJson:
         assert config["projects"]["/home/agent/workspace"]["hasTrustDialogAccepted"] is True
         assert "mcpServers" in config["projects"]["/home/agent/workspace"]
 
-    def test_build_claude_json_includes_pretooluse_hook(self, tmp_path):
-        """The generated .claude.json must register the zipsa PreToolUse hook."""
+    def test_build_claude_json_writes_settings_with_pretooluse_hook(self, tmp_path):
+        """build_claude_json must also write settings.json with the PreToolUse hook.
+
+        Hooks are read from ~/.claude/settings.json (not .claude.json), so the
+        executor copies this file into the container.
+        """
         skill_dir = tmp_path / "test-skill"
         skill_dir.mkdir()
 
@@ -256,12 +260,13 @@ class TestClaudeJson:
         (skill_dir / "SKILL.md").write_text("Test")
 
         skill = Skill.load(skill_dir)
-        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
-        config = json.loads(claude_json_path.read_text())
+        out_dir = tmp_path / "skill-data"
+        skill.build_claude_json(output_dir=out_dir)
 
-        project = config["projects"]["/home/agent/workspace"]
-        assert "hooks" in project
-        pretool_hooks = project["hooks"]["PreToolUse"]
+        settings_path = out_dir / "settings.json"
+        assert settings_path.exists()
+        settings = json.loads(settings_path.read_text())
+        pretool_hooks = settings["hooks"]["PreToolUse"]
         assert len(pretool_hooks) == 1
         assert pretool_hooks[0]["matcher"] == "*"
         commands = [h["command"] for h in pretool_hooks[0]["hooks"]]

@@ -181,19 +181,6 @@ class Skill:
                 container_workspace: {
                     "hasTrustDialogAccepted": True,
                     "mcpServers": mcp_servers,
-                    "hooks": {
-                        "PreToolUse": [
-                            {
-                                "matcher": "*",
-                                "hooks": [
-                                    {
-                                        "type": "command",
-                                        "command": "/zipsa-hooks/pretooluse.py",
-                                    }
-                                ],
-                            }
-                        ]
-                    },
                 }
             },
         }
@@ -202,5 +189,24 @@ class Skill:
         claude_json_path = output_dir / ".claude.json"
         claude_json_path.write_text(config_text)
         (output_dir / ".claude.json.org").write_text(config_text)
+
+        # Hooks live in ~/.claude/settings.json, not .claude.json. The executor
+        # copies this file into the container so the PreToolUse hook is wired up.
+        settings_config = {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/zipsa-hooks/pretooluse.py",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        (output_dir / "settings.json").write_text(json.dumps(settings_config, indent=2))
 
         return claude_json_path

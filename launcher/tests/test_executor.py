@@ -870,3 +870,28 @@ class TestWritePhaseAllowFile:
             "phase_id": "discover",
             "allowed_tools": ["Bash(find:*)", "Bash(rm:*)"],
         }
+
+
+class TestSingleShotPhaseAllow:
+    """Single-shot (no phases) skills must also write phase-allow.json so the
+    PreToolUse hook can find the skill's full tool list."""
+
+    def test_single_shot_writes_phase_allow_with_all_tools(self, tmp_path):
+        """build_claude_json side-effect writes phase-allow.json with the full
+        skill tool list so the hook permits whatever the skill declared."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        # Executor exposes a helper that writes the default (single-shot)
+        # phase-allow.json containing every tool the skill is allowed to use.
+        executor._write_default_phase_allow_file(claude_json_path.parent, skill)
+
+        path = tmp_path / "phase-allow.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data["phase_id"] == "main"
+        # test-skill's manifest declares Read, Write
+        assert "Read" in data["allowed_tools"]
+        assert "Write" in data["allowed_tools"]
