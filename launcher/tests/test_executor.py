@@ -968,6 +968,8 @@ class TestDevOverlayIntegration:
     def test_no_overlay_when_env_unset(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ZIPSA_DEV_OVERLAY", raising=False)
         executor = DockerExecutor()
+        assert executor.dev_overlay is None
+
         skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
         skill = Skill.load(skill_dir)
         claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
@@ -976,8 +978,8 @@ class TestDevOverlayIntegration:
             skill=skill, user_input="x",
             claude_json_path=claude_json_path, env={},
         )
-        assert not any("agenthud" in s for s in cmd)
         joined = " ".join(cmd)
+        # No overlay-specific preamble injected
         assert "npm link" not in joined
 
 

@@ -10,6 +10,11 @@ that had activity on that date, group them by project, summarize the
 work, and write one entry per project to the `zipsa-daily-log` Notion
 database.
 
+The heavy lifting (scanning session JSONL files, grouping by project,
+extracting activities) is delegated to **agenthud**, a deterministic CLI
+tool that produces a structured per-project report. The agent then
+summarizes and writes to Notion.
+
 ## Period semantics
 
 - Default target date: **yesterday**, in the configured timezone
@@ -28,6 +33,7 @@ These are provided in the skill manifest:
 - Workspace name: `Westbrook AI HQ`
 - Database name: `zipsa-daily-log`
 - Timezone: `Australia/Sydney`
+- agenthud version: `0.8.4` (pinned for reproducibility)
 
 ## Phases
 
@@ -73,103 +79,47 @@ Steps:
 
 `state_updates`: set `db_id` if newly resolved or created.
 
-### discover
+### report
 
-Find all Claude Code session files that had activity on the target
-date.
-
-The sessions directory is mounted at `/home/agent/workspace/sessions`.
-Each subdirectory corresponds to one project; the directory name is the
-project's working directory with non-alphanumeric characters replaced
-by `-`. Example: `-Users-neochoon-WestbrookAI-skill-runtime-poc`.
-
-Each project subdirectory contains `*.jsonl` session files (one per
-session). Only files **directly inside** the project subdirectory are
-session files — ignore any files nested deeper.
+Fetch a structured per-project activity report from agenthud, then
+group/summarize for Notion.
 
 Steps:
 
-1. Convert the target date to a UTC time window using Bash:
+1. Invoke agenthud via Bash:
 
    ```bash
-   python3 -c "
-   from datetime import datetime
-   import zoneinfo
-   tz = zoneinfo.ZoneInfo('Australia/Sydney')
-   d = datetime.strptime('TARGET_DATE', '%Y-%m-%d')
-   start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
-   end   = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=tz)
-   print(start.timestamp(), end.timestamp())
-   "
+   npx agenthud@0.8.4 report \
+     --date <target_date> \
+     --format json \
+     --include response,bash,edit,thinking \
+     --detail-limit 0
    ```
 
-2. Use `find` to list all `*.jsonl` files modified within that window:
+   Notes:
+   - `~/.claude/projects` is bind-mounted into the container at the
+     default path agenthud expects, so no env var setup is needed.
+   - The command output is a JSON document with shape
+     `{date, sessions: [{project, start, end, activities, subAgents}]}`.
+     Capture stdout in full.
+   - If no sessions match the date, agenthud emits a document with
+     `sessions: []`. Treat that as "no activity on that date" and pass
+     `projects: []` to the next phase.
 
-   ```bash
-   find /home/agent/workspace/sessions \
-     -maxdepth 2 -name '*.jsonl' \
-     -newer <start_sentinel> ! -newer <end_sentinel>
-   ```
-
-   To use timestamps with `find -newer`, create temporary sentinel
-   files with `touch -d`:
-
-   ```bash
-   touch -d @<start_ts> /tmp/zipsa_start
-   touch -d @<end_ts>   /tmp/zipsa_end
-   find /home/agent/workspace/sessions \
-     -maxdepth 2 -name '*.jsonl' \
-     -newer /tmp/zipsa_start ! -newer /tmp/zipsa_end
-   rm /tmp/zipsa_start /tmp/zipsa_end
-   ```
-
-3. From each matching path, extract the project directory name (the
-   component at depth 1 under sessions root) and group files by it.
-
-`next_phase_input` schema:
-
-    {
-      "target_date": "2026-05-10",
-      "db_id": "...",
-      "session_files": [
-        {
-          "project_dir": "-Users-neochoon-WestbrookAI-skill-runtime-poc",
-          "project_name": "skill-runtime-poc",
-          "files": ["/path/to/session1.jsonl", "/path/to/session2.jsonl"]
-        }
-      ]
-    }
-
-Project name decoding: take the last meaningful path component (after
-splitting on `-`). For the example above:
-`-Users-neochoon-WestbrookAI-skill-runtime-poc` → `skill-runtime-poc`.
-
-If no sessions were found, return `session_files: []`. Later phases
-will short-circuit.
-
-### analyze
-
-Read each discovered session and extract per-project information.
-
-For each session file:
-
-1. Read with `mcp__sessions__read_file`. Session files can be large; if
-   so, read the head (first ~80 lines) and the tail (last ~80 lines).
-2. From the **head**, extract the first message where `type=user` and
-   capture its `content` as the session goal.
-3. From the **full content read so far**, collect distinct `tool_name`
-   values from `tool_use` events.
-4. From the **tail**, identify the last assistant message and any
-   nearby decision-like statements as the session outcome.
-
-Group by project. Per project, produce:
-
-- `sessions`: count
-- `summary`: 2–4 sentence narrative in the user's language combining
-  goals and outcomes across all sessions
-- `tools_used`: deduplicated list of distinct tool names
-- `status`: best guess — `in-progress` (default), `done` (clear
-  completion), `blocked` (explicit blocker), `paused` (explicit pause)
+2. For each project in the report, build a summary tuple:
+   - `name`: the `project` field
+   - `sessions`: 1 if the project appears once; if the same project
+     name appears as multiple distinct sessions (rare — agenthud groups
+     per session id then re-groups by project), sum them
+   - `summary`: 2–4 sentence narrative in the user's language,
+     synthesized from the `activities` (Response messages convey
+     intent; Edit/Bash convey what changed)
+   - `tools_used`: deduplicated set of `activity.label` values from
+     Bash/Edit/etc. (drop Thinking and Response; keep the
+     tool-execution labels)
+   - `status`: best guess from the activity tail —
+     `done` (clear completion), `blocked` (explicit blocker mentioned),
+     `paused` (explicit pause), `in-progress` (default)
 
 `next_phase_input` schema:
 
@@ -187,7 +137,8 @@ Group by project. Per project, produce:
       ]
     }
 
-If `session_files` was empty, return `projects: []`.
+If `sessions: []`, return `projects: []`. The persist phase will
+short-circuit.
 
 ### persist
 
