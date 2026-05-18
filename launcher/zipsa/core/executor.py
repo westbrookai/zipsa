@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
+from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
 from .skill import Skill
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
@@ -234,6 +235,19 @@ class DockerExecutor:
             self._hitl_port = None
             self._hitl_token = None
 
+    @staticmethod
+    def _stop_process(process) -> None:
+        """Gracefully terminate a subprocess (Path B graceful stop).
+
+        Sends SIGTERM and waits up to 5 seconds; escalates to SIGKILL.
+        """
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
     def _execute_skill(
         self,
         docker_cmd: list[str],
@@ -242,8 +256,18 @@ class DockerExecutor:
         run_dir: Optional[Path],
         env_file: Optional[Path] = None,
         user_input: str = "",
+        *,
+        phase_id: str = "main",
+        phase_limits: Optional[SkillLimits] = None,
+        limits_state: Optional[LimitsState] = None,
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
+
+        Per-event limit enforcement (Path B): after each parsed event the
+        executor calls update_for_event + check_limits from zipsa.core.limits.
+        On breach the current event is yielded, the process is terminated
+        gracefully, a zipsa_limits_breach event is emitted, and the generator
+        returns. The old inline turn/cost/timeout blocks have been removed.
 
         Args:
             docker_cmd: Docker command array
@@ -252,22 +276,79 @@ class DockerExecutor:
             run_dir: Directory to save run logs (None to skip logging)
             env_file: Environment file path (optional)
             user_input: User's input/query for this execution
+            phase_id: Identifier for this phase (default "main" for single-phase).
+            phase_limits: Per-phase SkillLimits to check against. When None,
+                falls back to spec.limits for single-phase / direct invocations.
+            limits_state: Shared LimitsState from the caller (multi-phase runs).
+                If provided, this state is updated in-place so aggregate counters
+                accumulate across phases. If None, a fresh state is created.
 
         Yields:
-            Parsed output events
+            Parsed output events (including zipsa_limits_breach on breach)
 
         Raises:
-            RuntimeError: If Docker execution fails or limits exceeded
+            RuntimeError: If Docker execution fails
         """
         output_file = None
         if run_dir:
             output_file = run_dir / "output.jsonl"
 
-        # Get limits from skill manifest
-        limits = skill.manifest.spec.limits
-        turn_count = 0
+        # Model needed before limits_state setup (used in update_for_event).
+        model = (skill.manifest.spec.model or {}).get("name", "claude-opus-4-7")
+
+        # Limits setup — single call site shared by both branches.
+        agg_limits = skill.manifest.spec.limits or SkillLimits()
+        if phase_limits is None:
+            # Single-phase / direct invocation: phase limit == aggregate limit
+            # (preserves pre-existing behaviour for skills without phases).
+            phase_limits = agg_limits
+        if limits_state is None:
+            limits_state = new_state(phase_id)
+        else:
+            # Caller-owned state carrying aggregate counters across phases.
+            # Emit a synthetic zipsa_phase_start so update_for_event resets
+            # phase-level counters cleanly while preserving run-level ones.
+            update_for_event(
+                limits_state,
+                {"type": "zipsa_phase_start", "phase": phase_id},
+                model,
+            )
+
         cost_exceeded = False
         process = None
+
+        def _stream_with_limits(raw_stream, output_file_handle=None):
+            """Unified per-event loop: parse, track limits, yield / stop on breach."""
+            nonlocal cost_exceeded
+            for line in raw_stream:
+                if not line:
+                    continue
+                if output_file_handle:
+                    output_file_handle.write(line)
+                for event in self.runtime.parse_output([line]):
+                    # Per-event cost tracking for metadata (kept separately from limits)
+                    if event.get("type") == "result":
+                        actual_cost = event.get("total_cost_usd", 0) or 0
+                        declared = skill.manifest.spec.limits
+                        if declared and declared.max_cost_usd and actual_cost > declared.max_cost_usd:
+                            cost_exceeded = True
+
+                    # Limits bookkeeping — single call site.
+                    update_for_event(limits_state, event, model)
+                    breach = check_limits(limits_state, phase_limits, agg_limits)
+                    if breach is not None:
+                        yield event
+                        self._stop_process(process)
+                        yield {
+                            "type": "zipsa_limits_breach",
+                            "scope": breach.scope,
+                            "kind": breach.kind,
+                            "value": breach.value,
+                            "limit": breach.limit,
+                            "phase": breach.phase,
+                        }
+                        return  # generator done — caller sees the breach event last
+                    yield event
 
         try:
             # Execute Docker
@@ -278,104 +359,16 @@ class DockerExecutor:
                 text=True,
             )
 
-            # Stream output through runtime parser with limits checking
             raw_stream = iter(process.stdout.readline, "")
 
-            # Save to file while parsing
             if output_file:
-                with open(output_file, 'w', buffering=1) as f:  # Line buffering
-                    for line in raw_stream:
-                        if line:
-                            # Write to file
-                            f.write(line)
-
-                            # Parse and yield
-                            parsed_events = self.runtime.parse_output([line])
-                            for event in parsed_events:
-                                # Check max_turns limit
-                                if limits and limits.max_turns:
-                                    if event.get("type") == "assistant":
-                                        message = event.get("message", {})
-                                        content = message.get("content", [])
-                                        if content and content[0].get("type") == "thinking":
-                                            turn_count += 1
-                                            if turn_count > limits.max_turns:
-                                                # Gracefully terminate, then force kill if needed
-                                                process.terminate()
-                                                try:
-                                                    process.wait(timeout=5)
-                                                except subprocess.TimeoutExpired:
-                                                    process.kill()
-                                                    process.wait()
-                                                raise RuntimeError(
-                                                    f"Exceeded max_turns: {limits.max_turns}"
-                                                )
-
-                                # Check max_cost limit (post-execution validation)
-                                if limits and limits.max_cost_usd:
-                                    if event.get("type") == "result":
-                                        actual_cost = event.get("total_cost_usd", 0)
-                                        if actual_cost > limits.max_cost_usd:
-                                            cost_exceeded = True
-                                            print(
-                                                f"Warning: Cost ${actual_cost:.4f} exceeded limit ${limits.max_cost_usd:.4f}",
-                                                file=sys.stderr
-                                            )
-
-                                yield event
+                with open(output_file, "w", buffering=1) as f:
+                    yield from _stream_with_limits(raw_stream, output_file_handle=f)
             else:
-                # No logging - just parse and yield with limits checking
-                for line in raw_stream:
-                    if line:
-                        parsed_events = self.runtime.parse_output([line])
-                        for event in parsed_events:
-                            # Check max_turns limit
-                            if limits and limits.max_turns:
-                                if event.get("type") == "assistant":
-                                    message = event.get("message", {})
-                                    content = message.get("content", [])
-                                    if content and content[0].get("type") == "thinking":
-                                        turn_count += 1
-                                        if turn_count > limits.max_turns:
-                                            # Gracefully terminate, then force kill if needed
-                                            process.terminate()
-                                            try:
-                                                process.wait(timeout=5)
-                                            except subprocess.TimeoutExpired:
-                                                process.kill()
-                                                process.wait()
-                                            raise RuntimeError(
-                                                f"Exceeded max_turns: {limits.max_turns}"
-                                            )
+                yield from _stream_with_limits(raw_stream)
 
-                            # Check max_cost limit
-                            if limits and limits.max_cost_usd:
-                                if event.get("type") == "result":
-                                    actual_cost = event.get("total_cost_usd", 0)
-                                    if actual_cost > limits.max_cost_usd:
-                                        cost_exceeded = True
-                                        print(
-                                            f"Warning: Cost ${actual_cost:.4f} exceeded limit ${limits.max_cost_usd:.4f}",
-                                            file=sys.stderr
-                                        )
-
-                            yield event
-
-            # Wait for process with timeout
-            timeout = limits.timeout_seconds if limits else None
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # Gracefully terminate, then force kill if needed
-                process.terminate()
-                try:
-                    process.wait(timeout=5)  # Wait up to 5 seconds for graceful shutdown
-                except subprocess.TimeoutExpired:
-                    process.kill()  # Force kill if it doesn't terminate
-                    process.wait()
-                raise RuntimeError(
-                    f"Execution timed out after {timeout} seconds"
-                )
+            # Reap the child process (no timeout — limits enforced per-event above).
+            process.wait()
 
             if process.returncode != 0:
                 raise RuntimeError(
@@ -383,20 +376,20 @@ class DockerExecutor:
                 )
 
         except KeyboardInterrupt:
-            # User pressed Ctrl+C - terminate Docker process
+            # User pressed Ctrl+C — terminate Docker process.
             if process:
                 print("\nInterrupted by user - terminating execution...", file=sys.stderr)
                 process.terminate()
                 try:
-                    process.wait(timeout=5)  # Wait up to 5 seconds for graceful shutdown
+                    process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()  # Force kill if it doesn't terminate
+                    process.kill()
                     process.wait()
             raise
 
         finally:
-            # Ensure Docker process is terminated
-            if process and process.poll() is None:  # Process still running
+            # Ensure Docker process is terminated (e.g. after a breach return).
+            if process and process.poll() is None:
                 try:
                     process.terminate()
                     process.wait(timeout=5)
@@ -404,18 +397,20 @@ class DockerExecutor:
                     process.kill()
                     process.wait()
                 except Exception:
-                    pass  # Best effort cleanup
+                    pass  # Best-effort cleanup
 
-            # Generate summary and metadata if logging enabled
+            # Generate summary and metadata if logging enabled.
             if run_dir:
                 try:
                     self._save_summary(run_dir)
-                    self._save_metadata(run_dir, skill, cost_exceeded, limits, user_input=user_input)
+                    self._save_metadata(
+                        run_dir, skill, cost_exceeded,
+                        skill.manifest.spec.limits, user_input=user_input,
+                    )
                 except Exception as e:
-                    # Don't fail execution due to logging errors
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
 
-            # Clean up env file (contains secrets, should not persist)
+            # Clean up env file (contains secrets, should not persist).
             if env_file and env_file.exists():
                 env_file.unlink()
 
@@ -605,9 +600,6 @@ class DockerExecutor:
                 limits=skill.manifest.spec.limits,
             )]
 
-        agg_limits = skill.manifest.spec.limits
-        cumulative_turns = 0
-        cumulative_cost = 0.0
         previous_output = None
         skill_state = self._load_skill_state(skill)
         last_phase_out: dict | None = None
@@ -625,19 +617,12 @@ class DockerExecutor:
                 capture_output=True,
             )
 
+        # Shared limits state — accumulates run-level counters across all
+        # phases so that spec.limits (aggregate) is enforced over the full run.
+        shared_limits_state = new_state(phases[0].id)
+
         try:
             for phase_idx, phase in enumerate(phases):
-                # Aggregate limit check before starting (and before printing the header)
-                if agg_limits:
-                    if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
-                        yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": "Aggregate max_turns exceeded"}
-                        return
-                    if agg_limits.max_cost_usd and cumulative_cost >= agg_limits.max_cost_usd:
-                        yield {"type": "zipsa_phase_error", "phase": phase.id,
-                               "error": f"Aggregate cost limit exceeded (${cumulative_cost:.4f} >= ${agg_limits.max_cost_usd:.2f})"}
-                        return
-
                 yield {
                     "type": "zipsa_phase_start",
                     "phase": phase.id,
@@ -669,33 +654,31 @@ class DockerExecutor:
                         npm_volume=npm_volume,
                     )
 
-                    # Stream events, capture last assistant text + metrics
+                    # Stream events, capture last assistant text.
+                    # A limits breach surfaces as a zipsa_limits_breach event
+                    # (last event from _execute_skill on breach) — stop the run.
                     last_assistant_text = None
-                    timed_out = False
-                    try:
-                        for event in self._execute_skill(
-                            docker_cmd, claude_json_path, skill, phase_dir,
-                            skill_data_dir / ".env", user_message,
-                        ):
-                            if event.get("type") == "assistant":
-                                content = event.get("message", {}).get("content", [])
-                                for block in content:
-                                    if block.get("type") == "text":
-                                        last_assistant_text = block.get("text", "")
-                                        break
-                            elif event.get("type") == "result":
-                                cumulative_turns += event.get("num_turns", 0) or 0
-                                cumulative_cost += event.get("total_cost_usd", 0) or 0
+                    limits_breached = False
+                    for event in self._execute_skill(
+                        docker_cmd, claude_json_path, skill, phase_dir,
+                        skill_data_dir / ".env", user_message,
+                        phase_id=phase.id,
+                        phase_limits=phase.limits or SkillLimits(),
+                        limits_state=shared_limits_state,
+                    ):
+                        if event.get("type") == "assistant":
+                            content = event.get("message", {}).get("content", [])
+                            for block in content:
+                                if block.get("type") == "text":
+                                    last_assistant_text = block.get("text", "")
+                                    break
+                        elif event.get("type") == "zipsa_limits_breach":
+                            limits_breached = True
                             yield event
-                    except RuntimeError as exc:
-                        if "timed out" in str(exc).lower():
-                            timed_out = True
-                            yield {"type": "zipsa_phase_error", "phase": phase.id,
-                                   "error": str(exc)}
-                            return  # state_updates NOT applied on timeout
-                        raise
+                            return  # state_updates NOT applied on breach
+                        yield event
 
-                    if timed_out:
+                    if limits_breached:
                         return
 
                     # Extract and validate skill output

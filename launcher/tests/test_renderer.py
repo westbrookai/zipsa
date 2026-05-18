@@ -378,3 +378,50 @@ class TestHitlSuppression:
     def test_unknown_zipsa_tool_falls_back_to_short_name(self):
         text = self._text(self._zipsa_event("new_future_tool", {"x": 1}))
         assert "[new_future_tool]" in text
+
+
+class TestLimitsBreachEvent:
+    """zipsa_limits_breach renders as a clear red footer that says
+    which limit (phase/aggregate × turns/cost/time) was exceeded."""
+
+    def test_phase_cost_breach_rendered(self, capsys):
+        events = [
+            {
+                "type": "zipsa_limits_breach",
+                "scope": "phase",
+                "kind": "cost",
+                "value": 0.107,
+                "limit": 0.10,
+                "phase": "report",
+            }
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Limit exceeded" in out or "limit exceeded" in out.lower()
+        assert "report" in out
+        assert "0.10" in out
+        assert "0.107" in out or "0.11" in out
+
+    def test_aggregate_time_breach_rendered(self, capsys):
+        events = [
+            {
+                "type": "zipsa_limits_breach",
+                "scope": "aggregate",
+                "kind": "time",
+                "value": 2100.5,
+                "limit": 2000.0,
+                "phase": "post",
+            }
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "aggregate" in out.lower()
+        assert "time" in out.lower() or "timeout" in out.lower()
+
+    def test_json_mode_passes_through(self, capsys):
+        event = {"type": "zipsa_limits_breach", "scope": "phase", "kind": "turns",
+                 "value": 5, "limit": 4, "phase": "draft"}
+        render(iter([event]), OutputMode.json)
+        out = capsys.readouterr().out.strip()
+        import json as _json
+        assert _json.loads(out) == event

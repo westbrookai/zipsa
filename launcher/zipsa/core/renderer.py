@@ -95,6 +95,28 @@ def _format(
     if event_type in ("system", "rate_limit_event"):
         return None
 
+    if event_type == "zipsa_limits_breach":
+        if mode == OutputMode.json:
+            return None  # printed verbatim in json mode at the top of render()
+        scope = event.get("scope", "?")
+        kind = event.get("kind", "?")
+        value = event.get("value", 0)
+        limit = event.get("limit", 0)
+        phase = event.get("phase", "?")
+        if kind == "cost":
+            value_s = f"${value:.4f}"
+            limit_s = f"${limit:.4f}"
+        elif kind == "time":
+            value_s = f"{value:.1f}s"
+            limit_s = f"{limit:.1f}s"
+        else:  # turns
+            value_s = f"{int(value)} turns"
+            limit_s = f"{int(limit)} turns"
+        return (
+            f"\n{_RED}✗ Limit exceeded — {scope} {kind} for phase '{phase}': "
+            f"{value_s} > {limit_s}{_RESET}"
+        )
+
     if event_type == "zipsa_phase_error":
         if mode == OutputMode.json:
             return None  # already printed in json mode above

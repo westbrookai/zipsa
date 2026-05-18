@@ -232,3 +232,47 @@ fail, resume, verify phase 1's `next_phase_input` was re-loaded
 correctly and phase 2 retried (not phase 0).
 
 ---
+
+## Investigate SDK-injection graceful stop (Path A) for limit breaches (2026-05-19)
+
+**Context.** The enforce-limits PR (#TBD-when-merged) shipped Path B
+for graceful stop: when a limit is breached, the executor lets the
+current `assistant` event flush, then `process.terminate()` + 5s grace
++ `process.kill()` fallback. The agent doesn't get to emit a clean
+final JSON for the breached phase; the launcher emits the
+`zipsa_limits_breach` event for the renderer instead.
+
+Path A (preferred-if-feasible) was ruled out in a ~2-minute scan of
+the current implementation: `_execute_skill` consumes the Claude Code
+CLI's stdout via `subprocess.Popen`; there's no stdin pipe back to
+the agent, and the SDK doesn't expose a documented mid-stream
+injection point. So we can't synthesize a tool-error and let the
+agent react with a clean status=failed JSON.
+
+**Why revisit.** If a future SDK version (or a CLI flag we missed)
+does expose mid-stream injection — even via a sentinel control line
+on stdin — Path A is strictly better UX: the user gets the agent's
+own apology for the breach in `user_facing_summary`, state_updates
+that the agent considered safe survive (right now, the breached
+phase's partial state_updates are intentionally dropped, which is
+sometimes too conservative).
+
+**What to investigate.**
+
+- Read the latest Claude Code Agent SDK release notes / CLI man page
+  for any mid-stream control mechanism. Look for: stdin-line protocols,
+  HTTP callback URLs, `--control-pipe` flags.
+- If found: prototype a path where the executor pushes a synthetic
+  tool_result with `{"is_error": true, "content": [{"type": "text",
+  "text": "limit_exceeded: ..."}]}` on the matching `tool_use_id` of
+  whatever tool the agent is currently running, then waits one more
+  `assistant` event to capture the final JSON.
+- If not found: re-confirm Path B is still the best we can do, and
+  close this item.
+
+**Test plan.** If Path A is built, add an integration test that
+exercises the breach scenario and asserts (a) the agent's final
+JSON's `status` is `"failed"` and (b) `error.code` is `"limits_exceeded"`
+emitted by the agent (not synthesized by the launcher).
+
+---

@@ -1,174 +1,220 @@
-"""Tests for skill execution limits."""
+# launcher/tests/test_limits.py
+"""Limits module tests — pure unit, no Docker."""
 
-import subprocess
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from zipsa.core.executor import DockerExecutor
-from zipsa.core.skill import Skill
+from dataclasses import asdict
+from unittest.mock import patch
+
 import pytest
 
+from zipsa.core.limits import (
+    LimitBreach,
+    LimitsState,
+    check_limits,
+    new_state,
+    update_for_event,
+)
+from zipsa.core.models import SkillLimits
 
-class TestLimits:
-    """Test execution limits enforcement."""
 
-    @patch("zipsa.core.executor.subprocess.Popen")
-    def test_timeout_limit_enforced(self, mock_popen):
-        """Execution should timeout if timeout_seconds is exceeded."""
-        # Mock a slow process that times out
-        mock_stdout = MagicMock()
-        mock_stdout.readline.return_value = ""  # Empty stream
+PRICING_MODEL = "claude-haiku-4-5-20251001"
 
-        mock_process = Mock()
-        mock_process.stdout = mock_stdout
-        # First wait() times out, subsequent wait() succeeds (process terminated)
-        mock_process.wait.side_effect = [
-            subprocess.TimeoutExpired(cmd="docker", timeout=1),  # Initial timeout
-            None,  # After terminate(), wait succeeds
-        ]
-        mock_process.returncode = 1
-        mock_process.terminate = Mock()
-        mock_process.kill = Mock()
-        mock_popen.return_value = mock_process
 
-        # Load skill with timeout limit
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+def _assistant_event(model: str, usage: dict, has_thinking: bool = True):
+    """Shape matches what runtime.parse_output produces."""
+    content = []
+    if has_thinking:
+        content.append({"type": "thinking", "thinking": "..."})
+    return {
+        "type": "assistant",
+        "message": {"model": model, "content": content, "usage": usage},
+    }
 
-        # Override limits for test
-        from zipsa.core.models import SkillLimits
-        skill.manifest.spec.limits = SkillLimits(timeout_seconds=1)
 
-        # Execute - should raise RuntimeError due to timeout
-        with pytest.raises(RuntimeError, match="timed out"):
-            list(executor.run(skill, "Test", env={}))
+def _tool_use(name: str) -> dict:
+    return {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": name, "input": {}}]},
+    }
 
-    @patch("zipsa.core.executor.subprocess.Popen")
-    def test_max_turns_enforced(self, mock_popen):
-        """Execution should stop if max_turns is exceeded."""
-        # Mock process with many turns
-        mock_stdout = MagicMock()
-        mock_stdout.readline.side_effect = [
-            '{"type":"system","subtype":"init"}\n',
-            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Turn 1"}]}}\n',
-            '{"type":"assistant","message":{"content":[{"type":"text","text":"Response 1"}]}}\n',
-            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Turn 2"}]}}\n',
-            '{"type":"assistant","message":{"content":[{"type":"text","text":"Response 2"}]}}\n',
-            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Turn 3 - should be stopped"}]}}\n',
-            ""
-        ]
-        mock_process = Mock()
-        mock_process.stdout = mock_stdout
-        mock_process.wait.return_value = 0
-        mock_process.returncode = 0
-        mock_process.terminate = Mock()
-        mock_popen.return_value = mock_process
 
-        # Load skill with max_turns limit
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+def _tool_result() -> dict:
+    return {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_1"}]},
+    }
 
-        # Override limits for test
-        from zipsa.core.models import SkillLimits
-        skill.manifest.spec.limits = SkillLimits(max_turns=2)
 
-        # Execute - should stop after 2 turns
-        with pytest.raises(RuntimeError, match="Exceeded max_turns"):
-            list(executor.run(skill, "Test", env={}))
+def _phase_start(phase_id: str = "p1") -> dict:
+    return {"type": "zipsa_phase_start", "phase": phase_id}
 
-        # Verify process was terminated
-        mock_process.terminate.assert_called_once()
 
-    @patch("zipsa.core.executor.subprocess.Popen")
-    def test_max_cost_warning(self, mock_popen, tmp_path, capfd):
-        """Should warn if max_cost_usd is exceeded."""
-        mock_stdout = MagicMock()
-        mock_stdout.readline.side_effect = [
-            '{"type":"system","subtype":"init"}\n',
-            '{"type":"assistant","message":{"content":[{"type":"text","text":"Answer"}]}}\n',
-            '{"type":"result","total_cost_usd":0.50,"is_error":false}\n',
-            ""
-        ]
-        mock_process = Mock()
-        mock_process.stdout = mock_stdout
-        mock_process.wait.return_value = 0
-        mock_process.returncode = 0
-        mock_popen.return_value = mock_process
+class TestNewState:
+    def test_starts_zeroed(self):
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s = new_state("phase-a")
+        assert s.phase_id == "phase-a"
+        assert s.phase_turns == 0
+        assert s.run_turns == 0
+        assert s.phase_cost_usd == 0.0
+        assert s.run_cost_usd == 0.0
+        assert s.phase_started_at == 100.0
+        assert s.run_started_at == 100.0
 
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
 
-        from zipsa.core.models import SkillLimits
-        skill.manifest.spec.limits = SkillLimits(max_cost_usd=0.10)
+class TestUpdateForEvent:
+    def test_thinking_block_increments_both_turn_counters(self):
+        s = new_state("p")
+        update_for_event(s, _assistant_event(PRICING_MODEL, {"output_tokens": 1}), PRICING_MODEL)
+        assert s.phase_turns == 1
+        assert s.run_turns == 1
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            list(executor.run(skill, "Test", env={}))
+    def test_assistant_usage_adds_to_phase_and_run_cost(self):
+        s = new_state("p")
+        usage = {"input_tokens": 1_000_000}  # Haiku $0.80
+        update_for_event(s, _assistant_event(PRICING_MODEL, usage), PRICING_MODEL)
+        assert s.phase_cost_usd == pytest.approx(0.80)
+        assert s.run_cost_usd == pytest.approx(0.80)
 
-        runs_dir = tmp_path / ".zipsa" / "test-skill@1.0.0" / "runs"
-        run_dirs = sorted(runs_dir.iterdir(), reverse=True)
-        metadata_file = run_dirs[0] / "metadata.json"
+    def test_phase_start_resets_phase_counters_keeps_run(self):
+        s = new_state("p1")
+        update_for_event(s, _assistant_event(PRICING_MODEL, {"input_tokens": 1_000_000}), PRICING_MODEL)
+        assert s.phase_cost_usd == pytest.approx(0.80)
+        assert s.run_cost_usd == pytest.approx(0.80)
+        update_for_event(s, _phase_start("p2"), PRICING_MODEL)
+        assert s.phase_id == "p2"
+        assert s.phase_turns == 0
+        assert s.phase_cost_usd == 0.0
+        # Run-level preserved
+        assert s.run_cost_usd == pytest.approx(0.80)
 
-        import json
-        metadata = json.loads(metadata_file.read_text())
-        assert metadata["cost_exceeded"] is True
-        assert metadata["cost_limit_usd"] == 0.10
+    def test_hitl_pause_and_resume_excludes_compute_time(self):
+        s = new_state("p")
+        # t=100: phase started
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+        # t=110: agent invokes ask
+        with patch("zipsa.core.limits.time.monotonic", return_value=110.0):
+            update_for_event(s, _tool_use("mcp__zipsa__ask"), PRICING_MODEL)
+        # t=170: user responds (60s HITL wait)
+        with patch("zipsa.core.limits.time.monotonic", return_value=170.0):
+            update_for_event(s, _tool_result(), PRICING_MODEL)
+        # phase_compute_elapsed should subtract the 60s HITL wait
+        with patch("zipsa.core.limits.time.monotonic", return_value=180.0):
+            elapsed = s.phase_compute_elapsed()
+        # Total wall: 80s. HITL: 60s. Compute: 20s.
+        assert elapsed == pytest.approx(20.0)
 
-    @patch("zipsa.core.executor.subprocess.Popen")
-    def test_no_limits_set(self, mock_popen, tmp_path):
-        """Should run normally when no limits are set."""
-        mock_stdout = MagicMock()
-        mock_stdout.readline.side_effect = [
-            '{"type":"system","subtype":"init"}\n',
-            '{"type":"assistant","message":{"content":[{"type":"text","text":"Answer"}]}}\n',
-            '{"type":"result","total_cost_usd":0.50,"is_error":false}\n',
-            ""
-        ]
-        mock_process = Mock()
-        mock_process.stdout = mock_stdout
-        mock_process.wait.return_value = 0
-        mock_process.returncode = 0
-        mock_popen.return_value = mock_process
+    def test_non_zipsa_tool_use_does_not_pause(self):
+        s = new_state("p")
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+        with patch("zipsa.core.limits.time.monotonic", return_value=110.0):
+            update_for_event(s, _tool_use("Bash"), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=120.0):
+            update_for_event(s, _tool_result(), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=130.0):
+            elapsed = s.phase_compute_elapsed()
+        # Wall 30s, no HITL pause -> compute 30s
+        assert elapsed == pytest.approx(30.0)
 
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+    def test_ask_once_cached_brief_pause_still_excluded(self):
+        """ask_once cache hit: tool_use and tool_result come ~ms apart."""
+        s = new_state("p")
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+            update_for_event(s, _tool_use("mcp__zipsa__ask_once"), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.1):
+            update_for_event(s, _tool_result(), PRICING_MODEL)
+        # ~0.1s HITL excluded, otherwise everything stays computed
+        with patch("zipsa.core.limits.time.monotonic", return_value=110.0):
+            elapsed = s.phase_compute_elapsed()
+        assert elapsed == pytest.approx(9.9, abs=0.01)
 
-        skill.manifest.spec.limits = None
 
-        with patch("pathlib.Path.home", return_value=tmp_path):
-            events = list(executor.run(skill, "Test", env={}))
+class TestCheckLimits:
+    def _limits(self, **kw) -> SkillLimits:
+        defaults = {"max_turns": 999, "max_cost_usd": 99.0, "timeout_seconds": 9999}
+        defaults.update(kw)
+        return SkillLimits(**defaults)
 
-        assert len(events) > 0
+    def test_no_breach_returns_none(self):
+        s = new_state("p")
+        s.phase_turns = 1
+        s.phase_cost_usd = 0.001
+        # Compute time effectively 0 inside test
+        assert check_limits(s, self._limits(), self._limits()) is None
 
-    @patch("zipsa.core.executor.subprocess.Popen")
-    def test_keyboard_interrupt_terminates_process(self, mock_popen):
-        """Should terminate Docker process on KeyboardInterrupt (Ctrl+C)."""
-        # Mock process that simulates user interruption
-        mock_stdout = MagicMock()
-        mock_stdout.readline.side_effect = [
-            '{"type":"system","subtype":"init"}\n',
-            KeyboardInterrupt("User pressed Ctrl+C"),
-        ]
+    def test_phase_turn_breach(self):
+        s = new_state("p")
+        s.phase_turns = 5
+        b = check_limits(s, self._limits(max_turns=4), self._limits())
+        assert b is not None
+        assert b.scope == "phase"
+        assert b.kind == "turns"
+        assert b.value == 5
+        assert b.limit == 4
 
-        mock_process = Mock()
-        mock_process.stdout = mock_stdout
-        mock_process.poll.return_value = None  # Process still running
-        mock_process.terminate = Mock()
-        mock_process.wait = Mock()
-        mock_process.kill = Mock()
-        mock_popen.return_value = mock_process
+    def test_phase_cost_breach(self):
+        s = new_state("p")
+        s.phase_cost_usd = 0.11
+        b = check_limits(s, self._limits(max_cost_usd=0.10), self._limits())
+        assert b is not None
+        assert b.scope == "phase"
+        assert b.kind == "cost"
 
-        # Load skill
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
+    def test_phase_time_breach_excludes_hitl(self):
+        s = new_state("p")
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+            update_for_event(s, _tool_use("mcp__zipsa__ask"), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=200.0):
+            update_for_event(s, _tool_result(), PRICING_MODEL)
+        # Wall = 200s. HITL pause = 100s. Compute = 0s. Should NOT breach 60s timeout.
+        with patch("zipsa.core.limits.time.monotonic", return_value=200.0):
+            b = check_limits(s, self._limits(timeout_seconds=60), self._limits())
+        assert b is None
+        # Now consume 70s of compute
+        with patch("zipsa.core.limits.time.monotonic", return_value=270.0):
+            b = check_limits(s, self._limits(timeout_seconds=60), self._limits())
+        assert b is not None
+        assert b.scope == "phase"
+        assert b.kind == "time"
 
-        # Execute - should catch KeyboardInterrupt and terminate process
-        with pytest.raises(KeyboardInterrupt):
-            list(executor.run(skill, "Test", env={}))
+    def test_aggregate_turn_breach(self):
+        s = new_state("p")
+        s.phase_turns = 1
+        s.run_turns = 20
+        b = check_limits(s, self._limits(max_turns=999), self._limits(max_turns=15))
+        assert b is not None
+        assert b.scope == "aggregate"
+        assert b.kind == "turns"
 
-        # Verify process was terminated
-        mock_process.terminate.assert_called()
-        mock_process.wait.assert_called()
+    def test_aggregate_cost_breach(self):
+        s = new_state("p")
+        s.run_cost_usd = 0.50
+        b = check_limits(s, self._limits(), self._limits(max_cost_usd=0.45))
+        assert b is not None
+        assert b.scope == "aggregate"
+        assert b.kind == "cost"
+
+    def test_phase_breach_wins_over_aggregate(self):
+        """Both phase AND aggregate over limit -> report the phase one
+        (closer to the user's intent)."""
+        s = new_state("p")
+        s.phase_cost_usd = 0.11
+        s.run_cost_usd = 0.50
+        b = check_limits(
+            s,
+            self._limits(max_cost_usd=0.10),
+            self._limits(max_cost_usd=0.45),
+        )
+        assert b.scope == "phase"
+
+    def test_no_aggregate_limits_returns_none_when_phase_clean(self):
+        """Skills can declare phase limits but no aggregate limits; in
+        that case check_limits skips the aggregate check entirely."""
+        s = new_state("p")
+        s.phase_turns = 1
+        s.phase_cost_usd = 0.01
+        # Within phase budget, no aggregate limits at all
+        assert check_limits(s, self._limits(), None) is None
