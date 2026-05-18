@@ -99,3 +99,58 @@ class TestConfirm:
         )
         with pytest.raises(HitlUnattended):
             ConfirmHandler(io_).run(message="OK?")
+
+
+class TestChoose:
+    OPTIONS = ["alpha", "beta", "gamma"]
+
+    def test_by_index(self):
+        io_ = make_io("2\n")
+        handler = ChooseHandler(io_)
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "beta"
+
+    def test_by_exact_match(self):
+        io_ = make_io("gamma\n")
+        handler = ChooseHandler(io_)
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "gamma"
+
+    def test_case_insensitive_match(self):
+        io_ = make_io("Beta\n")
+        handler = ChooseHandler(io_)
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "beta"
+
+    def test_out_of_range_reprompts(self):
+        io_ = make_io("99\n1\n")
+        handler = ChooseHandler(io_)
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "alpha"
+
+    def test_options_listed_in_prompt(self):
+        io_ = make_io("1\n")
+        handler = ChooseHandler(io_)
+        handler.run(prompt="Pick", options=self.OPTIONS)
+        out = io_.stdout.getvalue()
+        assert "1) alpha" in out
+        assert "2) beta" in out
+        assert "3) gamma" in out
+
+    def test_max_retries(self):
+        io_ = make_io("foo\nbar\nbaz\n")
+        handler = ChooseHandler(io_)
+        with pytest.raises(ValueError):
+            handler.run(prompt="Pick", options=self.OPTIONS)
+
+    def test_empty_options_rejected(self):
+        io_ = make_io("\n")
+        handler = ChooseHandler(io_)
+        with pytest.raises(ValueError, match="empty"):
+            handler.run(prompt="Pick", options=[])
+
+    def test_unattended_raises(self):
+        io_ = HitlIO(
+            stdin=io.StringIO(""),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=False,
+        )
+        with pytest.raises(HitlUnattended):
+            ChooseHandler(io_).run(prompt="Pick", options=["a", "b"])

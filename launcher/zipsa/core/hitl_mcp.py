@@ -81,8 +81,36 @@ class ConfirmHandler:
 
 
 class ChooseHandler:
+    _MAX_RETRIES = 3
+
     def __init__(self, io_: HitlIO) -> None:
         self._io = io_
 
     def run(self, prompt: str, options: list[str]) -> str:
-        raise NotImplementedError  # Implemented in Task 4
+        if not self._io.is_interactive:
+            raise HitlUnattended("choose called in non-interactive run")
+        if not options:
+            raise ValueError("choose: empty options list")
+        lowered = [o.lower() for o in options]
+        with self._io.stdout_lock:
+            self._io.stdout.write(f"\n{PROMPT_OPEN}\n[choose] {prompt}\n")
+            for i, opt in enumerate(options, 1):
+                self._io.stdout.write(f"  {i}) {opt}\n")
+            for _ in range(self._MAX_RETRIES):
+                self._io.stdout.write("> ")
+                self._io.stdout.flush()
+                line = self._io.stdin.readline().strip()
+                if line.isdigit():
+                    idx = int(line)
+                    if 1 <= idx <= len(options):
+                        self._io.stdout.write(f"{PROMPT_CLOSE}\n")
+                        self._io.stdout.flush()
+                        return options[idx - 1]
+                elif line.lower() in lowered:
+                    self._io.stdout.write(f"{PROMPT_CLOSE}\n")
+                    self._io.stdout.flush()
+                    return options[lowered.index(line.lower())]
+                self._io.stdout.write("(enter the number or the exact option text)\n")
+            self._io.stdout.write(f"{PROMPT_CLOSE}\n")
+            self._io.stdout.flush()
+        raise ValueError("choose: too many invalid answers")
