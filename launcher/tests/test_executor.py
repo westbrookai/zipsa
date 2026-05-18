@@ -729,24 +729,6 @@ class TestBuildUserMessage:
         assert "user_query: log today" in msg
         assert "Execute phase: precheck" in msg
 
-    def test_user_answer_appended_to_user_query(self):
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        msg = executor._build_user_message(
-            skill=skill,
-            phase_id="precheck",
-            phase_goal="goal",
-            phase_allowed_tools="",
-            previous_phase_output=None,
-            skill_state={},
-            user_query="log today",
-            user_answer="yesterday",
-        )
-
-        assert "user_answer: yesterday" in msg
-
     def test_previous_phase_output_null_on_first_phase(self):
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
@@ -866,9 +848,13 @@ class TestWritePhaseAllowFile:
         path = tmp_path / "phase-allow.json"
         assert path.exists()
         data = json.loads(path.read_text())
+        # HITL tools (mcp__zipsa__*) are always appended.
         assert data == {
             "phase_id": "discover",
-            "allowed_tools": ["Bash(find:*)", "Bash(rm:*)"],
+            "allowed_tools": [
+                "Bash(find:*)", "Bash(rm:*)",
+                "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+            ],
         }
 
 
@@ -1048,3 +1034,72 @@ class TestSpecMountsApplied:
             skill=skill, user_input="x", claude_json_path=claude_json_path, env={},
         )
         assert not any(":/a:" in s or ":/b:" in s for s in cmd)
+
+
+class TestHitlIntegration:
+    """Executor starts HitlServer, injects token env, and on Linux adds the
+    host-gateway flag."""
+
+    def test_zipsa_hitl_token_in_env_file(self, tmp_path, monkeypatch):
+        """When _build_docker_command runs with a hitl_port, the token env
+        gets written to the per-skill env file."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        # Simulate a started HitlServer
+        executor._hitl_port = 51234
+        executor._hitl_token = "test-token-xyz"
+
+        claude_json_path = skill.build_claude_json(hitl_port=51234)
+        executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        env_file = zipsa_home() / "minimal@1.0.0" / ".env"
+        contents = env_file.read_text()
+        assert "ZIPSA_HITL_TOKEN=test-token-xyz" in contents
+
+    def test_linux_adds_host_gateway_flag(self, tmp_path, monkeypatch):
+        import platform
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        executor._hitl_port = 51234
+        executor._hitl_token = "test-token-xyz"
+        cjp = skill.build_claude_json(hitl_port=51234)
+
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=cjp, env={},
+        )
+        assert "--add-host=host.docker.internal:host-gateway" in cmd
+
+    def test_macos_omits_host_gateway_flag(self, tmp_path, monkeypatch):
+        import platform
+        monkeypatch.setattr(platform, "system", lambda: "Darwin")
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        executor._hitl_port = 51234
+        executor._hitl_token = "test-token-xyz"
+        cjp = skill.build_claude_json(hitl_port=51234)
+
+        cmd = executor._build_docker_command(
+            skill=skill, user_input="x",
+            claude_json_path=cjp, env={},
+        )
+        assert "--add-host=host.docker.internal:host-gateway" not in cmd
+
+    def test_default_allow_list_contains_zipsa_tools(self, tmp_path):
+        """phase-allow.json (default) includes mcp__zipsa__* names."""
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        out = tmp_path
+        executor._write_default_phase_allow_file(out, skill)
+        data = json.loads((out / "phase-allow.json").read_text())
+        assert "mcp__zipsa__ask" in data["allowed_tools"]
+        assert "mcp__zipsa__confirm" in data["allowed_tools"]
+        assert "mcp__zipsa__choose" in data["allowed_tools"]

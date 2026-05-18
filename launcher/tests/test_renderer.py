@@ -1,7 +1,7 @@
 """Tests for output renderer."""
 
 import json
-from zipsa.core.renderer import OutputMode, render
+from zipsa.core.renderer import OutputMode, _format, render
 
 
 EVENTS = [
@@ -217,3 +217,36 @@ class TestAnswerMode:
         out = capsys.readouterr().out
         assert "Done." in out
         assert "read_file" not in out
+
+
+class TestHitlSuppression:
+    def test_mcp_zipsa_tool_use_replaced_with_marker(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "mcp__zipsa__ask",
+                    "input": {"prompt": "Where?"},
+                }],
+            },
+        }
+        result = _format(event, OutputMode.pretty, turn=0)
+        assert "[asking user]" in (result if isinstance(result, str) else result[0])
+        assert "prompt=" not in (result if isinstance(result, str) else result[0])
+
+    def test_non_zipsa_tool_use_still_verbose(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": {"command": "ls"},
+                }],
+            },
+        }
+        result = _format(event, OutputMode.pretty, turn=0)
+        text = result if isinstance(result, str) else result[0]
+        assert "Bash" in text
+        assert "command=" in text

@@ -572,3 +572,47 @@ class TestBuildClaudeJsonOauth:
         config = json.loads(claude_json_path.read_text())
         server = config["projects"]["/home/agent/workspace"]["mcpServers"]["github-copilot"]
         assert "ZIPSA_TOKEN_GITHUB_COPILOT" in server["headersHelper"]
+
+
+class TestZipsaMcpEntry:
+    def test_build_claude_json_includes_zipsa_http_entry(self, tmp_path):
+        import json, yaml
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {"purpose": "T", "instructions": "./SKILL.md"},
+        }))
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        skill = Skill.load(skill_dir)
+        cjp = skill.build_claude_json(
+            output_dir=tmp_path / "data",
+            hitl_port=54123,
+        )
+        config = json.loads(cjp.read_text())
+        zipsa = config["projects"]["/home/agent/workspace"]["mcpServers"]["zipsa"]
+        assert zipsa["type"] == "http"
+        assert zipsa["url"] == "http://host.docker.internal:54123/mcp"
+        # headersHelper must reference the env var so the token can change
+        assert "ZIPSA_HITL_TOKEN" in zipsa["headersHelper"]
+        assert "Authorization" in zipsa["headersHelper"]
+
+    def test_build_claude_json_omits_zipsa_when_no_port(self, tmp_path):
+        import json, yaml
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "test", "version": "1.0.0"},
+            "spec": {"purpose": "T", "instructions": "./SKILL.md"},
+        }))
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        skill = Skill.load(skill_dir)
+        cjp = skill.build_claude_json(output_dir=tmp_path / "data")
+        config = json.loads(cjp.read_text())
+        assert "zipsa" not in config["projects"]["/home/agent/workspace"]["mcpServers"]
