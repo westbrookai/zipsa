@@ -180,6 +180,7 @@ class DockerExecutor:
         """
         from .hitl_mcp import HitlIO
         from .hitl_runner import HitlServer
+        from .memory_store import MemoryStore
 
         stdout_lock = threading.Lock()
         hitl_io = HitlIO(
@@ -188,7 +189,18 @@ class DockerExecutor:
             stdout_lock=stdout_lock,
             is_interactive=sys.stdin.isatty(),
         )
-        hitl_server = HitlServer(hitl_io)
+        skill_memory_path = (
+            zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
+            / "memory.json"
+        )
+        global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global.json"
+        skill_store = MemoryStore(skill_memory_path)
+        global_store = MemoryStore(global_memory_path)
+        hitl_server = HitlServer(
+            hitl_io,
+            skill_store=skill_store,
+            global_store=global_store,
+        )
         hitl_server.start()
         self._hitl_port = hitl_server.port
         self._hitl_token = hitl_server.token
@@ -756,6 +768,8 @@ class DockerExecutor:
         # choose at any point regardless of the phase's declared toolset.
         allowed_tools = list(allowed_tools) + [
             "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+            "mcp__zipsa__recall", "mcp__zipsa__remember",
+            "mcp__zipsa__forget", "mcp__zipsa__list_memory",
         ]
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
