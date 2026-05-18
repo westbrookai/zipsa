@@ -180,3 +180,55 @@ a tight Bash allowlist.
 behavior change beyond message text.
 
 ---
+
+## Resume a failed run from the failed phase (2026-05-18)
+
+**Symptom.** Every `zipsa run` starts at phase 0. If a multi-phase
+skill fails on phase N, the user must re-do phases 0..N-1 on retry.
+
+Concretely: the new `bip-daily-x` skill has `precheck → report →
+draft → review → post`. The `review` phase is HITL — the user can
+spend minutes giving feedback and iterating. If the final `post`
+phase fails (e.g. X API returned `CreditsDepleted`, the network blipped,
+rate limit), the user has to fix the cause AND then re-do the entire
+draft+review loop from scratch. That's a real disincentive to retry.
+
+**Why this matters.** The state machine zipsa already maintains makes
+this fixable: `state_updates` persists declared state across runs, and
+`next_phase_input` is a structured contract between phases. The
+launcher just doesn't currently use either to short-circuit.
+
+**Fix sketch.**
+
+- Persist per-run progress alongside the existing
+  `~/.zipsa/<skill>@<ver>/runs/<timestamp>/metadata.json`: the index
+  of the last successful phase + the `next_phase_input` it produced.
+- Add `zipsa run --resume <run-id>` (or `--resume-last`): load the
+  persisted `next_phase_input`, jump straight to the failed phase,
+  re-execute from there with the same HITL context (so e.g. an
+  approved draft survives the retry without re-asking the user).
+- Resume must validate the skill version matches the original run —
+  if the skill was upgraded in between, refuse with a clear message
+  (state schemas may have changed). User can pass `--force` to
+  override at their own risk.
+- Phases whose outputs are non-deterministic and user-facing
+  (specifically the `review` phase) should be the dividing line for
+  resume: by default, resume rewinds to *after* the last successful
+  user-confirming phase, not after every successful phase. Otherwise
+  resume from `post` after a `confirm("Post this to X?")` could
+  silently re-post without re-asking.
+
+**Adjacent decisions to make at fix time.**
+
+- Should `--resume` be skill-opt-in (`spec.resume: enabled`) or
+  always-on? Skills with side effects in middle phases may prefer to
+  refuse resume.
+- Run id discovery: timestamps are unfriendly. Maybe show last 5
+  runs with their final status in `zipsa list <skill>` or
+  `zipsa runs <skill>`.
+
+**Test plan.** Multi-phase fixture skill where phase 2 fails. Run,
+fail, resume, verify phase 1's `next_phase_input` was re-loaded
+correctly and phase 2 retried (not phase 0).
+
+---
