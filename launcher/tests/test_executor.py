@@ -1174,3 +1174,27 @@ class TestMemoryIntegration:
         executor._write_default_phase_allow_file(tmp_path, skill)
         data = json.loads((tmp_path / "phase-allow.json").read_text())
         assert "mcp__zipsa__ask_once" in data["allowed_tools"]
+
+
+class TestSkillDirMount:
+    """The skill's own source dir is auto-mounted at /skill:ro so the
+    skill can ship helper scripts and reach them at a stable path."""
+
+    def test_skill_source_dir_mounted_at_slash_skill(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path)
+
+        cmd = executor._build_docker_command(
+            skill=skill,
+            user_input="x",
+            claude_json_path=claude_json_path,
+            env={},
+        )
+
+        cmd_str = " ".join(cmd)
+        # The skill_dir (parent of the manifest file) should appear as a
+        # mount source with /skill as the target, read-only.
+        expected = f"{skill.skill_dir}:/skill:ro"
+        assert expected in cmd_str, f"expected mount {expected!r} not in {cmd_str!r}"

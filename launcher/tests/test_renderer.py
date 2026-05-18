@@ -126,6 +126,81 @@ class TestPrettyMode:
         assert "2" in out
         assert "0.0123" in out
 
+    def test_result_shows_failed_when_phase_status_failed(self, capsys):
+        """Even if SDK is_error=False, a phase that returned status=failed
+        in its JSON contract must NOT be footed with 'Success'."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '```json\n{"status": "failed", "phase": "post", "error": {"code": "x_post_failed"}}\n```'}]},
+            },
+            {
+                "type": "result",
+                "is_error": False,  # SDK call itself succeeded
+                "duration_ms": 11700,
+                "num_turns": 2,
+                "total_cost_usd": 0.05,
+            },
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Failed" in out
+        assert "Success" not in out
+
+    def test_result_shows_out_of_scope_when_phase_status_out_of_scope(self, capsys):
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '{"status": "out_of_scope", "phase": "precheck"}'}]},
+            },
+            {
+                "type": "result",
+                "is_error": False,
+                "duration_ms": 1000,
+                "num_turns": 1,
+                "total_cost_usd": 0.01,
+            },
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Out of scope" in out
+        assert "Success" not in out
+
+    def test_result_shows_success_when_phase_status_ok(self, capsys):
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '```json\n{"status": "ok", "phase": "post"}\n```'}]},
+            },
+            {
+                "type": "result",
+                "is_error": False,
+                "duration_ms": 1000,
+                "num_turns": 1,
+                "total_cost_usd": 0.01,
+            },
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Success" in out
+
+    def test_phase_start_resets_phase_status_tracking(self, capsys):
+        """A new phase's result shouldn't inherit the previous phase's status."""
+        events = [
+            # Phase 1: failed
+            {"type": "zipsa_phase_start", "phase": "p1", "phase_idx": 0, "total_phases": 2, "goal": "g"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": '{"status": "failed"}'}]}},
+            {"type": "result", "is_error": False, "duration_ms": 1000, "num_turns": 1, "total_cost_usd": 0.01},
+            # Phase 2: ok — must not show "Failed" from phase 1's leftover state
+            {"type": "zipsa_phase_start", "phase": "p2", "phase_idx": 1, "total_phases": 2, "goal": "g"},
+            {"type": "result", "is_error": False, "duration_ms": 1000, "num_turns": 1, "total_cost_usd": 0.01},
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        # Both footers should appear; the second must say Success (no leftover Failed).
+        assert out.count("Failed") == 1
+        assert "Success" in out
+
     def test_system_events_skipped(self, capsys):
         events = [{"type": "system", "subtype": "init"}]
         render(iter(events), OutputMode.pretty)
