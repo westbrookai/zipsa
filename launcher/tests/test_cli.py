@@ -858,3 +858,39 @@ class TestNameResolution:
         assert result.exit_code == 1
         assert "ghost" in result.output
 
+
+class TestConnectProviderFallback:
+    """`zipsa connect <name>` should fall through to PROVIDERS when name
+    isn't a known MCP server in any installed skill."""
+
+    def test_connect_provider_runs_oauth(self):
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        runner = CliRunner()
+        with patch("zipsa.cli.OAuthManager") as mgr_cls, \
+             patch("zipsa.cli.get_provider") as get_p:
+            from zipsa.auth.providers import PROVIDERS
+            get_p.return_value = PROVIDERS["x"]
+
+            mgr = mgr_cls.return_value
+            mgr.ensure_credentials_provider.return_value = "tok-xyz"
+
+            result = runner.invoke(app, ["connect", "x"])
+
+        assert result.exit_code == 0, result.output
+        mgr.ensure_credentials_provider.assert_called_once()
+        assert "x" in result.output.lower()
+
+    def test_connect_unknown_name_fails_gracefully(self):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["connect", "definitely-not-a-thing"])
+
+        assert result.exit_code != 0
+        # Should hint at what IS available (registry)
+        assert "x" in result.output
+

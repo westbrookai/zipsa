@@ -11,6 +11,7 @@ from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
+from .auth.providers import PROVIDERS, get_provider, UnknownProvider
 from .core.executor import DockerExecutor
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
@@ -550,19 +551,21 @@ def connect(
                 break
 
     if not matched_server:
-        typer.echo(
-            f"Error: No installed skill has an OAuth2 MCP server named '{server_name}'.",
-            err=True,
-        )
-        typer.echo(
-            "Install a skill that uses this server first, e.g.:",
-            err=True,
-        )
-        typer.echo(
-            f"  zipsa install <source>",
-            err=True,
-        )
-        raise typer.Exit(1)
+        # Fall through to the provider registry for non-MCP OAuth targets
+        try:
+            provider = get_provider(server_name)
+        except UnknownProvider as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
+
+        try:
+            manager = OAuthManager()
+            manager.ensure_credentials_provider(provider)
+            typer.echo(f"Connected to {provider.name}")
+        except Exception as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1)
+        return
 
     try:
         manager = OAuthManager()
