@@ -382,3 +382,31 @@ class TestSpecMounts:
         assert len(manifest.spec.mounts) == 2
         assert manifest.spec.mounts[0].container == "/home/agent/claude-projects"
         assert manifest.spec.mounts[1].mode == "rw"
+
+
+class TestDefaultQuery:
+    """SkillSpec.default_query is an optional string used by the launcher
+    when the user invokes the skill with no query argument."""
+
+    def _spec(self, **overrides):
+        from zipsa.core.models import SkillSpec
+        data = {
+            "purpose": "test",
+            "instructions": "./SKILL.md",
+        }
+        data.update(overrides)
+        return SkillSpec.model_validate(data)
+
+    def test_default_query_absent_is_none(self):
+        spec = self._spec()
+        assert spec.default_query is None
+
+    def test_default_query_accepts_string(self):
+        spec = self._spec(default_query="Say hello.")
+        assert spec.default_query == "Say hello."
+
+    def test_default_query_empty_string_treated_as_empty(self):
+        """Empty string is a valid (but odd) value — it explicitly
+        opts INTO the empty-input → agent-intro path. Not None."""
+        spec = self._spec(default_query="")
+        assert spec.default_query == ""

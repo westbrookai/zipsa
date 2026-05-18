@@ -155,6 +155,7 @@ class SkillSpec(BaseModel):
     limits: Optional[SkillLimits] = None
     config: dict = Field(default_factory=dict)  # Skill-specific config
     network: Optional[dict] = None  # Network allow list
+    default_query: Optional[str] = None  # Default query for skill (when user runs with no args)
     # Multi-phase support (v1: documentation only, v2: strict validation)
     phases: list[PhaseSpec] = Field(default_factory=list)
     state_schema: dict = Field(default_factory=dict)  # v1: docs only
