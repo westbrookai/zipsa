@@ -12,8 +12,22 @@ from typing import Optional
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from .hitl_mcp import HitlIO
+
+
+class _BearerAuthMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, expected_token: str) -> None:
+        super().__init__(app)
+        self._expected = expected_token
+
+    async def dispatch(self, request, call_next):
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {self._expected}":
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
 
 def _pick_free_port() -> int:
@@ -72,6 +86,7 @@ class HitlServer:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         app = mcp.streamable_http_app()
+        app.add_middleware(_BearerAuthMiddleware, expected_token=self.token)
         config = uvicorn.Config(
             app,
             host="127.0.0.1",

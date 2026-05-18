@@ -125,3 +125,48 @@ class TestToolsCallable:
             assert content["text"] == "seoul"
         finally:
             server.stop()
+
+
+class TestAuth:
+    def _make_running_server(self):
+        import io as _io
+        io_ = HitlIO(
+            stdin=_io.StringIO(""),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        server = HitlServer(io_)
+        server.start()
+        return server
+
+    def test_missing_token_rejected(self):
+        import httpx
+        server = self._make_running_server()
+        try:
+            r = httpx.post(
+                f"http://127.0.0.1:{server.port}/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                headers={"Content-Type": "application/json",
+                         "Accept": "application/json, text/event-stream"},
+                timeout=5.0,
+            )
+            assert r.status_code == 401
+        finally:
+            server.stop()
+
+    def test_wrong_token_rejected(self):
+        import httpx
+        server = self._make_running_server()
+        try:
+            r = httpx.post(
+                f"http://127.0.0.1:{server.port}/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                headers={"Content-Type": "application/json",
+                         "Accept": "application/json, text/event-stream",
+                         "Authorization": "Bearer wrong"},
+                timeout=5.0,
+            )
+            assert r.status_code == 401
+        finally:
+            server.stop()
