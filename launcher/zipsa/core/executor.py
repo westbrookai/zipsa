@@ -191,9 +191,9 @@ class DockerExecutor:
         )
         skill_memory_path = (
             zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
-            / "memory.json"
+            / "memory" / "skill-mem.json"
         )
-        global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global.json"
+        global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global-mem.json"
         skill_store = MemoryStore(skill_memory_path)
         global_store = MemoryStore(global_memory_path)
         hitl_server = HitlServer(
