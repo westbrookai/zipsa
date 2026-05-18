@@ -1200,6 +1200,230 @@ class TestSkillDirMount:
         assert expected in cmd_str, f"expected mount {expected!r} not in {cmd_str!r}"
 
 
+class TestLimitsIntegration:
+    """The executor's per-event handler invokes limits.update_for_event
+    and limits.check_limits, and emits zipsa_limits_breach on breach."""
+
+    def _make_skill_with_limits(self, tmp_path, phase_limits=None, agg_limits=None):
+        """Build a minimal single-phase skill with given limits."""
+        import yaml
+        skill_dir = tmp_path / "limited-skill"
+        skill_dir.mkdir()
+        spec = {
+            "purpose": "Test limited skill",
+            "instructions": "./SKILL.md",
+            "tools": {"builtin": ["Read"]},
+        }
+        if phase_limits is not None:
+            spec["limits"] = phase_limits
+        if agg_limits is not None:
+            spec["limits"] = agg_limits
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "limited-skill", "version": "1.0.0"},
+            "spec": spec,
+        }))
+        (skill_dir / "SKILL.md").write_text("# Limited Skill")
+        return Skill.load(skill_dir)
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_phase_cost_breach_emits_event_and_stops(self, mock_popen, tmp_path):
+        """A skill that exceeds phase cost on the 2nd assistant message gets
+        stopped; a zipsa_limits_breach event is emitted and the stream stops."""
+        from unittest.mock import MagicMock
+
+        # Each assistant event with 1M input tokens on Opus costs $15.
+        # Set a max_cost_usd of $10 so the 2nd message breaches it.
+        assistant_line_1 = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "thinking..."}],
+                "usage": {"input_tokens": 500_000},  # ~$7.50 at Opus rate
+            },
+        }) + "\n"
+        assistant_line_2 = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "thinking more..."}],
+                "usage": {"input_tokens": 500_000},  # ~$7.50 more — cumulative ~$15 > $10
+            },
+        }) + "\n"
+        # This should never be yielded — stream must stop after breach
+        extra_line = json.dumps({"type": "result", "is_error": False}) + "\n"
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [
+            assistant_line_1,
+            assistant_line_2,
+            extra_line,
+            "",  # EOF
+        ]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=0)
+        mock_process.kill = Mock()
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill = self._make_skill_with_limits(
+            tmp_path,
+            agg_limits={"max_cost_usd": 10.0},
+        )
+        executor = DockerExecutor()
+
+        events = list(executor.run(skill, "Test", env={}))
+        event_types = [e.get("type") for e in events]
+
+        # Breach event must be present
+        assert "zipsa_limits_breach" in event_types, f"No breach event in: {event_types}"
+
+        # No events after the breach
+        breach_idx = event_types.index("zipsa_limits_breach")
+        assert breach_idx == len(event_types) - 1, (
+            f"Events after breach: {event_types[breach_idx + 1:]}"
+        )
+
+        # Process must have been terminated
+        mock_process.terminate.assert_called()
+
+        # Breach event has the right structure
+        breach_event = events[breach_idx]
+        assert breach_event["kind"] == "cost"
+        assert breach_event["limit"] == 10.0
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_aggregate_turns_breach_emits_event(self, mock_popen, tmp_path):
+        """When aggregate max_turns is exceeded, a zipsa_limits_breach event
+        is emitted and the stream stops."""
+        from unittest.mock import MagicMock
+
+        # Each assistant with a thinking block = 1 turn.
+        # Set aggregate max_turns=1; after 2 assistant events it should breach.
+        def make_assistant_line():
+            return json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "thinking", "thinking": "..."}],
+                    "usage": {"input_tokens": 1},
+                },
+            }) + "\n"
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [
+            make_assistant_line(),  # turn 1 — within limit
+            make_assistant_line(),  # turn 2 — breaches max_turns=1
+            json.dumps({"type": "result", "is_error": False}) + "\n",
+            "",  # EOF
+        ]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=0)
+        mock_process.kill = Mock()
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill = self._make_skill_with_limits(
+            tmp_path,
+            agg_limits={"max_turns": 1},
+        )
+        executor = DockerExecutor()
+
+        events = list(executor.run(skill, "Test", env={}))
+        event_types = [e.get("type") for e in events]
+
+        assert "zipsa_limits_breach" in event_types, f"No breach event in: {event_types}"
+        breach_idx = event_types.index("zipsa_limits_breach")
+        # Nothing after breach
+        assert breach_idx == len(event_types) - 1
+
+        breach_event = events[breach_idx]
+        assert breach_event["kind"] == "turns"
+        assert breach_event["limit"] == 1.0
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_hitl_wait_does_not_count_toward_timeout(self, mock_popen, tmp_path, monkeypatch):
+        """HITL pause/resume events must NOT contribute to compute time.
+
+        Simulates: agent asks mcp__zipsa__ask → 5-minute wall gap (monotonic
+        mocked) → tool_result arrives → agent finishes. With a 60s timeout
+        the run must NOT breach (compute time is 0s, HITL is excluded).
+
+        Tests _execute_skill directly to avoid HitlServer setup."""
+        from unittest.mock import MagicMock
+        import zipsa.core.limits as _limits_mod
+
+        # Mocked monotonic: new_state() + tool_use + tool_result + check(x2)
+        call_count = [0]
+        monotonic_values = [100.0, 110.0, 470.0, 471.0, 472.0]
+
+        def mock_monotonic():
+            idx = call_count[0]
+            call_count[0] += 1
+            if idx < len(monotonic_values):
+                return monotonic_values[idx]
+            return 472.0  # stay at end if more calls than expected
+
+        monkeypatch.setattr(_limits_mod.time, "monotonic", mock_monotonic)
+
+        ask_line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "mcp__zipsa__ask", "input": {}},
+                ],
+                "usage": {"input_tokens": 1},
+            },
+        }) + "\n"
+        tool_result_line = json.dumps({
+            "type": "user",
+            "message": {
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1"}],
+            },
+        }) + "\n"
+        result_line = json.dumps({
+            "type": "result",
+            "is_error": False,
+            "num_turns": 1,
+            "total_cost_usd": 0.001,
+        }) + "\n"
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [ask_line, tool_result_line, result_line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=0)
+        mock_process.kill = Mock()
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        # 60s timeout — would fire if HITL time counted (wall=372s, HITL=360s, compute=12s)
+        skill = self._make_skill_with_limits(
+            tmp_path,
+            agg_limits={"timeout_seconds": 60},
+        )
+        executor = DockerExecutor()
+
+        # Call _execute_skill directly to bypass HitlServer lifecycle
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        docker_cmd = ["docker", "run", "--rm", "test-image", "echo", "test"]
+        events = list(executor._execute_skill(
+            docker_cmd, claude_json_path, skill, None,
+        ))
+        event_types = [e.get("type") for e in events]
+
+        # No breach — HITL pause was correctly excluded
+        assert "zipsa_limits_breach" not in event_types, (
+            f"Unexpected breach in: {event_types}"
+        )
+
+
 class TestKeyboardInterrupt:
     """Ctrl+C during a run must terminate the underlying Docker process.
     Used to live in test_limits.py; moved here when that file was
