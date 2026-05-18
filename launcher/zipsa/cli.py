@@ -518,15 +518,18 @@ def uninstall(
 def connect(
     server_name: Annotated[
         str,
-        typer.Argument(help="MCP server name to authorize (e.g. notion, github)"),
+        typer.Argument(help="OAuth target name — an MCP server from an installed skill (e.g. 'notion') or a registered provider (e.g. 'x')"),
     ],
 ):
-    """Pre-authorize OAuth credentials for an MCP server.
+    """Pre-authorize OAuth credentials for an MCP server or registered provider.
 
-    Scans all installed skills for a server with the given name and initiates
-    OAuth authorization. Credentials are stored per server and reused across skills.
+    Scans all installed skills for an MCP server with the given name, or checks
+    the provider registry for a registered provider. Initiates OAuth authorization
+    and stores credentials per target for reuse across skills.
 
-    Example: zipsa connect notion
+    Examples:
+        zipsa connect notion
+        zipsa connect x
     """
     # Scan installed skills for an OAuth server matching server_name
     skills_root = _skills_dir()

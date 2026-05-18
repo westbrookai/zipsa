@@ -223,6 +223,13 @@ class OAuthManager:
     async def _full_flow_provider(
         self, provider: "Provider", storage: FileTokenStorage
     ) -> str:
+        if provider.client_id.startswith("REPLACE_ME"):
+            raise RuntimeError(
+                f"Provider {provider.name!r} has a placeholder client_id "
+                f"({provider.client_id!r}). The provider must be configured with "
+                f"a real OAuth client ID before connect can run."
+            )
+
         async with httpx.AsyncClient() as client:
             code_verifier, code_challenge = _generate_pkce()
             state = secrets.token_urlsafe(16)

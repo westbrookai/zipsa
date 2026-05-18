@@ -112,3 +112,28 @@ class TestEnsureCredentialsProvider:
         assert body["grant_type"] == "refresh_token"
         assert body["refresh_token"] == "ref-old"
         assert body["client_id"] == "fake-client-id"
+
+    def test_placeholder_client_id_raises_before_browser(self):
+        """Calling ensure_credentials_provider with a REPLACE_ME client_id
+        should fail loudly, not silently send a bad request to the provider."""
+        bad_provider = Provider(
+            name="bad",
+            client_id="REPLACE_ME_BEFORE_RELEASE",
+            authorization_endpoint="https://example.test/authorize",
+            token_endpoint="https://example.test/token",
+            scopes=["read"],
+            token_env_var="ZIPSA_TOKEN_BAD",
+            display_handle_endpoint=None,
+        )
+
+        with patch("zipsa.auth.oauth.FileTokenStorage") as storage_cls, \
+             patch("zipsa.auth.oauth.open_browser_and_wait") as browser:
+            storage = AsyncMock()
+            storage.load.return_value = None
+            storage_cls.return_value = storage
+
+            mgr = OAuthManager()
+            with pytest.raises(RuntimeError, match="placeholder client_id"):
+                mgr.ensure_credentials_provider(bad_provider)
+
+        browser.assert_not_called()
