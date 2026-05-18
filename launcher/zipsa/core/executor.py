@@ -2,9 +2,11 @@
 
 import json
 import os
+import platform
 import shlex
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
@@ -35,6 +37,10 @@ class DockerExecutor:
         self.runtime = get_runtime(runtime)
         self.image = image
         self.dev_overlay = load_dev_overlay()
+        # HITL state — set by _execute_skill / _execute_phases before
+        # _build_docker_command is invoked.
+        self._hitl_port: Optional[int] = None
+        self._hitl_token: Optional[str] = None
         if self.dev_overlay is not None:
             desc = self.dev_overlay.description or "(no description)"
             mounts_n = len(self.dev_overlay.mounts)
@@ -115,44 +121,106 @@ class DockerExecutor:
             mcp_debug_host.touch()
 
         env_file = skill_data_dir / ".env"
-        try:
-            # Build Docker command (also writes env file)
-            docker_cmd = self._build_docker_command(
-                skill, user_input, claude_json_path, env, shell=shell,
-                mcp_debug_host=mcp_debug_host,
-                extra_docker_opts=extra_docker_opts,
-            )
 
-            if dry_run:
-                mcp_config = json.loads(claude_json_path.read_text())
-                self._print_dry_run(skill, docker_cmd, mcp_config)
-                return None
+        if dry_run or shell:
+            try:
+                # Build Docker command (also writes env file)
+                docker_cmd = self._build_docker_command(
+                    skill, user_input, claude_json_path, env, shell=shell,
+                    mcp_debug_host=mcp_debug_host,
+                    extra_docker_opts=extra_docker_opts,
+                )
 
-            if shell:
-                # Hook needs an allow file even in shell mode (where the user
-                # may invoke claude manually). Use the skill's full tool set.
+                if dry_run:
+                    mcp_config = json.loads(claude_json_path.read_text())
+                    self._print_dry_run(skill, docker_cmd, mcp_config)
+                    return None
+
+                # shell mode: Hook needs an allow file even in shell mode (where
+                # the user may invoke claude manually). Use the skill's full
+                # tool set.
                 self._write_default_phase_allow_file(claude_json_path.parent, skill)
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
+            finally:
+                # Clean up env file for dry_run and shell modes
+                if env_file.exists():
+                    env_file.unlink()
 
-            # Multi-phase: delegate to phase loop
+        # Real execution: hand off to a generator that owns the HitlServer
+        # lifecycle so the server stays up while the caller consumes events.
+        return self._execute_with_hitl(
+            skill=skill,
+            user_input=user_input,
+            env=env,
+            run_dir=run_dir,
+            skill_data_dir=skill_data_dir,
+            mcp_debug_host=mcp_debug_host,
+            extra_docker_opts=extra_docker_opts,
+            env_file=env_file,
+        )
+
+    def _execute_with_hitl(
+        self,
+        skill: Skill,
+        user_input: str,
+        env: dict[str, str],
+        run_dir: Optional[Path],
+        skill_data_dir: Path,
+        mcp_debug_host: Optional[Path],
+        extra_docker_opts: Optional[list[str]],
+        env_file: Path,
+    ) -> Iterator[dict]:
+        """Wrap real execution with HitlServer lifecycle.
+
+        Starts the HITL HTTP MCP server, then (re)builds .claude.json so it
+        includes the zipsa MCP entry pointing at the host-side server. The
+        server stays up for the full duration of event consumption, then
+        stops in the finally block.
+        """
+        from .hitl_mcp import HitlIO
+        from .hitl_runner import HitlServer
+
+        stdout_lock = threading.Lock()
+        hitl_io = HitlIO(
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stdout_lock=stdout_lock,
+            is_interactive=sys.stdin.isatty(),
+        )
+        hitl_server = HitlServer(hitl_io)
+        hitl_server.start()
+        self._hitl_port = hitl_server.port
+        self._hitl_token = hitl_server.token
+        try:
+            # Rebuild .claude.json so it includes the zipsa MCP entry.
+            claude_json_path = skill.build_claude_json(
+                output_dir=skill_data_dir,
+                container_workspace=CONTAINER_WORKSPACE,
+                hitl_port=self._hitl_port,
+            )
+
             if skill.manifest.spec.phases:
-                return self._execute_phases(
+                yield from self._execute_phases(
                     skill, user_input, env, run_dir, claude_json_path,
-                    mcp_debug, extra_docker_opts,
+                    mcp_debug_host is not None, extra_docker_opts,
                 )
+                return
 
             # Single-phase: PreToolUse hook needs phase-allow.json too.
             self._write_default_phase_allow_file(claude_json_path.parent, skill)
-            return self._execute_skill(docker_cmd, claude_json_path, skill, run_dir, env_file, user_input)
-
-        except Exception:
-            raise
+            docker_cmd = self._build_docker_command(
+                skill, user_input, claude_json_path, env,
+                mcp_debug_host=mcp_debug_host,
+                extra_docker_opts=extra_docker_opts,
+            )
+            yield from self._execute_skill(
+                docker_cmd, claude_json_path, skill, run_dir, env_file, user_input,
+            )
         finally:
-            # Clean up env file for dry_run and shell modes
-            # (normal execution cleanup happens inside _execute_skill)
-            if (dry_run or shell) and env_file.exists():
-                env_file.unlink()
+            hitl_server.stop()
+            self._hitl_port = None
+            self._hitl_token = None
 
     def _execute_skill(
         self,
@@ -703,6 +771,11 @@ class DockerExecutor:
         /.zipsa read-only mount.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
+        # HITL tools are always allowed — the agent may ask, confirm, or
+        # choose at any point regardless of the phase's declared toolset.
+        allowed_tools = list(allowed_tools) + [
+            "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+        ]
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
         return path
@@ -799,6 +872,8 @@ class DockerExecutor:
         merged_env = dict(env)
         if self.dev_overlay is not None:
             merged_env.update(self.dev_overlay.env)
+        if self._hitl_token is not None:
+            merged_env["ZIPSA_HITL_TOKEN"] = self._hitl_token
         env_file = self._write_env_file(skill_data_dir, merged_env)
         cmd.extend(["--env-file", str(env_file)])
 
@@ -840,6 +915,12 @@ class DockerExecutor:
         if self.dev_overlay is not None:
             for mount in self.dev_overlay.mounts:
                 cmd.extend(["-v", mount])
+
+        # Linux Docker Engine needs explicit host-gateway mapping for
+        # host.docker.internal to resolve; Docker Desktop (macOS/Windows)
+        # provides it natively.
+        if self._hitl_port is not None and platform.system() == "Linux":
+            cmd.extend(["--add-host=host.docker.internal:host-gateway"])
 
         # Image
         cmd.append(self.image)
