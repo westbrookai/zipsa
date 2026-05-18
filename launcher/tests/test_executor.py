@@ -1204,8 +1204,13 @@ class TestLimitsIntegration:
     """The executor's per-event handler invokes limits.update_for_event
     and limits.check_limits, and emits zipsa_limits_breach on breach."""
 
-    def _make_skill_with_limits(self, tmp_path, phase_limits=None, agg_limits=None):
-        """Build a minimal single-phase skill with given limits."""
+    def _make_skill_with_limits(self, tmp_path, agg_limits=None):
+        """Build a minimal single-phase skill with given spec-level (aggregate)
+        limits. For a single-phase skill the phase_limits == agg_limits, so
+        the helper only needs one param. Tests that need DISTINCT phase vs
+        aggregate limits go through _execute_skill() directly with
+        phase_limits= and limits_state= kwargs (see
+        test_aggregate_accumulates_across_phases for an example)."""
         import yaml
         skill_dir = tmp_path / "limited-skill"
         skill_dir.mkdir()
@@ -1214,8 +1219,6 @@ class TestLimitsIntegration:
             "instructions": "./SKILL.md",
             "tools": {"builtin": ["Read"]},
         }
-        if phase_limits is not None:
-            spec["limits"] = phase_limits
         if agg_limits is not None:
             spec["limits"] = agg_limits
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
