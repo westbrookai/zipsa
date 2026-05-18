@@ -848,7 +848,8 @@ class TestWritePhaseAllowFile:
         path = tmp_path / "phase-allow.json"
         assert path.exists()
         data = json.loads(path.read_text())
-        # HITL + memory tools (mcp__zipsa__*) are always appended.
+        # HITL + memory tools (mcp__zipsa__*) and Claude Code infra
+        # (ToolSearch) are always appended.
         assert data == {
             "phase_id": "discover",
             "allowed_tools": [
@@ -857,6 +858,7 @@ class TestWritePhaseAllowFile:
                 "mcp__zipsa__recall", "mcp__zipsa__remember",
                 "mcp__zipsa__forget", "mcp__zipsa__list_memory",
                 "mcp__zipsa__ask_once",
+                "ToolSearch",
             ],
         }
 

@@ -89,6 +89,9 @@ inline instead (see "Asking the user").
   status=failed.
 - Tool errors retry once at most. Persistent failure → status=failed.
 - Suppress narration ("I will now...", "Let me try..."). Just act.
+- `WebFetch` requires BOTH `url` AND `prompt` parameters. The `prompt`
+  tells the fetcher what to extract from the page. For raw verbatim
+  bodies (e.g. JSON APIs), use `prompt: "Return the response body verbatim."`.
 
 ## Interacting with the user
 

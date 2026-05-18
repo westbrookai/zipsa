@@ -764,13 +764,15 @@ class DockerExecutor:
         /.zipsa read-only mount.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        # HITL tools are always allowed — the agent may ask, confirm, or
-        # choose at any point regardless of the phase's declared toolset.
+        # Always-on tools: HITL/memory (the agent may ask/remember at any time)
+        # plus Claude Code infra tools the agent falls back to when confused
+        # (ToolSearch — denying it makes the agent retry in a loop).
         allowed_tools = list(allowed_tools) + [
             "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
             "mcp__zipsa__recall", "mcp__zipsa__remember",
             "mcp__zipsa__forget", "mcp__zipsa__list_memory",
             "mcp__zipsa__ask_once",
+            "ToolSearch",
         ]
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))

@@ -10,18 +10,20 @@ Single purpose: report current weather for a given location.
 
 2. Detect the user's language (Korean, English, Japanese, etc.) from how they phrased the request.
 
-3. Call WebFetch with this URL pattern:
+3. Call WebFetch with this URL pattern (compact one-line format — do NOT use `format=j1`, it returns ~100KB of multi-day forecast):
    ```
-   https://wttr.in/{location}?format=j1&lang={lang}
+   url:    https://wttr.in/{location}?format=%C+%t+%h+%w+%f&lang={lang}
+   prompt: "Return the response body verbatim."
    ```
    Use `ko` for Korean, `en` for English, `ja` for Japanese, etc.
 
-4. Parse the JSON response. Read these fields from `current_condition[0]`:
-   - `temp_C` — temperature (°C)
-   - `weatherDesc[0].value` — condition (e.g. "Sunny", "Light rain")
-   - `windspeedKmph` — wind speed (km/h)
-   - `humidity` — humidity (%)
-   - `FeelsLikeC` — feels-like temperature (°C)
+4. Parse the single line response. Format is:
+   ```
+   <condition> <temp>°C <humidity>% <wind> <feels_like>°C
+   ```
+   Example: `Light drizzle +19°C 83% ↓5km/h +19°C`
+   - condition: e.g. "Sunny", "Light rain", "Light drizzle"
+   - temp (°C), humidity (%), wind (km/h with direction), feels-like (°C)
 
 5. Reply to the user in their language, in 1-2 sentences. Keep it natural and conversational.
 
