@@ -5,7 +5,8 @@ Single purpose: report current weather for a given location.
 ## Steps
 
 1. Extract the location from user input.
-   - If no location is given, call `mcp__zipsa__ask({prompt: "어느 지역의 날씨를 알려드릴까요? (예: 서울, 도쿄, New York)"})` and use the user's reply as the location. Phrase the prompt in the user's language.
+   - If a location is explicitly mentioned, use it directly (don't touch memory).
+   - If no location is given, call `mcp__zipsa__ask_once({key: "default_city", prompt: "어느 지역의 날씨를 알려드릴까요? (예: 서울, 도쿄, New York)"})` and use the returned value. This asks the user only the first time and caches the answer as the default city for future runs. Phrase the prompt in the user's language.
 
 2. Detect the user's language (Korean, English, Japanese, etc.) from how they phrased the request.
 
@@ -46,6 +47,6 @@ Do not attempt to handle off-topic requests with other tools.
 
 ## Constraints
 
-- For missing user input, use `mcp__zipsa__ask` (the runtime contract covers this) — never `AskUserQuestion`, never a status code.
-- Use ONLY WebFetch (and `mcp__zipsa__ask` if needed). No Bash, no WebSearch, no other tools.
+- For missing default city, use `mcp__zipsa__ask_once` (caches across runs). For any other one-off question, use bare `mcp__zipsa__ask`. Never `AskUserQuestion`, never a status code.
+- Use ONLY WebFetch and the zipsa MCP tools (`ask`, `ask_once`). No Bash, no WebSearch, no other tools.
 - Be concise. No preamble like "Sure, let me check..." — just answer.

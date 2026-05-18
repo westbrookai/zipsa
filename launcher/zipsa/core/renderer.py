@@ -82,7 +82,24 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
                 return None
             name = block.get("name", "Unknown")
             if name.startswith("mcp__zipsa__"):
-                return f"\n{_GRAY}[asking user]{_RESET}"
+                inp = block.get("input", {}) or {}
+                short = name[len("mcp__zipsa__"):]
+                if short in ("ask", "confirm", "choose"):
+                    # Always-asks tools — the MCP server prints the prompt block
+                    return f"\n{_GRAY}[asking user]{_RESET}"
+                if short == "ask_once":
+                    # May or may not actually ask depending on cache state — show
+                    # the key so the reader can correlate with prompt (or its absence)
+                    key = inp.get("key", "?")
+                    return f"\n{_GRAY}[ask_once: {key}]{_RESET}"
+                if short in ("recall", "remember", "forget"):
+                    key = inp.get("key", "?")
+                    return f"\n{_GRAY}[memory: {short} {key}]{_RESET}"
+                if short == "list_memory":
+                    scope = inp.get("scope", "skill")
+                    return f"\n{_GRAY}[memory: list ({scope})]{_RESET}"
+                # Unknown future zipsa tool — generic marker
+                return f"\n{_GRAY}[{short}]{_RESET}"
             inp = block.get("input", {})
             items = list(inp.items())[:3]
             args = "  ".join(f"{k}={str(v)[:80]}" for k, v in items)

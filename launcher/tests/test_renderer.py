@@ -250,3 +250,56 @@ class TestHitlSuppression:
         text = result if isinstance(result, str) else result[0]
         assert "Bash" in text
         assert "command=" in text
+
+    def _zipsa_event(self, tool, inp):
+        return {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": f"mcp__zipsa__{tool}", "input": inp}],
+            },
+        }
+
+    def _text(self, event):
+        result = _format(event, OutputMode.pretty, turn=0)
+        return result if isinstance(result, str) else result[0]
+
+    def test_confirm_uses_asking_user_marker(self):
+        text = self._text(self._zipsa_event("confirm", {"message": "OK?"}))
+        assert "[asking user]" in text
+
+    def test_choose_uses_asking_user_marker(self):
+        text = self._text(self._zipsa_event("choose", {"prompt": "Pick", "options": ["a"]}))
+        assert "[asking user]" in text
+
+    def test_ask_once_shows_key(self):
+        text = self._text(self._zipsa_event("ask_once", {"key": "default_city", "prompt": "?"}))
+        assert "[ask_once: default_city]" in text
+        # Specifically NOT the misleading "asking user" — ask_once may hit cache
+        assert "asking user" not in text
+
+    def test_recall_shows_memory_marker_with_key(self):
+        text = self._text(self._zipsa_event("recall", {"key": "workspace"}))
+        assert "[memory: recall workspace]" in text
+        assert "asking user" not in text
+
+    def test_remember_shows_memory_marker_with_key(self):
+        text = self._text(self._zipsa_event("remember", {"key": "workspace", "value": "WBrk"}))
+        assert "[memory: remember workspace]" in text
+        # Value should NOT leak into the marker (could be sensitive)
+        assert "WBrk" not in text
+
+    def test_forget_shows_memory_marker_with_key(self):
+        text = self._text(self._zipsa_event("forget", {"key": "stale"}))
+        assert "[memory: forget stale]" in text
+
+    def test_list_memory_shows_scope(self):
+        text = self._text(self._zipsa_event("list_memory", {"scope": "global"}))
+        assert "[memory: list (global)]" in text
+
+    def test_list_memory_default_scope(self):
+        text = self._text(self._zipsa_event("list_memory", {}))
+        assert "[memory: list (skill)]" in text
+
+    def test_unknown_zipsa_tool_falls_back_to_short_name(self):
+        text = self._text(self._zipsa_event("new_future_tool", {"x": 1}))
+        assert "[new_future_tool]" in text
