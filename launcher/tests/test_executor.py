@@ -848,12 +848,17 @@ class TestWritePhaseAllowFile:
         path = tmp_path / "phase-allow.json"
         assert path.exists()
         data = json.loads(path.read_text())
-        # HITL tools (mcp__zipsa__*) are always appended.
+        # HITL + memory tools (mcp__zipsa__*) and Claude Code infra
+        # (ToolSearch) are always appended.
         assert data == {
             "phase_id": "discover",
             "allowed_tools": [
                 "Bash(find:*)", "Bash(rm:*)",
                 "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+                "mcp__zipsa__recall", "mcp__zipsa__remember",
+                "mcp__zipsa__forget", "mcp__zipsa__list_memory",
+                "mcp__zipsa__ask_once",
+                "ToolSearch",
             ],
         }
 
@@ -1103,3 +1108,41 @@ class TestHitlIntegration:
         assert "mcp__zipsa__ask" in data["allowed_tools"]
         assert "mcp__zipsa__confirm" in data["allowed_tools"]
         assert "mcp__zipsa__choose" in data["allowed_tools"]
+
+
+class TestMemoryIntegration:
+    """Executor wires per-skill and global MemoryStores into HitlServer and
+    adds the four memory tools to the default phase allow list."""
+
+    def test_default_allow_list_contains_memory_tools(self, tmp_path):
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor._write_default_phase_allow_file(tmp_path, skill)
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        assert "mcp__zipsa__recall" in data["allowed_tools"]
+        assert "mcp__zipsa__remember" in data["allowed_tools"]
+        assert "mcp__zipsa__forget" in data["allowed_tools"]
+        assert "mcp__zipsa__list_memory" in data["allowed_tools"]
+
+    def test_phase_allow_file_appends_memory_tools(self, tmp_path):
+        import json
+        executor = DockerExecutor()
+        executor._write_phase_allow_file(tmp_path, "precheck", ["WebFetch"])
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        # Existing tool stays, memory tools added
+        assert "WebFetch" in data["allowed_tools"]
+        assert "mcp__zipsa__recall" in data["allowed_tools"]
+        assert "mcp__zipsa__remember" in data["allowed_tools"]
+        assert "mcp__zipsa__forget" in data["allowed_tools"]
+        assert "mcp__zipsa__list_memory" in data["allowed_tools"]
+
+    def test_default_allow_list_contains_ask_once(self, tmp_path):
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor._write_default_phase_allow_file(tmp_path, skill)
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        assert "mcp__zipsa__ask_once" in data["allowed_tools"]

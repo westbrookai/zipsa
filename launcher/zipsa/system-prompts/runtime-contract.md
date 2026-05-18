@@ -89,29 +89,46 @@ inline instead (see "Asking the user").
   status=failed.
 - Tool errors retry once at most. Persistent failure → status=failed.
 - Suppress narration ("I will now...", "Let me try..."). Just act.
+- `WebFetch` requires BOTH `url` AND `prompt` parameters. The `prompt`
+  tells the fetcher what to extract from the page. For raw verbatim
+  bodies (e.g. JSON APIs), use `prompt: "Return the response body verbatim."`.
 
-## Asking the user
+## Interacting with the user
 
-**This is the ONLY mechanism for requesting user input. Do NOT use
-Claude Code's built-in `AskUserQuestion` tool, and do NOT emit
-status codes asking the launcher to prompt — those are not handled.**
+**The skill's instructions describe WHAT to ask. You decide WHICH
+tool based on the nature of the question.** Skills are written in
+natural language ("ask the user for their default city, remember it")
+and should not name `mcp__zipsa__*` tools — that's your job to map.
 
-When essential information is missing or you are about to take an
-irreversible/destructive action with unclear intent, call one of these
-MCP tools (always available, no need to declare them) and wait for the
-response inline:
+The tools are always available (no need to declare them) and must
+not be replaced by Claude Code's built-in `AskUserQuestion` or by
+status codes asking the launcher to prompt.
 
-- `mcp__zipsa__ask({prompt})` — user's free-text reply
-- `mcp__zipsa__confirm({message, default?})` — true/false
-- `mcp__zipsa__choose({prompt, options})` — one of the options
+### Intent → tool mapping
 
-Guidelines:
+| Skill says / you need to | Use |
+|---|---|
+| "ask the user X" / one-off question | `mcp__zipsa__ask({prompt})` |
+| "yes/no" / "confirm" | `mcp__zipsa__confirm({message, default?})` |
+| "pick one of" / "choose from" | `mcp__zipsa__choose({prompt, options})` |
+| "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
+| Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
+
+For `ask_once` and the memory primitives, the default scope is
+`"skill"` (visible only to this skill). Use `scope: "global"` for
+facts that apply to the user across all skills (e.g. preferred
+language, name).
+
+Pick descriptive stable keys (e.g. `default_city`, `notion_workspace`,
+not `c1`, `ws1`). Memory values must be JSON-serializable.
+
+### Guidelines
 
 - Prefer asking once with a clear prompt over guessing.
 - Do not ask things you can reasonably infer or default.
 - Maximum 3 user prompts per phase — excessive asking is friction.
 - Phrase questions in the user's language.
-- If the tool errors with a message starting `HITL_UNATTENDED`, the
+- If a tool errors with a message starting `HITL_UNATTENDED`, the
   run is non-interactive (cron, redirected stdin). End the phase
   with `status=failed` and `error.code="hitl_unattended"`.
 

@@ -26,6 +26,7 @@ from starlette.responses import JSONResponse
 _ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "host.docker.internal:*"]
 
 from .hitl_mcp import HitlIO
+from .memory_store import MemoryStore  # noqa: F401  (for type hints)
 
 
 class _BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -51,8 +52,15 @@ def _pick_free_port() -> int:
 class HitlServer:
     """HTTP MCP server (FastMCP) bound to 127.0.0.1:<random-port>."""
 
-    def __init__(self, io_: HitlIO) -> None:
+    def __init__(
+        self,
+        io_: HitlIO,
+        skill_store: "MemoryStore | None" = None,
+        global_store: "MemoryStore | None" = None,
+    ) -> None:
         self._io = io_
+        self._skill_store = skill_store
+        self._global_store = global_store
         self.port: int = 0
         self.token: str = ""
         self._thread: Optional[threading.Thread] = None
@@ -102,6 +110,73 @@ class HitlServer:
                 return choose_h.run(prompt=prompt, options=options)
             except HitlUnattended as e:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
+        from .hitl_mcp import (
+            RecallHandler, RememberHandler, ForgetHandler, ListMemoryHandler,
+        )
+
+        if self._skill_store is not None and self._global_store is not None:
+            recall_h = RecallHandler(self._skill_store, self._global_store)
+            remember_h = RememberHandler(self._skill_store, self._global_store)
+            forget_h = ForgetHandler(self._skill_store, self._global_store)
+            list_h = ListMemoryHandler(self._skill_store, self._global_store)
+
+            @mcp.tool()
+            def recall(key: str, scope: str = "skill") -> str | None:
+                """Read a value previously stored via remember.
+
+                Returns null if the key is not set in the given scope.
+                Scope: "skill" (default, per-skill private) or "global"
+                (shared across all skills).
+                """
+                value = recall_h.run(key=key, scope=scope)
+                # Normalize non-string values to JSON for MCP text content
+                if value is None or isinstance(value, str):
+                    return value
+                import json as _json
+                return _json.dumps(value, ensure_ascii=False)
+
+            @mcp.tool()
+            def remember(key: str, value: str, scope: str = "skill") -> None:
+                """Store a value for future runs of this (or any) skill.
+
+                Scope: "skill" (default, per-skill private) or "global"
+                (shared across all skills).
+                """
+                remember_h.run(key=key, value=value, scope=scope)
+
+            @mcp.tool()
+            def forget(key: str, scope: str = "skill") -> bool:
+                """Delete a stored value. Returns true if removed, false if missing."""
+                return forget_h.run(key=key, scope=scope)
+
+            @mcp.tool()
+            def list_memory(scope: str = "skill") -> list[str]:
+                """List keys in the chosen scope."""
+                return list_h.run(scope=scope)
+
+            from .hitl_mcp import AskOnceHandler
+            ask_once_h = AskOnceHandler(ask_h, recall_h, remember_h)
+
+            @mcp.tool()
+            def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
+                """Ask the user a question and cache the answer permanently.
+
+                If the key already has a value (in the chosen scope), returns
+                that value without prompting. Otherwise asks the user, stores
+                the answer, and returns it. The "cached config" pattern in one
+                call — no risk of forgetting to remember.
+
+                Use this for values that, once given, should never be asked
+                again (workspace name, default city, preferred language).
+
+                For one-off questions whose answers should NOT be stored
+                (current date, "are you sure?"), use the bare `ask` tool.
+                """
+                try:
+                    return ask_once_h.run(key=key, prompt=prompt, scope=scope)
+                except HitlUnattended as e:
+                    raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         app = mcp.streamable_http_app()
         app.add_middleware(_BearerAuthMiddleware, expected_token=self.token)

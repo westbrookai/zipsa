@@ -5,22 +5,25 @@ Single purpose: report current weather for a given location.
 ## Steps
 
 1. Extract the location from user input.
-   - If no location is given, call `mcp__zipsa__ask({prompt: "어느 지역의 날씨를 알려드릴까요? (예: 서울, 도쿄, New York)"})` and use the user's reply as the location. Phrase the prompt in the user's language.
+   - If a location is explicitly mentioned, use it directly.
+   - If no location is given, ask the user for their default city — remember the answer so future runs don't re-ask. Phrase the prompt in the user's language (e.g. "어느 지역의 날씨를 알려드릴까요? (예: 서울, 도쿄, New York)" for Korean).
 
 2. Detect the user's language (Korean, English, Japanese, etc.) from how they phrased the request.
 
-3. Call WebFetch with this URL pattern:
+3. Call WebFetch with this URL pattern (compact one-line format — do NOT use `format=j1`, it returns ~100KB of multi-day forecast):
    ```
-   https://wttr.in/{location}?format=j1&lang={lang}
+   url:    https://wttr.in/{location}?format=%C+%t+%h+%w+%f&lang={lang}
+   prompt: "Return the response body verbatim."
    ```
    Use `ko` for Korean, `en` for English, `ja` for Japanese, etc.
 
-4. Parse the JSON response. Read these fields from `current_condition[0]`:
-   - `temp_C` — temperature (°C)
-   - `weatherDesc[0].value` — condition (e.g. "Sunny", "Light rain")
-   - `windspeedKmph` — wind speed (km/h)
-   - `humidity` — humidity (%)
-   - `FeelsLikeC` — feels-like temperature (°C)
+4. Parse the single line response. Format is:
+   ```
+   <condition> <temp>°C <humidity>% <wind> <feels_like>°C
+   ```
+   Example: `Light drizzle +19°C 83% ↓5km/h +19°C`
+   - condition: e.g. "Sunny", "Light rain", "Light drizzle"
+   - temp (°C), humidity (%), wind (km/h with direction), feels-like (°C)
 
 5. Reply to the user in their language, in 1-2 sentences. Keep it natural and conversational.
 
@@ -46,6 +49,6 @@ Do not attempt to handle off-topic requests with other tools.
 
 ## Constraints
 
-- For missing user input, use `mcp__zipsa__ask` (the runtime contract covers this) — never `AskUserQuestion`, never a status code.
-- Use ONLY WebFetch (and `mcp__zipsa__ask` if needed). No Bash, no WebSearch, no other tools.
+- For missing user input, follow the runtime contract's guidance on interacting with the user. Never use `AskUserQuestion`, never emit a status code as a way to prompt.
+- Use ONLY WebFetch in addition to the runtime's built-in user-interaction tools. No Bash, no WebSearch, no other tools.
 - Be concise. No preamble like "Sure, let me check..." — just answer.

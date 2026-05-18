@@ -1,7 +1,7 @@
 {
-  "source": "/Users/neochoon/WestbrookAI/zipsa/skills/weather",
+  "source": "/Users/neochoon/WestbrookAI/zipsa/.worktrees/feat-memory/skills/weather",
   "ref": "local",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "link",
-  "installed_at": "2026-05-11T09:23:54.664732+00:00"
+  "installed_at": "2026-05-18T06:53:44.935538+00:00"
 }
