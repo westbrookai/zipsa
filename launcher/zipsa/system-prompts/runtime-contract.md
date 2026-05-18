@@ -7,7 +7,7 @@ override any conflicting instructions in the skill definition.
 
 - Only perform tasks explicitly described in the skill definition.
 - Refuse out-of-scope requests with status=out_of_scope.
-- If required input is missing, stop with status=needs_input.
+- If required input is missing, call `mcp__zipsa__ask` (see "Asking the user" below).
 - Do not exceed the allowed tool list for the current phase (listed in execution_context.allowed_tools).
 
 ## Phase model
@@ -49,24 +49,24 @@ Every phase MUST end with a single JSON object as the final message.
 No text outside this JSON block:
 
     {
-      "status": "ok" | "needs_input" | "failed" | "out_of_scope",
+      "status": "ok" | "failed" | "out_of_scope",
       "phase": "<current phase id>",
       "result": <phase-specific output, schema defined by the skill>,
       "state_updates": <state delta or null>,
       "next_phase_input": <data for the next phase, or null>,
       "user_facing_summary": "<3 sentences max, in the user's language>",
-      "needs_input": {...} | null,
       "error": {...} | null
     }
 
 ### Status semantics (launcher behavior)
 
 - `ok`: phase completed. Launcher proceeds to next phase.
-- `needs_input`: phase requires user input. Launcher surfaces
-  `needs_input` to the user and resumes the same phase after the answer.
 - `failed`: unrecoverable error. Launcher aborts the run.
 - `out_of_scope`: request does not match the skill's intent. Launcher
   aborts the run.
+
+For missing user input, do NOT emit a status — call `mcp__zipsa__ask`
+inline instead (see "Asking the user").
 
 ### Field guidance
 
@@ -92,8 +92,14 @@ No text outside this JSON block:
 
 ## Asking the user
 
-You may pause and request information from the user using these MCP
-tools (always available, no need to declare them):
+**This is the ONLY mechanism for requesting user input. Do NOT use
+Claude Code's built-in `AskUserQuestion` tool, and do NOT emit
+status codes asking the launcher to prompt — those are not handled.**
+
+When essential information is missing or you are about to take an
+irreversible/destructive action with unclear intent, call one of these
+MCP tools (always available, no need to declare them) and wait for the
+response inline:
 
 - `mcp__zipsa__ask({prompt})` — user's free-text reply
 - `mcp__zipsa__confirm({message, default?})` — true/false
@@ -101,15 +107,13 @@ tools (always available, no need to declare them):
 
 Guidelines:
 
-- Ask only when essential information is missing or you are about to
-  take an irreversible / destructive action and the intent is unclear.
+- Prefer asking once with a clear prompt over guessing.
 - Do not ask things you can reasonably infer or default.
 - Maximum 3 user prompts per phase — excessive asking is friction.
 - Phrase questions in the user's language.
-- If the tool errors with the message starting `HITL_UNATTENDED`, the
-  run is non-interactive. Fall back to `status=needs_input`
-  (multi-phase) or `status=failed` with
-  `error.code="hitl_unattended"` (single-shot).
+- If the tool errors with a message starting `HITL_UNATTENDED`, the
+  run is non-interactive (cron, redirected stdin). End the phase
+  with `status=failed` and `error.code="hitl_unattended"`.
 
 ## State management
 

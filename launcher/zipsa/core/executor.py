@@ -615,9 +615,6 @@ class DockerExecutor:
 
         try:
             for phase_idx, phase in enumerate(phases):
-                retries = 0
-                user_answer = None
-
                 # Aggregate limit check before starting (and before printing the header)
                 if agg_limits:
                     if agg_limits.max_turns and cumulative_turns >= agg_limits.max_turns:
@@ -644,14 +641,11 @@ class DockerExecutor:
                     )
                     user_message = self._build_user_message(
                         skill, phase.id, phase.goal, phase_allowed_tools,
-                        previous_output, skill_state, user_input, user_answer,
+                        previous_output, skill_state, user_input,
                     )
 
                     # Per-phase artifact directory
-                    dir_name = f"{phase_idx}-{phase.id}"
-                    if retries > 0:
-                        dir_name = f"{dir_name}.retry-{retries}"
-                    phase_dir = (run_dir / "phases" / dir_name) if run_dir else None
+                    phase_dir = (run_dir / "phases" / f"{phase_idx}-{phase.id}") if run_dir else None
                     if phase_dir:
                         phase_dir.mkdir(parents=True, exist_ok=True)
 
@@ -707,7 +701,6 @@ class DockerExecutor:
                             "user_facing_summary": (
                                 f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
                             ),
-                            "needs_input": None,
                             "error": {"code": "phase_id_mismatch"},
                         }
 
@@ -720,18 +713,6 @@ class DockerExecutor:
                         previous_output = phase_out.get("next_phase_input")
                         last_phase_out = phase_out
                         break
-
-                    elif status == "needs_input":
-                        if retries >= 3:
-                            yield {"type": "zipsa_phase_error", "phase": phase.id,
-                                   "error": "needs_input exceeded 3 retries"}
-                            return
-                        question = phase_out.get("needs_input", {})
-                        prompt_text = question.get("prompt") or question.get("question") or str(question)
-                        print(f"\n[{phase.id}] {prompt_text}")
-                        user_answer = input("> ").strip()
-                        retries += 1
-                        continue  # per-phase limits reset, aggregate accumulates
 
                     else:  # failed | out_of_scope — state_updates NOT applied
                         last_phase_out = phase_out
@@ -1016,7 +997,6 @@ class DockerExecutor:
         previous_phase_output: str | None,
         skill_state: dict,
         user_query: str,
-        user_answer: str | None = None,
     ) -> str:
         prompts_dir = Path(__file__).parent.parent / "system-prompts"
         template = (prompts_dir / "user-message-template.md").read_text(encoding="utf-8")
@@ -1024,10 +1004,6 @@ class DockerExecutor:
         now = datetime.now().astimezone()
         tz_offset = now.strftime("%z")
         tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
-
-        query = user_query
-        if user_answer is not None:
-            query = f"{user_query}\n\nuser_answer: {user_answer}"
 
         config_json = json.dumps(skill.manifest.spec.config, ensure_ascii=False)
         state_json = json.dumps(skill_state, ensure_ascii=False)
@@ -1042,7 +1018,7 @@ class DockerExecutor:
             allowed_tools=phase_allowed_tools,
             previous_phase_output=prev_output,
             skill_state=state_json,
-            user_query=query,
+            user_query=user_query,
             config=config_json,
         )
 

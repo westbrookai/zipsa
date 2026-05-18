@@ -729,24 +729,6 @@ class TestBuildUserMessage:
         assert "user_query: log today" in msg
         assert "Execute phase: precheck" in msg
 
-    def test_user_answer_appended_to_user_query(self):
-        executor = DockerExecutor()
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        msg = executor._build_user_message(
-            skill=skill,
-            phase_id="precheck",
-            phase_goal="goal",
-            phase_allowed_tools="",
-            previous_phase_output=None,
-            skill_state={},
-            user_query="log today",
-            user_answer="yesterday",
-        )
-
-        assert "user_answer: yesterday" in msg
-
     def test_previous_phase_output_null_on_first_phase(self):
         executor = DockerExecutor()
         skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
