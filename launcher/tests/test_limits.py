@@ -75,6 +75,33 @@ class TestUpdateForEvent:
         assert s.phase_cost_usd == pytest.approx(0.80)
         assert s.run_cost_usd == pytest.approx(0.80)
 
+    def test_per_message_model_overrides_fallback(self):
+        """If the assistant message has a `model` field (Claude Code always
+        provides one), that's what gets billed — use it for cost, ignore
+        the static fallback. Catches the hello-world bug where manifests
+        without explicit model: were being charged at Opus rates
+        regardless of the model that actually ran."""
+        s = new_state("p")
+        # Manifest says Opus (fallback); actual message ran on Haiku.
+        usage = {"input_tokens": 1_000_000}
+        ev = _assistant_event("claude-haiku-4-5-20251001", usage)
+        update_for_event(s, ev, "claude-opus-4-7")  # fallback = Opus
+        # Cost MUST match Haiku ($0.80), not Opus ($15.00).
+        assert s.phase_cost_usd == pytest.approx(0.80)
+
+    def test_fallback_model_used_when_message_omits_model(self):
+        """If the message doesn't carry a model (rare), fall back to the
+        static arg so cost tracking doesn't silently zero out."""
+        s = new_state("p")
+        usage = {"input_tokens": 1_000_000}
+        # Build an event without a model field
+        ev = {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "."}], "usage": usage},
+        }
+        update_for_event(s, ev, "claude-haiku-4-5-20251001")
+        assert s.phase_cost_usd == pytest.approx(0.80)  # Haiku from fallback
+
     def test_phase_start_resets_phase_counters_keeps_run(self):
         s = new_state("p1")
         update_for_event(s, _assistant_event(PRICING_MODEL, {"input_tokens": 1_000_000}), PRICING_MODEL)
