@@ -1,7 +1,7 @@
 """OAuth manager tests."""
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -32,7 +32,7 @@ class TestEnsureCredentialsProvider:
             storage.load.return_value = None
             storage_cls.return_value = storage
 
-            token_resp = AsyncMock()
+            token_resp = MagicMock()
             token_resp.json.return_value = {
                 "access_token": "tok-1",
                 "refresh_token": "ref-1",
@@ -90,7 +90,7 @@ class TestEnsureCredentialsProvider:
             }
             storage_cls.return_value = storage
 
-            refresh_resp = AsyncMock()
+            refresh_resp = MagicMock()
             refresh_resp.json.return_value = {
                 "access_token": "new-tok",
                 "refresh_token": "ref-new",

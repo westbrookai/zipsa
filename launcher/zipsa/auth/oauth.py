@@ -246,8 +246,8 @@ class OAuthManager:
                 "code_verifier": code_verifier,
             }
             response = await client.post(provider.token_endpoint, data=data)
-            await response.raise_for_status()
-            tokens = await response.json()
+            response.raise_for_status()
+            tokens = response.json()
 
         creds = {
             "client_id": provider.client_id,
@@ -273,8 +273,8 @@ class OAuthManager:
                 "client_id": provider.client_id,
             }
             response = await client.post(provider.token_endpoint, data=data)
-            await response.raise_for_status()
-            tokens = await response.json()
+            response.raise_for_status()
+            tokens = response.json()
 
         return {
             **creds,
