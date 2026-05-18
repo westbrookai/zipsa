@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
-from .limits import LimitBreach, SkillLimits, check_limits, new_state, update_for_event
+from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
 from .skill import Skill
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
@@ -256,6 +256,10 @@ class DockerExecutor:
         run_dir: Optional[Path],
         env_file: Optional[Path] = None,
         user_input: str = "",
+        *,
+        phase_id: str = "main",
+        phase_limits: Optional[SkillLimits] = None,
+        limits_state: Optional[LimitsState] = None,
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
@@ -272,6 +276,12 @@ class DockerExecutor:
             run_dir: Directory to save run logs (None to skip logging)
             env_file: Environment file path (optional)
             user_input: User's input/query for this execution
+            phase_id: Identifier for this phase (default "main" for single-phase).
+            phase_limits: Per-phase SkillLimits to check against. When None,
+                falls back to spec.limits for single-phase / direct invocations.
+            limits_state: Shared LimitsState from the caller (multi-phase runs).
+                If provided, this state is updated in-place so aggregate counters
+                accumulate across phases. If None, a fresh state is created.
 
         Yields:
             Parsed output events (including zipsa_limits_breach on breach)
@@ -283,11 +293,26 @@ class DockerExecutor:
         if run_dir:
             output_file = run_dir / "output.jsonl"
 
-        # Limits setup — single call site shared by both branches.
-        phase_limits = skill.manifest.spec.limits or SkillLimits()
-        agg_limits = skill.manifest.spec.limits or SkillLimits()
+        # Model needed before limits_state setup (used in update_for_event).
         model = (skill.manifest.spec.model or {}).get("name", "claude-opus-4-7")
-        limits_state = new_state("main")
+
+        # Limits setup — single call site shared by both branches.
+        agg_limits = skill.manifest.spec.limits or SkillLimits()
+        if phase_limits is None:
+            # Single-phase / direct invocation: phase limit == aggregate limit
+            # (preserves pre-existing behaviour for skills without phases).
+            phase_limits = agg_limits
+        if limits_state is None:
+            limits_state = new_state(phase_id)
+        else:
+            # Caller-owned state carrying aggregate counters across phases.
+            # Emit a synthetic zipsa_phase_start so update_for_event resets
+            # phase-level counters cleanly while preserving run-level ones.
+            update_for_event(
+                limits_state,
+                {"type": "zipsa_phase_start", "phase": phase_id},
+                model,
+            )
 
         cost_exceeded = False
         process = None
@@ -592,6 +617,10 @@ class DockerExecutor:
                 capture_output=True,
             )
 
+        # Shared limits state — accumulates run-level counters across all
+        # phases so that spec.limits (aggregate) is enforced over the full run.
+        shared_limits_state = new_state(phases[0].id)
+
         try:
             for phase_idx, phase in enumerate(phases):
                 yield {
@@ -633,6 +662,9 @@ class DockerExecutor:
                     for event in self._execute_skill(
                         docker_cmd, claude_json_path, skill, phase_dir,
                         skill_data_dir / ".env", user_message,
+                        phase_id=phase.id,
+                        phase_limits=phase.limits or SkillLimits(),
+                        limits_state=shared_limits_state,
                     ):
                         if event.get("type") == "assistant":
                             content = event.get("message", {}).get("content", [])

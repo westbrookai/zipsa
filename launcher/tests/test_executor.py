@@ -1423,6 +1423,114 @@ class TestLimitsIntegration:
             f"Unexpected breach in: {event_types}"
         )
 
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_aggregate_accumulates_across_phases(self, mock_popen, tmp_path):
+        """Phase 1 uses 2 turns within phase limit of 5. Phase 2 then uses 2
+        more turns — its own phase budget is fine (within 5), but the aggregate
+        (4) crosses agg_limits.max_turns=3. The breach fires mid-phase-2.
+
+        Tests _execute_skill invoked twice with the SAME limits_state so the
+        aggregate run_turns counter carries across the phase boundary.
+        """
+        from unittest.mock import MagicMock
+        from zipsa.core.limits import new_state, SkillLimits as _SkillLimits
+
+        def make_assistant_line():
+            return json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "thinking", "thinking": "..."}],
+                    "usage": {"input_tokens": 1},
+                },
+            }) + "\n"
+
+        # Phase 1 produces 2 turns and ends cleanly (EOF).
+        phase1_stdout = MagicMock()
+        phase1_stdout.readline.side_effect = [
+            make_assistant_line(),  # run_turn 1
+            make_assistant_line(),  # run_turn 2
+            "",  # EOF — clean end, no breach
+        ]
+        # Phase 2 produces 2 more turns; aggregate should breach on turn 4.
+        phase2_stdout = MagicMock()
+        phase2_stdout.readline.side_effect = [
+            make_assistant_line(),  # run_turn 3 — still within agg limit of 3
+            make_assistant_line(),  # run_turn 4 — breaches agg max_turns=3
+            json.dumps({"type": "result", "is_error": False}) + "\n",
+            "",  # EOF
+        ]
+
+        process1 = Mock()
+        process1.stdout = phase1_stdout
+        process1.poll.return_value = 0  # already exited (clean end)
+        process1.terminate = Mock()
+        process1.wait = Mock(return_value=0)
+        process1.kill = Mock()
+        process1.returncode = 0
+
+        process2 = Mock()
+        process2.stdout = phase2_stdout
+        process2.poll.return_value = None  # still running when terminated
+        process2.terminate = Mock()
+        process2.wait = Mock(return_value=0)
+        process2.kill = Mock()
+        process2.returncode = 0
+
+        mock_popen.side_effect = [process1, process2]
+
+        # Skill with aggregate max_turns=3, no per-phase limit.
+        skill = self._make_skill_with_limits(
+            tmp_path,
+            agg_limits={"max_turns": 3},
+        )
+        executor = DockerExecutor()
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path / "skill-data")
+        docker_cmd = ["docker", "run", "--rm", "test-image", "echo", "test"]
+
+        # Shared state — same object passed to both invocations.
+        shared_state = new_state("phase-1")
+        phase_lim = _SkillLimits()  # no per-phase limit
+
+        # --- Phase 1 ---
+        phase1_events = list(executor._execute_skill(
+            docker_cmd, claude_json_path, skill, None,
+            phase_id="phase-1",
+            phase_limits=phase_lim,
+            limits_state=shared_state,
+        ))
+        phase1_types = [e.get("type") for e in phase1_events]
+        # Phase 1 must NOT breach (2 turns ≤ agg limit 3)
+        assert "zipsa_limits_breach" not in phase1_types, (
+            f"Unexpected breach in phase 1: {phase1_types}"
+        )
+        # Aggregate should be at 2 turns after phase 1
+        assert shared_state.run_turns == 2, (
+            f"Expected run_turns=2 after phase 1, got {shared_state.run_turns}"
+        )
+
+        # --- Phase 2 ---
+        phase2_events = list(executor._execute_skill(
+            docker_cmd, claude_json_path, skill, None,
+            phase_id="phase-2",
+            phase_limits=phase_lim,
+            limits_state=shared_state,
+        ))
+        phase2_types = [e.get("type") for e in phase2_events]
+
+        # Phase 2 MUST breach (run_turns reaches 4 > agg max_turns=3)
+        assert "zipsa_limits_breach" in phase2_types, (
+            f"Expected aggregate breach in phase 2, got: {phase2_types}"
+        )
+        breach_idx = phase2_types.index("zipsa_limits_breach")
+        # Nothing emitted after the breach event
+        assert breach_idx == len(phase2_types) - 1, (
+            f"Events after breach: {phase2_types[breach_idx + 1:]}"
+        )
+        breach_event = phase2_events[breach_idx]
+        assert breach_event["kind"] == "turns"
+        assert breach_event["scope"] == "aggregate"
+        assert breach_event["limit"] == 3.0
+
 
 class TestKeyboardInterrupt:
     """Ctrl+C during a run must terminate the underlying Docker process.
