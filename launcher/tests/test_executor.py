@@ -1198,3 +1198,37 @@ class TestSkillDirMount:
         # mount source with /skill as the target, read-only.
         expected = f"{skill.skill_dir}:/skill:ro"
         assert expected in cmd_str, f"expected mount {expected!r} not in {cmd_str!r}"
+
+
+class TestKeyboardInterrupt:
+    """Ctrl+C during a run must terminate the underlying Docker process.
+    Used to live in test_limits.py; moved here when that file was
+    repurposed for the new limits module."""
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_keyboard_interrupt_terminates_process(self, mock_popen):
+        import pytest as _pytest
+        from unittest.mock import MagicMock
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [
+            '{"type":"system","subtype":"init"}\n',
+            KeyboardInterrupt("User pressed Ctrl+C"),
+        ]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock()
+        mock_process.kill = Mock()
+        mock_popen.return_value = mock_process
+
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with _pytest.raises(KeyboardInterrupt):
+            list(executor.run(skill, "Test", env={}))
+
+        mock_process.terminate.assert_called()
+        mock_process.wait.assert_called()
