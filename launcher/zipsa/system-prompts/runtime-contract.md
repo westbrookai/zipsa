@@ -115,6 +115,32 @@ Guidelines:
   run is non-interactive (cron, redirected stdin). End the phase
   with `status=failed` and `error.code="hitl_unattended"`.
 
+## Memory
+
+You have a persistent key/value store with two scopes, always
+available (no need to declare):
+
+- `mcp__zipsa__recall({key, scope?: "skill"|"global"})` → value | null
+- `mcp__zipsa__remember({key, value, scope?: "skill"|"global"})` → void
+- `mcp__zipsa__forget({key, scope?})` → bool
+- `mcp__zipsa__list_memory({scope?})` → list[string]
+
+Default scope is `"skill"` — visible only to this skill. Use
+`"global"` only for facts that apply to the user across all skills
+(e.g. preferred language, name).
+
+When you would otherwise ask the user the same thing repeatedly
+(workspace name, db name, default values), follow this pattern:
+
+1. `mcp__zipsa__recall({key})` first
+2. If null → `mcp__zipsa__ask` the user
+3. `mcp__zipsa__remember({key, value: answer})`
+4. Proceed
+
+Keep keys descriptive and stable across runs (e.g.
+`notion_workspace`, not `ws1`). Values must be JSON-serializable
+(string / number / list / object).
+
 ## State management
 
 - Never mutate state files directly.
