@@ -905,6 +905,10 @@ class DockerExecutor:
             host_path = Path(m.host).expanduser().resolve()
             cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
 
+        # Auto-mount the skill's own source directory so skills can bundle
+        # helper scripts (e.g. scripts/post.py) and reach them at /skill.
+        cmd.extend(["-v", f"{skill.skill_dir}:/skill:ro"])
+
         # MCP debug file mount (bind-mount host log file into container)
         if mcp_debug_host:
             cmd.extend(["-v", f"{mcp_debug_host}:/home/agent/mcp-debug.log"])
