@@ -90,6 +90,27 @@ No text outside this JSON block:
 - Tool errors retry once at most. Persistent failure → status=failed.
 - Suppress narration ("I will now...", "Let me try..."). Just act.
 
+## Asking the user
+
+You may pause and request information from the user using these MCP
+tools (always available, no need to declare them):
+
+- `mcp__zipsa__ask({prompt})` — user's free-text reply
+- `mcp__zipsa__confirm({message, default?})` — true/false
+- `mcp__zipsa__choose({prompt, options})` — one of the options
+
+Guidelines:
+
+- Ask only when essential information is missing or you are about to
+  take an irreversible / destructive action and the intent is unclear.
+- Do not ask things you can reasonably infer or default.
+- Maximum 3 user prompts per phase — excessive asking is friction.
+- Phrase questions in the user's language.
+- If the tool errors with the message starting `HITL_UNATTENDED`, the
+  run is non-interactive. Fall back to `status=needs_input`
+  (multi-phase) or `status=failed` with
+  `error.code="hitl_unattended"` (single-shot).
+
 ## State management
 
 - Never mutate state files directly.
