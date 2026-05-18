@@ -1,8 +1,9 @@
 """Output renderer for skill execution events."""
 
 import json
+import re
 from enum import Enum
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 class OutputMode(str, Enum):
@@ -14,8 +15,41 @@ class OutputMode(str, Enum):
 # ANSI color codes
 _GRAY = "\033[90m"
 _CYAN = "\033[96m"
+_RED = "\033[91m"
+_YELLOW = "\033[93m"
 _BOLD = "\033[1m"
 _RESET = "\033[0m"
+
+
+def _extract_phase_status(text: Optional[str]) -> Optional[str]:
+    """Try to extract the phase 'status' from the agent's last text block.
+
+    The skill contract requires the agent to end every phase with a JSON
+    object containing a 'status' field (ok | failed | out_of_scope).
+    We peek at it so the per-phase footer reflects the *phase outcome*,
+    not just whether the Claude Code SDK call crashed (is_error).
+
+    Returns the status string if parseable, else None.
+    """
+    if not text:
+        return None
+    # Try ```json ... ``` fenced block first (most common).
+    m = re.search(r"```(?:json)?\s*\n(.+?)\n\s*```", text, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict) and isinstance(obj.get("status"), str):
+                return obj["status"]
+        except json.JSONDecodeError:
+            pass
+    # Try raw text as JSON.
+    try:
+        obj = json.loads(text.strip())
+        if isinstance(obj, dict) and isinstance(obj.get("status"), str):
+            return obj["status"]
+    except json.JSONDecodeError:
+        pass
+    return None
 
 
 def render(events: Iterator[dict], mode: OutputMode) -> None:
@@ -26,8 +60,20 @@ def render(events: Iterator[dict], mode: OutputMode) -> None:
         return
 
     turn = 0
+    last_text: Optional[str] = None
     for event in events:
-        result = _format(event, mode, turn)
+        # Track the last assistant text block so the result event can
+        # peek at the phase contract's status.
+        if event.get("type") == "assistant":
+            blocks = event.get("message", {}).get("content", [])
+            for b in blocks:
+                if b.get("type") == "text":
+                    last_text = b.get("text", "")
+        # A new phase resets the tracked text — each phase has its own outcome.
+        elif event.get("type") == "zipsa_phase_start":
+            last_text = None
+
+        result = _format(event, mode, turn, last_text=last_text)
         if result is None:
             continue
         if isinstance(result, tuple):
@@ -37,7 +83,12 @@ def render(events: Iterator[dict], mode: OutputMode) -> None:
         print(output, flush=True)
 
 
-def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] | None":
+def _format(
+    event: dict,
+    mode: OutputMode,
+    turn: int,
+    last_text: Optional[str] = None,
+) -> "str | tuple[str, int] | None":
     """Format a single event. Returns (output, new_turn), output string, or None to skip."""
     event_type = event.get("type")
 
@@ -143,7 +194,19 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
         duration_s = event.get("duration_ms", 0) / 1000
         num_turns = event.get("num_turns", 0)
         cost = event.get("total_cost_usd", 0)
-        status = "Error" if is_error else "Success"
+        # Prefer the phase's contract status over the SDK's is_error.
+        # `is_error` is True only if the SDK call itself blew up; a
+        # phase that returns status=failed in its JSON still has
+        # is_error=False. The user cares about the phase outcome.
+        phase_status = _extract_phase_status(last_text)
+        if phase_status == "failed":
+            status = f"{_RED}Failed{_RESET}"
+        elif phase_status == "out_of_scope":
+            status = f"{_YELLOW}Out of scope{_RESET}"
+        elif is_error:
+            status = f"{_RED}Error{_RESET}"
+        else:
+            status = "Success"
         sep = "=" * 50
         return f"\n{sep}\n{status}\nDuration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n{sep}"
 
