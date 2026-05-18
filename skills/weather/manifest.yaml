@@ -15,7 +15,7 @@ spec:
   instructions: ./SKILL.md
 
   model:
-    name: claude-opus-4-7
+    name: claude-haiku-4-5-20251001
 
   tools:
     builtin:
