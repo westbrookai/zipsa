@@ -51,3 +51,51 @@ class TestAsk:
         handler = AskHandler(io_)
         with pytest.raises(HitlUnattended):
             handler.run(prompt="Where?")
+
+
+class TestConfirm:
+    @pytest.mark.parametrize("text,expected", [
+        ("y\n", True),
+        ("yes\n", True),
+        ("Y\n", True),
+        ("n\n", False),
+        ("no\n", False),
+        ("N\n", False),
+    ])
+    def test_y_n_yes_no_case_insensitive(self, text, expected):
+        io_ = make_io(text)
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="Proceed?") is expected
+
+    def test_default_true_on_blank(self):
+        io_ = make_io("\n")
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="OK?", default=True) is True
+
+    def test_default_false_on_blank(self):
+        io_ = make_io("\n")
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="OK?", default=False) is False
+
+    def test_no_default_on_blank_reprompts(self):
+        # Blank then "y" — should re-prompt once and accept "y"
+        io_ = make_io("\ny\n")
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="OK?") is True
+
+    def test_bad_input_reprompts_then_gives_up(self):
+        # 3 bad attempts → ValueError
+        io_ = make_io("maybe\nperhaps\nidk\n")
+        handler = ConfirmHandler(io_)
+        with pytest.raises(ValueError):
+            handler.run(message="OK?")
+
+    def test_unattended_raises(self):
+        io_ = HitlIO(
+            stdin=io.StringIO(""),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=False,
+        )
+        with pytest.raises(HitlUnattended):
+            ConfirmHandler(io_).run(message="OK?")
