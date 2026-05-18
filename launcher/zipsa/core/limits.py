@@ -72,8 +72,12 @@ def new_state(phase_id: str) -> LimitsState:
 def update_for_event(state: LimitsState, event: dict, model: str) -> None:
     """Mutate state based on one parsed event. No limit checks here.
 
-    `model` is the model id used for cost estimation (falls back to
-    Opus inside estimate_cost if unknown).
+    `model` is the FALLBACK model id used for cost estimation when the
+    assistant event itself doesn't carry one. Claude Code SDK puts the
+    actual model that ran in `event['message']['model']`, and that's
+    what gets billed — we use it preferentially so cost matches what
+    Anthropic actually charges. The static `model` argument (derived
+    from manifest) is only used if the per-message field is missing.
     """
     etype = event.get("type")
 
@@ -99,10 +103,12 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
             if block.get("type") == "thinking":
                 state.phase_turns += 1
                 state.run_turns += 1
-        # Cost: sum usage from this message
+        # Cost: sum usage from this message. Use the per-message model
+        # if present (matches what was actually billed), else fall back.
         usage = msg.get("usage")
         if isinstance(usage, dict):
-            cost = estimate_cost(model, usage)
+            effective_model = msg.get("model") or model
+            cost = estimate_cost(effective_model, usage)
             state.phase_cost_usd += cost
             state.run_cost_usd += cost
         # HITL pause start: tool_use for an ask/confirm/choose/ask_once
