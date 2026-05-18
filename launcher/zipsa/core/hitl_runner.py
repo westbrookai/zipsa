@@ -12,8 +12,18 @@ from typing import Optional
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+
+# When the server binds to 127.0.0.1, FastMCP auto-enables DNS-rebinding
+# protection that only accepts Host: 127.0.0.1 / localhost. The container
+# connects via Host: host.docker.internal:<port>, so we have to explicitly
+# allow that host. The Bearer-token middleware handles real auth; this
+# allow-list just sidesteps a defense-in-depth check that doesn't fit our
+# topology.
+_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "host.docker.internal:*"]
 
 from .hitl_mcp import HitlIO
 
@@ -52,8 +62,16 @@ class HitlServer:
         self.port = _pick_free_port()
         self.token = secrets.token_urlsafe(32)
 
-        mcp = FastMCP("zipsa", host="127.0.0.1", port=self.port,
-                      stateless_http=False)
+        mcp = FastMCP(
+            "zipsa",
+            host="127.0.0.1",
+            port=self.port,
+            stateless_http=False,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=_ALLOWED_HOSTS,
+            ),
+        )
 
         from .hitl_mcp import AskHandler, ConfirmHandler, ChooseHandler, HitlUnattended
 
