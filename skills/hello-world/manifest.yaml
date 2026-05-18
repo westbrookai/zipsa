@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: hello-world
-  version: 0.1.0
+  version: 0.1.1
   author: westbrookai
   description: |
     Smoke test skill. Verifies zipsa is installed, the runtime image is running,
@@ -19,7 +19,10 @@ spec:
   tools:
     builtin: []
 
+  # Generous budget for a smoke test. System prompt alone runs ~$0.06 on
+  # Sonnet; 0.05 was tripping right at the finish line. 0.10 gives 2x
+  # headroom for the typical 1-turn run.
   limits:
     max_turns: 3
-    max_cost_usd: 0.05
+    max_cost_usd: 0.10
     timeout_seconds: 30
