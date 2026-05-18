@@ -242,3 +242,73 @@ class TestMemoryToolsWired:
             assert "WBrk HQ" in text
         finally:
             server.stop()
+
+
+class TestAskOnceWired:
+    """End-to-end: ask_once caches first answer and returns it on second call."""
+
+    def test_ask_once_full_cycle_via_http(self, tmp_path):
+        import io as _io
+        import httpx
+        import json
+        from zipsa.core.memory_store import MemoryStore
+
+        io_ = HitlIO(
+            stdin=_io.StringIO("Westbrook HQ\n"),  # consumed on first ask
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        skill = MemoryStore(tmp_path / "skill.json")
+        global_ = MemoryStore(tmp_path / "global.json")
+        server = HitlServer(io_, skill_store=skill, global_store=global_)
+        server.start()
+        try:
+            url = f"http://127.0.0.1:{server.port}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": f"Bearer {server.token}",
+            }
+            init = {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26",
+                           "capabilities": {},
+                           "clientInfo": {"name": "test", "version": "0"}},
+            }
+            r = httpx.post(url, json=init, headers=headers, timeout=5.0)
+            assert r.status_code == 200
+            session_id = r.headers["mcp-session-id"]
+            session_headers = {**headers, "mcp-session-id": session_id}
+            httpx.post(url, json={
+                "jsonrpc": "2.0", "method": "notifications/initialized",
+            }, headers=session_headers, timeout=5.0)
+
+            def call_ask_once(req_id):
+                call = {
+                    "jsonrpc": "2.0", "id": req_id, "method": "tools/call",
+                    "params": {"name": "ask_once",
+                               "arguments": {"key": "workspace",
+                                             "prompt": "Where?"}},
+                }
+                r = httpx.post(url, json=call, headers=session_headers, timeout=5.0)
+                assert r.status_code == 200
+                body = r.text
+                if "data:" in body:
+                    for line in body.splitlines():
+                        if line.startswith("data:"):
+                            return json.loads(line[5:].strip())
+                return r.json()
+
+            # First call: consumes stdin, stores, returns "Westbrook HQ"
+            data1 = call_ask_once(req_id=2)
+            text1 = data1["result"]["content"][0]["text"]
+            assert "Westbrook HQ" in text1
+
+            # Second call: no more stdin (would block ask if it ran), but
+            # ask_once must recall and return cached value
+            data2 = call_ask_once(req_id=3)
+            text2 = data2["result"]["content"][0]["text"]
+            assert "Westbrook HQ" in text2
+        finally:
+            server.stop()

@@ -770,6 +770,7 @@ class DockerExecutor:
             "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
             "mcp__zipsa__recall", "mcp__zipsa__remember",
             "mcp__zipsa__forget", "mcp__zipsa__list_memory",
+            "mcp__zipsa__ask_once",
         ]
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))

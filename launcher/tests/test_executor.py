@@ -856,6 +856,7 @@ class TestWritePhaseAllowFile:
                 "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
                 "mcp__zipsa__recall", "mcp__zipsa__remember",
                 "mcp__zipsa__forget", "mcp__zipsa__list_memory",
+                "mcp__zipsa__ask_once",
             ],
         }
 
@@ -1134,3 +1135,12 @@ class TestMemoryIntegration:
         assert "mcp__zipsa__remember" in data["allowed_tools"]
         assert "mcp__zipsa__forget" in data["allowed_tools"]
         assert "mcp__zipsa__list_memory" in data["allowed_tools"]
+
+    def test_default_allow_list_contains_ask_once(self, tmp_path):
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor._write_default_phase_allow_file(tmp_path, skill)
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        assert "mcp__zipsa__ask_once" in data["allowed_tools"]

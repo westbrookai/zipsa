@@ -166,3 +166,34 @@ class ListMemoryHandler:
 
     def run(self, scope: str = "skill") -> list[str]:
         return _pick_store(scope, self._skill, self._global).keys()
+
+
+class AskOnceHandler:
+    """Composite: recall first; if missing, ask + remember + return.
+
+    The "ask the user once, cache forever" pattern. Replaces the
+    three-call sequence (recall → ask → remember) with a single
+    primitive that can't be misused (no way to forget the remember step).
+    """
+
+    def __init__(
+        self,
+        ask: AskHandler,
+        recall: RecallHandler,
+        remember: RememberHandler,
+    ) -> None:
+        self._ask = ask
+        self._recall = recall
+        self._remember = remember
+
+    def run(self, key: str, prompt: str, scope: str = "skill") -> str:
+        if scope not in _VALID_SCOPES:
+            raise ValueError(
+                f"scope must be one of {_VALID_SCOPES!r}, got {scope!r}"
+            )
+        existing = self._recall.run(key=key, scope=scope)
+        if existing is not None:
+            return existing
+        answer = self._ask.run(prompt=prompt)
+        self._remember.run(key=key, value=answer, scope=scope)
+        return answer

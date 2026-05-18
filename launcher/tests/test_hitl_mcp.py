@@ -265,3 +265,111 @@ class TestListMemory:
         h = ListMemoryHandler(skill, global_)
         with pytest.raises(ValueError, match="scope"):
             h.run(scope="bogus")
+
+
+from zipsa.core.hitl_mcp import AskOnceHandler
+
+
+class TestAskOnce:
+    def test_returns_cached_without_asking(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        skill.set("workspace", "Westbrook HQ")
+        # stdin is empty — proves ask never runs
+        io_ = HitlIO(
+            stdin=io.StringIO(""),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        assert h.run(key="workspace", prompt="?") == "Westbrook HQ"
+
+    def test_asks_and_stores_when_missing(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        io_ = HitlIO(
+            stdin=io.StringIO("Westbrook HQ\n"),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        result = h.run(key="workspace", prompt="어느 workspace?")
+        assert result == "Westbrook HQ"
+        # Stored in skill scope
+        assert skill.get("workspace") == "Westbrook HQ"
+
+    def test_subsequent_call_returns_cached(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        io_ = HitlIO(
+            stdin=io.StringIO("Westbrook HQ\n"),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        h.run(key="ws", prompt="?")  # first call — asks
+        # Second call must return cached — even with empty stdin
+        io2 = HitlIO(
+            stdin=io.StringIO(""),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask2 = AskHandler(io2)
+        h2 = AskOnceHandler(ask2, recall, remember)
+        assert h2.run(key="ws", prompt="?") == "Westbrook HQ"
+
+    def test_global_scope(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        io_ = HitlIO(
+            stdin=io.StringIO("ko\n"),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        h.run(key="lang", prompt="?", scope="global")
+        assert global_.get("lang") == "ko"
+        assert skill.get("lang") is None
+
+    def test_unattended_propagates(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        io_ = HitlIO(
+            stdin=io.StringIO(""),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=False,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        with pytest.raises(HitlUnattended):
+            h.run(key="never_cached", prompt="?")
+
+    def test_invalid_scope_raises(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        io_ = HitlIO(
+            stdin=io.StringIO("x\n"),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        ask = AskHandler(io_)
+        recall = RecallHandler(skill, global_)
+        remember = RememberHandler(skill, global_)
+        h = AskOnceHandler(ask, recall, remember)
+        with pytest.raises(ValueError, match="scope"):
+            h.run(key="k", prompt="?", scope="bogus")

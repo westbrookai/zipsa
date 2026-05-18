@@ -124,18 +124,31 @@ available (no need to declare):
 - `mcp__zipsa__remember({key, value, scope?: "skill"|"global"})` → void
 - `mcp__zipsa__forget({key, scope?})` → bool
 - `mcp__zipsa__list_memory({scope?})` → list[string]
+- `mcp__zipsa__ask_once({key, prompt, scope?})` → string
+  Composite: recall first; if missing, ask the user and store the answer
+  before returning. Use this for the common "ask once, cache forever"
+  pattern (workspace name, default city). For one-off questions whose
+  answers should NOT be stored, use the bare `ask` tool.
 
 Default scope is `"skill"` — visible only to this skill. Use
 `"global"` only for facts that apply to the user across all skills
 (e.g. preferred language, name).
 
-When you would otherwise ask the user the same thing repeatedly
-(workspace name, db name, default values), follow this pattern:
+For the common "ask once, cache forever" pattern (workspace name, db
+name, default values), use `mcp__zipsa__ask_once`:
 
-1. `mcp__zipsa__recall({key})` first
-2. If null → `mcp__zipsa__ask` the user
-3. `mcp__zipsa__remember({key, value: answer})`
-4. Proceed
+    workspace = mcp__zipsa__ask_once({
+        key: "notion_workspace",
+        prompt: "어느 Notion workspace?"
+    })
+
+It recalls the cached value if present and otherwise asks + remembers
+in a single call.
+
+If you need finer-grained control, the underlying tools (`recall`,
+`ask`, `remember`) are still available — e.g. when you want to ask
+without storing, store something the user didn't directly type, or
+ask conditional follow-ups.
 
 Keep keys descriptive and stable across runs (e.g.
 `notion_workspace`, not `ws1`). Values must be JSON-serializable

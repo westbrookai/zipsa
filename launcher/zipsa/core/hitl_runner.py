@@ -155,6 +155,29 @@ class HitlServer:
                 """List keys in the chosen scope."""
                 return list_h.run(scope=scope)
 
+            from .hitl_mcp import AskOnceHandler
+            ask_once_h = AskOnceHandler(ask_h, recall_h, remember_h)
+
+            @mcp.tool()
+            def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
+                """Ask the user a question and cache the answer permanently.
+
+                If the key already has a value (in the chosen scope), returns
+                that value without prompting. Otherwise asks the user, stores
+                the answer, and returns it. The "cached config" pattern in one
+                call — no risk of forgetting to remember.
+
+                Use this for values that, once given, should never be asked
+                again (workspace name, default city, preferred language).
+
+                For one-off questions whose answers should NOT be stored
+                (current date, "are you sure?"), use the bare `ask` tool.
+                """
+                try:
+                    return ask_once_h.run(key=key, prompt=prompt, scope=scope)
+                except HitlUnattended as e:
+                    raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
         app = mcp.streamable_http_app()
         app.add_middleware(_BearerAuthMiddleware, expected_token=self.token)
         config = uvicorn.Config(
