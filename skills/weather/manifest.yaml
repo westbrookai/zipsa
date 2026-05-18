@@ -26,6 +26,6 @@ spec:
       - wttr.in
 
   limits:
-    max_turns: 5
-    max_cost_usd: 0.05
-    timeout_seconds: 30
+    max_turns: 6
+    max_cost_usd: 0.10
+    timeout_seconds: 60
