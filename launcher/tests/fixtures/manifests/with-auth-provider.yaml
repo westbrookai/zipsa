@@ -1,0 +1,12 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: with-auth-provider
+  version: 1.0.0
+spec:
+  purpose: Test skill declaring an auth provider.
+  instructions: ./SKILL.md
+  auth_providers:
+    - x
+  tools:
+    builtin: []

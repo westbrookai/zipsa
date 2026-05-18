@@ -1174,3 +1174,49 @@ class TestMemoryIntegration:
         executor._write_default_phase_allow_file(tmp_path, skill)
         data = json.loads((tmp_path / "phase-allow.json").read_text())
         assert "mcp__zipsa__ask_once" in data["allowed_tools"]
+
+
+class TestAuthProvidersInjection:
+    """Skills declaring auth_providers get the provider token in env."""
+
+    def test_provider_token_injected(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/with-auth-provider.yaml"
+        skill = Skill.load(skill_dir)
+        env = {}
+
+        with patch("zipsa.core.executor.OAuthManager") as mgr_cls:
+            mgr = mgr_cls.return_value
+            mgr.ensure_credentials_provider.return_value = "tok-injected"
+
+            executor._ensure_oauth_credentials(skill, env)
+
+        assert env["ZIPSA_TOKEN_X"] == "tok-injected"
+        mgr.ensure_credentials_provider.assert_called_once()
+
+    def test_no_provider_no_injection(self, tmp_path):
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        env = {}
+
+        with patch("zipsa.core.executor.OAuthManager") as mgr_cls:
+            mgr = mgr_cls.return_value
+            executor._ensure_oauth_credentials(skill, env)
+
+        assert "ZIPSA_TOKEN_X" not in env
+        mgr.ensure_credentials_provider.assert_not_called()
+
+    def test_existing_token_in_env_skipped(self, tmp_path):
+        """If user already exported ZIPSA_TOKEN_X, don't run OAuth flow."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/manifests/with-auth-provider.yaml"
+        skill = Skill.load(skill_dir)
+        env = {"ZIPSA_TOKEN_X": "pre-set"}
+
+        with patch("zipsa.core.executor.OAuthManager") as mgr_cls:
+            mgr = mgr_cls.return_value
+            executor._ensure_oauth_credentials(skill, env)
+
+        assert env["ZIPSA_TOKEN_X"] == "pre-set"
+        mgr.ensure_credentials_provider.assert_not_called()

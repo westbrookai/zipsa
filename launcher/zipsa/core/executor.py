@@ -14,6 +14,7 @@ from .dev_overlay import load_dev_overlay
 from .skill import Skill
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
+from ..auth.providers import get_provider
 from .. import paths as zipsa_paths
 
 
@@ -793,12 +794,14 @@ class DockerExecutor:
         return self._write_phase_allow_file(output_dir, "main", tools)
 
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
-        """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
+        """Inject ZIPSA_TOKEN_<NAME> for oauth2 MCP servers and auth_providers."""
         oauth_servers = [
             s for s in skill.manifest.spec.mcp
             if s.type == "http" and getattr(s, "auth", None) and s.auth.type == "oauth2"
         ]
-        if not oauth_servers:
+        provider_names = skill.manifest.spec.auth_providers
+
+        if not oauth_servers and not provider_names:
             return
 
         manager = OAuthManager()
@@ -812,6 +815,15 @@ class DockerExecutor:
             token = manager.ensure_credentials(server.name, server.url)
             env[token_var] = token
             print(f"  {server.name}: authorized")
+
+        for name in provider_names:
+            provider = get_provider(name)
+            if provider.token_env_var in env:
+                print(f"  {provider.name}: token already set")
+                continue
+            token = manager.ensure_credentials_provider(provider)
+            env[provider.token_env_var] = token
+            print(f"  {provider.name}: authorized")
 
     def _build_docker_command(
         self,
