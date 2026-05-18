@@ -382,3 +382,36 @@ class TestSpecMounts:
         assert len(manifest.spec.mounts) == 2
         assert manifest.spec.mounts[0].container == "/home/agent/claude-projects"
         assert manifest.spec.mounts[1].mode == "rw"
+
+
+class TestAuthProviders:
+    """SkillSpec should accept and validate auth_providers."""
+
+    def _spec(self, **overrides):
+        from zipsa.core.models import SkillSpec
+        data = {
+            "purpose": "test",
+            "instructions": "./SKILL.md",
+        }
+        data.update(overrides)
+        return SkillSpec.model_validate(data)
+
+    def test_empty_auth_providers_is_default(self):
+        spec = self._spec()
+        assert spec.auth_providers == []
+
+    def test_known_provider_accepted(self):
+        spec = self._spec(auth_providers=["x"])
+        assert spec.auth_providers == ["x"]
+
+    def test_unknown_provider_rejected(self):
+        with pytest.raises(ValidationError) as exc:
+            self._spec(auth_providers=["not-real"])
+        msg = str(exc.value)
+        assert "not-real" in msg
+        assert "x" in msg
+
+    def test_duplicate_providers_rejected(self):
+        with pytest.raises(ValidationError) as exc:
+            self._spec(auth_providers=["x", "x"])
+        assert "duplicate" in str(exc.value).lower()

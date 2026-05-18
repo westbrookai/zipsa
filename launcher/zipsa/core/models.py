@@ -4,6 +4,7 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional
+from ..auth.providers import PROVIDERS
 
 
 _BASH_PATTERN_RE = re.compile(r"^Bash\(([^)]+):\*\)$")
@@ -158,6 +159,20 @@ class SkillSpec(BaseModel):
     # Multi-phase support (v1: documentation only, v2: strict validation)
     phases: list[PhaseSpec] = Field(default_factory=list)
     state_schema: dict = Field(default_factory=dict)  # v1: docs only
+    auth_providers: list[str] = Field(default_factory=list)
+
+    @field_validator("auth_providers")
+    @classmethod
+    def _check_providers(cls, v: list[str]) -> list[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("duplicate provider names in auth_providers")
+        unknown = [p for p in v if p not in PROVIDERS]
+        if unknown:
+            available = ", ".join(sorted(PROVIDERS.keys()))
+            raise ValueError(
+                f"unknown auth provider(s): {unknown}. Available: {available}"
+            )
+        return v
 
 
 class SkillManifest(BaseModel):
