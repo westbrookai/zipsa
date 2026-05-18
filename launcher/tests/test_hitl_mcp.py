@@ -154,3 +154,114 @@ class TestChoose:
         )
         with pytest.raises(HitlUnattended):
             ChooseHandler(io_).run(prompt="Pick", options=["a", "b"])
+
+
+from zipsa.core.memory_store import MemoryStore
+from zipsa.core.hitl_mcp import (
+    RecallHandler, RememberHandler, ForgetHandler, ListMemoryHandler,
+)
+
+
+def _store_pair(tmp_path):
+    return (
+        MemoryStore(tmp_path / "skill.json"),
+        MemoryStore(tmp_path / "global.json"),
+    )
+
+
+class TestRecall:
+    def test_skill_scope_default(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        skill.set("k", "skill-value")
+        global_.set("k", "global-value")
+        h = RecallHandler(skill, global_)
+        assert h.run(key="k") == "skill-value"
+
+    def test_global_scope_explicit(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        global_.set("lang", "ko")
+        h = RecallHandler(skill, global_)
+        assert h.run(key="lang", scope="global") == "ko"
+
+    def test_missing_returns_none(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = RecallHandler(skill, global_)
+        assert h.run(key="absent") is None
+
+    def test_invalid_scope_raises(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = RecallHandler(skill, global_)
+        with pytest.raises(ValueError, match="scope"):
+            h.run(key="k", scope="bogus")
+
+
+class TestRemember:
+    def test_skill_scope_default(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = RememberHandler(skill, global_)
+        h.run(key="k", value="v")
+        assert skill.get("k") == "v"
+        assert global_.get("k") is None
+
+    def test_global_scope(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = RememberHandler(skill, global_)
+        h.run(key="lang", value="ko", scope="global")
+        assert global_.get("lang") == "ko"
+        assert skill.get("lang") is None
+
+    def test_invalid_scope_raises(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = RememberHandler(skill, global_)
+        with pytest.raises(ValueError, match="scope"):
+            h.run(key="k", value="v", scope="bogus")
+
+
+class TestForget:
+    def test_removes_existing_returns_true(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        skill.set("k", "v")
+        h = ForgetHandler(skill, global_)
+        assert h.run(key="k") is True
+        assert skill.get("k") is None
+
+    def test_missing_returns_false(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = ForgetHandler(skill, global_)
+        assert h.run(key="never") is False
+
+    def test_global_scope(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        global_.set("k", "v")
+        h = ForgetHandler(skill, global_)
+        assert h.run(key="k", scope="global") is True
+        assert global_.get("k") is None
+
+    def test_invalid_scope_raises(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = ForgetHandler(skill, global_)
+        with pytest.raises(ValueError, match="scope"):
+            h.run(key="k", scope="bogus")
+
+
+class TestListMemory:
+    def test_skill_scope_default(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        skill.set("a", 1)
+        skill.set("b", 2)
+        global_.set("g", 3)
+        h = ListMemoryHandler(skill, global_)
+        assert sorted(h.run()) == ["a", "b"]
+
+    def test_global_scope(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        global_.set("x", 1)
+        global_.set("y", 2)
+        h = ListMemoryHandler(skill, global_)
+        assert sorted(h.run(scope="global")) == ["x", "y"]
+
+    def test_invalid_scope_raises(self, tmp_path):
+        skill, global_ = _store_pair(tmp_path)
+        h = ListMemoryHandler(skill, global_)
+        with pytest.raises(ValueError, match="scope"):
+            h.run(scope="bogus")

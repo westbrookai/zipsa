@@ -114,3 +114,55 @@ class ChooseHandler:
             self._io.stdout.write(f"{PROMPT_CLOSE}\n")
             self._io.stdout.flush()
         raise ValueError("choose: too many invalid answers")
+
+
+from typing import Any
+
+from .memory_store import MemoryStore
+
+
+_VALID_SCOPES = ("skill", "global")
+
+
+def _pick_store(scope: str, skill: MemoryStore, global_: MemoryStore) -> MemoryStore:
+    if scope == "skill":
+        return skill
+    if scope == "global":
+        return global_
+    raise ValueError(f"scope must be one of {_VALID_SCOPES!r}, got {scope!r}")
+
+
+class RecallHandler:
+    def __init__(self, skill_store: MemoryStore, global_store: MemoryStore) -> None:
+        self._skill = skill_store
+        self._global = global_store
+
+    def run(self, key: str, scope: str = "skill") -> Any | None:
+        return _pick_store(scope, self._skill, self._global).get(key)
+
+
+class RememberHandler:
+    def __init__(self, skill_store: MemoryStore, global_store: MemoryStore) -> None:
+        self._skill = skill_store
+        self._global = global_store
+
+    def run(self, key: str, value: Any, scope: str = "skill") -> None:
+        _pick_store(scope, self._skill, self._global).set(key, value)
+
+
+class ForgetHandler:
+    def __init__(self, skill_store: MemoryStore, global_store: MemoryStore) -> None:
+        self._skill = skill_store
+        self._global = global_store
+
+    def run(self, key: str, scope: str = "skill") -> bool:
+        return _pick_store(scope, self._skill, self._global).delete(key)
+
+
+class ListMemoryHandler:
+    def __init__(self, skill_store: MemoryStore, global_store: MemoryStore) -> None:
+        self._skill = skill_store
+        self._global = global_store
+
+    def run(self, scope: str = "skill") -> list[str]:
+        return _pick_store(scope, self._skill, self._global).keys()
