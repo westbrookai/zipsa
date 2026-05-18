@@ -26,9 +26,14 @@ remembered as `voice` in skill memory.
 
 ### precheck
 
-1. Verify all 4 X env vars are present. If any are missing, stop with
-   `status=failed`, `error.code="x_credentials_missing"`, naming the
-   missing var(s) in `user_facing_summary`.
+1. Verify all 4 X env vars are present by running
+   `python3 /skill/scripts/post.py --check-env`. The script reads the
+   env vars and emits a single JSON line: `{"status":"ok",...}` or
+   `{"status":"failed","error":"missing env var(s): [...]"}`. On
+   `failed`, stop the phase with `status=failed`,
+   `error.code="x_credentials_missing"`, and put the script's error
+   message into `user_facing_summary` so the user sees exactly which
+   var(s) are missing.
 2. Ask the user once for their X voice (1–2 sentences describing how
    they want their tweets to sound). Remember the answer. On
    subsequent runs the cached answer is used.
@@ -48,8 +53,8 @@ npx agenthud@0.8.4 report \
 ```
 
 If the result has `sessions: []`, stop the skill with `status=ok` and
-`user_facing_summary` "오늘 claudecode 작업 없음 — 게시 생략" (or
-English equivalent). No draft, no prompts, no post.
+`user_facing_summary` "No Claude Code activity today — skipping post."
+No draft, no prompts, no post.
 
 Otherwise pass the per-project structured report to the next phase.
 
@@ -68,7 +73,7 @@ feedback while staying in voice, then re-show. Cap at
 `config.max_review_iterations` rounds; after the cap, force a
 yes/no decision.
 
-Before posting, confirm one final time ("이 내용으로 X에 게시할까요?").
+Before posting, confirm one final time ("Post this to X?").
 If the user says no, stop with `status=failed`,
 `error.code="user_declined"`.
 

@@ -96,3 +96,31 @@ class TestBuildAuthorizationHeader:
         assert "a%2Fb%2Bc%3Dd" in h
         # raw chars must NOT appear in the value
         assert 'oauth_signature="a/b+c=d"' not in h
+
+
+class TestCheckEnvMode:
+    """post.py --check-env validates the 4 env vars without hitting the network."""
+
+    def test_check_env_succeeds_when_all_present(self, monkeypatch, capsys):
+        import json as _json
+        for k in post.ENV_KEYS:
+            monkeypatch.setenv(k, "present")
+        monkeypatch.setattr(sys, "argv", ["post.py", "--check-env"])
+        rc = post.main()
+        assert rc == 0
+        out = _json.loads(capsys.readouterr().out)
+        assert out["status"] == "ok"
+
+    def test_check_env_fails_when_missing(self, monkeypatch, capsys):
+        import json as _json
+        # Clear all
+        for k in post.ENV_KEYS:
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setattr(sys, "argv", ["post.py", "--check-env"])
+        rc = post.main()
+        assert rc == 1
+        out = _json.loads(capsys.readouterr().out)
+        assert out["status"] == "failed"
+        # Error names ALL 4 missing vars
+        for k in post.ENV_KEYS:
+            assert k in out["error"]

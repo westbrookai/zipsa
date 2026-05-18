@@ -78,6 +78,13 @@ def post_tweet(
     access_secret: str,
 ) -> dict:
     """Sign and POST the tweet. Return result dict matching contract."""
+    # OAuth 1.0a signature base string (RFC 5849 §3.4.1.3) only
+    # includes form-encoded ("application/x-www-form-urlencoded") body
+    # parameters. X API v2 takes a JSON body, so the JSON body is
+    # correctly NOT included in the signature — only the six oauth_*
+    # fields below are signed. If you ever change this to a
+    # form-encoded endpoint, you MUST add the body params to oauth_params
+    # before signing.
     oauth_params = {
         "oauth_consumer_key": api_key,
         "oauth_nonce": secrets.token_hex(16),
@@ -119,8 +126,17 @@ def post_tweet(
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--check-env":
+        creds = {k: os.environ.get(k) for k in ENV_KEYS}
+        missing = [k for k, v in creds.items() if not v]
+        if missing:
+            print(json.dumps({"status": "failed", "error": f"missing env var(s): {missing}"}))
+            return 1
+        print(json.dumps({"status": "ok", "message": "all X env vars present"}))
+        return 0
+
     if len(sys.argv) != 2:
-        print(json.dumps({"status": "failed", "error": "usage: post.py <text>"}))
+        print(json.dumps({"status": "failed", "error": "usage: post.py <text> | --check-env"}))
         return 1
 
     text = sys.argv[1]

@@ -45,7 +45,8 @@ spec:
       goal: |
         Verify the 4 X credentials are present, ensure voice is
         remembered, resolve target date.
-      allowed_tools: []
+      allowed_tools:
+        - Bash(python3:*)
       limits:
         max_turns: 4
         max_cost_usd: 0.05
