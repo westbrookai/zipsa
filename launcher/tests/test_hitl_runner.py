@@ -63,3 +63,65 @@ class TestHitlServerLifecycle:
             assert server2.token != token1
         finally:
             server2.stop()
+
+
+class TestToolsCallable:
+    def test_ask_tool_via_http(self):
+        """End-to-end: connect to server, call ask via MCP HTTP."""
+        import io as _io
+        import httpx
+        import json
+
+        io_ = HitlIO(
+            stdin=_io.StringIO("seoul\n"),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        server = HitlServer(io_)
+        server.start()
+        try:
+            # MCP initialize handshake (minimal). FastMCP default path is
+            # "/mcp" (no trailing slash); using "/mcp/" yields a 307 redirect.
+            url = f"http://127.0.0.1:{server.port}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": f"Bearer {server.token}",
+            }
+            init = {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26",
+                           "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}},
+            }
+            r = httpx.post(url, json=init, headers=headers, timeout=5.0)
+            assert r.status_code == 200
+            session_id = r.headers.get("mcp-session-id")
+            assert session_id
+
+            # Send initialized notification
+            session_headers = {**headers, "mcp-session-id": session_id}
+            httpx.post(url, json={
+                "jsonrpc": "2.0", "method": "notifications/initialized",
+            }, headers=session_headers, timeout=5.0)
+
+            # Call ask
+            call = {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "ask", "arguments": {"prompt": "Where?"}},
+            }
+            r = httpx.post(url, json=call, headers=session_headers, timeout=5.0)
+            assert r.status_code == 200
+            # Streamable HTTP may return SSE; parse the data line
+            body = r.text
+            if body.startswith("event:") or "data:" in body:
+                for line in body.splitlines():
+                    if line.startswith("data:"):
+                        data = json.loads(line[5:].strip())
+                        break
+            else:
+                data = r.json()
+            content = data["result"]["content"][0]
+            assert content["text"] == "seoul"
+        finally:
+            server.stop()

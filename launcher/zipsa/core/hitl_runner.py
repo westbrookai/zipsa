@@ -38,7 +38,39 @@ class HitlServer:
         self.port = _pick_free_port()
         self.token = secrets.token_urlsafe(32)
 
-        mcp = FastMCP("zipsa", host="127.0.0.1", port=self.port)
+        mcp = FastMCP("zipsa", host="127.0.0.1", port=self.port,
+                      stateless_http=False)
+
+        from .hitl_mcp import AskHandler, ConfirmHandler, ChooseHandler, HitlUnattended
+
+        ask_h = AskHandler(self._io)
+        confirm_h = ConfirmHandler(self._io)
+        choose_h = ChooseHandler(self._io)
+
+        @mcp.tool()
+        def ask(prompt: str) -> str:
+            """Ask the user a free-text question and return their reply."""
+            try:
+                return ask_h.run(prompt=prompt)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
+        @mcp.tool()
+        def confirm(message: str, default: bool | None = None) -> bool:
+            """Ask the user a yes/no question."""
+            try:
+                return confirm_h.run(message=message, default=default)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
+        @mcp.tool()
+        def choose(prompt: str, options: list[str]) -> str:
+            """Ask the user to choose one of the given options."""
+            try:
+                return choose_h.run(prompt=prompt, options=options)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
         app = mcp.streamable_http_app()
         config = uvicorn.Config(
             app,
