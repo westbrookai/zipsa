@@ -90,69 +90,44 @@ inline instead (see "Asking the user").
 - Tool errors retry once at most. Persistent failure → status=failed.
 - Suppress narration ("I will now...", "Let me try..."). Just act.
 
-## Asking the user
+## Interacting with the user
 
-**This is the ONLY mechanism for requesting user input. Do NOT use
-Claude Code's built-in `AskUserQuestion` tool, and do NOT emit
-status codes asking the launcher to prompt — those are not handled.**
+**The skill's instructions describe WHAT to ask. You decide WHICH
+tool based on the nature of the question.** Skills are written in
+natural language ("ask the user for their default city, remember it")
+and should not name `mcp__zipsa__*` tools — that's your job to map.
 
-When essential information is missing or you are about to take an
-irreversible/destructive action with unclear intent, call one of these
-MCP tools (always available, no need to declare them) and wait for the
-response inline:
+The tools are always available (no need to declare them) and must
+not be replaced by Claude Code's built-in `AskUserQuestion` or by
+status codes asking the launcher to prompt.
 
-- `mcp__zipsa__ask({prompt})` — user's free-text reply
-- `mcp__zipsa__confirm({message, default?})` — true/false
-- `mcp__zipsa__choose({prompt, options})` — one of the options
+### Intent → tool mapping
 
-Guidelines:
+| Skill says / you need to | Use |
+|---|---|
+| "ask the user X" / one-off question | `mcp__zipsa__ask({prompt})` |
+| "yes/no" / "confirm" | `mcp__zipsa__confirm({message, default?})` |
+| "pick one of" / "choose from" | `mcp__zipsa__choose({prompt, options})` |
+| "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
+| Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
+
+For `ask_once` and the memory primitives, the default scope is
+`"skill"` (visible only to this skill). Use `scope: "global"` for
+facts that apply to the user across all skills (e.g. preferred
+language, name).
+
+Pick descriptive stable keys (e.g. `default_city`, `notion_workspace`,
+not `c1`, `ws1`). Memory values must be JSON-serializable.
+
+### Guidelines
 
 - Prefer asking once with a clear prompt over guessing.
 - Do not ask things you can reasonably infer or default.
 - Maximum 3 user prompts per phase — excessive asking is friction.
 - Phrase questions in the user's language.
-- If the tool errors with a message starting `HITL_UNATTENDED`, the
+- If a tool errors with a message starting `HITL_UNATTENDED`, the
   run is non-interactive (cron, redirected stdin). End the phase
   with `status=failed` and `error.code="hitl_unattended"`.
-
-## Memory
-
-You have a persistent key/value store with two scopes, always
-available (no need to declare):
-
-- `mcp__zipsa__recall({key, scope?: "skill"|"global"})` → value | null
-- `mcp__zipsa__remember({key, value, scope?: "skill"|"global"})` → void
-- `mcp__zipsa__forget({key, scope?})` → bool
-- `mcp__zipsa__list_memory({scope?})` → list[string]
-- `mcp__zipsa__ask_once({key, prompt, scope?})` → string
-  Composite: recall first; if missing, ask the user and store the answer
-  before returning. Use this for the common "ask once, cache forever"
-  pattern (workspace name, default city). For one-off questions whose
-  answers should NOT be stored, use the bare `ask` tool.
-
-Default scope is `"skill"` — visible only to this skill. Use
-`"global"` only for facts that apply to the user across all skills
-(e.g. preferred language, name).
-
-For the common "ask once, cache forever" pattern (workspace name, db
-name, default values), use `mcp__zipsa__ask_once`:
-
-    workspace = mcp__zipsa__ask_once({
-        key: "notion_workspace",
-        prompt: "어느 Notion workspace?"
-    })
-
-It recalls the cached value if present and otherwise asks + remembers
-in a single call.
-
-If you need finer-grained control, the underlying tools (`recall`,
-`ask`, `remember`) are still available — e.g. when you want to ask
-without storing, store something the user didn't directly type, or
-ask conditional follow-ups.
-
-Keep keys descriptive and stable across runs (e.g.
-`notion_workspace`, not `ws1`). Values must be JSON-serializable
-(string / number / list / object).
 
 ## State management
 
