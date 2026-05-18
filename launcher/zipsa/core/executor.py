@@ -1015,12 +1015,15 @@ class DockerExecutor:
         skill_state: dict,
         user_query: str,
     ) -> str:
+        from tzlocal import get_localzone
+
         prompts_dir = Path(__file__).parent.parent / "system-prompts"
         template = (prompts_dir / "user-message-template.md").read_text(encoding="utf-8")
 
         now = datetime.now().astimezone()
         tz_offset = now.strftime("%z")
         tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
+        tz_iana = str(get_localzone())
 
         config_json = json.dumps(skill.manifest.spec.config, ensure_ascii=False)
         state_json = json.dumps(skill_state, ensure_ascii=False)
@@ -1030,6 +1033,7 @@ class DockerExecutor:
             date=now.strftime("%Y-%m-%d"),
             time=now.strftime("%H:%M:%S"),
             timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
+            tz_iana=tz_iana,
             phase_id=phase_id,
             phase_goal=phase_goal,
             allowed_tools=phase_allowed_tools,

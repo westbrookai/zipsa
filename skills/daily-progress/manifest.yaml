@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.3.1
+  version: 0.4.0
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -45,11 +45,10 @@ spec:
   tools:
     builtin: []
 
-  # Skill-specific configuration. Skill author defines, user may override.
+  # Skill-author defaults. Per-user values (workspace, db name, timezone)
+  # are NOT here — workspace/db are asked once on first run and remembered;
+  # timezone comes from the runtime's execution_context.
   config:
-    workspace_name: "Westbrook AI HQ"
-    db_name: "zipsa-daily-log"
-    timezone: "Australia/Sydney"
     default_target_date: yesterday   # yesterday | today
     agenthud_version: "0.8.4"        # pinned for reproducibility
 
@@ -65,16 +64,17 @@ spec:
     - id: precheck
       goal: |
         Verify Notion is reachable, resolve target date from the user
-        query, and locate or create the Notion database.
+        query, ensure per-user Notion workspace/db name are known, and
+        locate or create the Notion database.
       allowed_tools:
         - mcp__notion__notion-search
         - mcp__notion__notion-fetch
         - mcp__notion__notion-create-database
         - mcp__notion__notion-create-pages
       limits:
-        max_turns: 5
-        max_cost_usd: 0.12
-        timeout_seconds: 60
+        max_turns: 8
+        max_cost_usd: 0.15
+        timeout_seconds: 90
 
     - id: report
       goal: |
@@ -102,6 +102,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 26
-    max_cost_usd: 0.90
-    timeout_seconds: 450
+    max_turns: 29
+    max_cost_usd: 0.95
+    timeout_seconds: 480

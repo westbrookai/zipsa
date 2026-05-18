@@ -746,6 +746,34 @@ class TestBuildUserMessage:
 
         assert "previous_phase_output: null" in msg
 
+    def test_user_message_contains_tz_iana(self):
+        """tz_iana is the IANA identifier (e.g., 'Australia/Sydney') for the host's
+        timezone, suitable for ZoneInfo() use in skill code. Distinct from the
+        existing `timezone` display string ('AEDT (UTC+11:00)')."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="goal",
+            phase_allowed_tools="",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log",
+        )
+
+        # tz_iana line should be present and look like a tzdata id.
+        # Accept either Region/City (most common) or single-word "UTC" / "Etc/UTC".
+        import re
+        m = re.search(r"^tz_iana: (\S+)$", msg, re.MULTILINE)
+        assert m, f"tz_iana line missing from user message: {msg[:300]}"
+        value = m.group(1)
+        assert "/" in value or value in ("UTC", "GMT"), (
+            f"tz_iana should be IANA identifier, got: {value!r}"
+        )
+
 
 class TestSkillState:
     """Test skill state persistence."""

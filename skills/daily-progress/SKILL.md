@@ -1,24 +1,38 @@
 # Daily Progress Skill
 
 Summarize Claude Code work for a single day across all projects and log
-it to a Notion database in the Westbrook AI HQ workspace.
+it to a Notion database in the user's workspace.
 
 ## Purpose
 
 For a target date (default: yesterday), find all Claude Code sessions
 that had activity on that date, group them by project, summarize the
-work, and write one entry per project to the `zipsa-daily-log` Notion
-database.
+work, and write one entry per project to the user's configured Notion
+daily-log database.
 
 The heavy lifting (scanning session JSONL files, grouping by project,
 extracting activities) is delegated to **agenthud**, a deterministic CLI
 tool that produces a structured per-project report. The agent then
 summarizes and writes to Notion.
 
+## Per-user setup
+
+Two values are user-specific. On first run, ask for them and remember
+the answers so future runs don't re-ask:
+
+- **Notion workspace name** — the top-level Notion workspace where the
+  daily-log database should live (e.g. a parent page that holds the DB).
+  Stable key: `notion_workspace`.
+- **Notion database name** — the title of the database to write rows
+  into. Will be created if it doesn't exist. Stable key:
+  `notion_db_name` (suggest something like `zipsa-daily-log` as a
+  default in the prompt, but accept whatever the user types).
+
+Phrase the prompts in the user's language.
+
 ## Period semantics
 
-- Default target date: **yesterday**, in the configured timezone
-  (`Australia/Sydney`).
+- Default target date: **yesterday**, in the user's local timezone.
 - The user may specify another single date in their query, including
   relative terms ("yesterday", "today", or a specific ISO date like
   `2026-05-10`).
@@ -26,14 +40,12 @@ summarizes and writes to Notion.
   than one day, stop the precheck phase with status=out_of_scope and
   briefly explain only single-day summaries are supported.
 
-## Configuration values
+## Skill-author defaults
 
-These are provided in the skill manifest:
+These come from the manifest (`spec.config`):
 
-- Workspace name: `Westbrook AI HQ`
-- Database name: `zipsa-daily-log`
-- Timezone: `Australia/Sydney`
-- agenthud version: `0.8.4` (pinned for reproducibility)
+- `default_target_date`: `yesterday`
+- `agenthud_version`: `0.8.4` (pinned for reproducibility)
 
 ## Phases
 
@@ -45,26 +57,33 @@ target date, and prepare the Notion database reference.
 Steps:
 
 1. **MCP availability**: call `mcp__notion__notion-search` directly
-   with a minimal query (e.g. `query="zipsa-daily-log"`). If the call
-   returns an error or "No such tool available", stop with
-   status=failed and `error.code="mcp_unavailable"`.
+   with a minimal query (anything non-empty works — the goal is to
+   verify the server responds). If the call returns an error or
+   "No such tool available", stop with status=failed and
+   `error.code="mcp_unavailable"`.
 2. **Resolve target date**:
    - Parse the user query for an explicit date or relative term.
    - If the user asks for more than one day, stop with
      status=out_of_scope.
-   - If no date is mentioned, use yesterday in the configured timezone.
-3. **Resolve database**:
+   - If no date is mentioned, use yesterday in the user's local
+     timezone.
+3. **Resolve workspace + database name** (per-user setup):
+   - Ask once for `notion_workspace` and `notion_db_name` if not
+     already remembered. See the "Per-user setup" section above.
+4. **Resolve database**:
    - If `skill_state.db_id` is set, call `mcp__notion__notion-fetch` on
      it. The response is the database object; capture both its id and
      `data_sources[0].id`. If the fetch fails (404 / permission), drop
      to the search step.
    - Otherwise (or after a failed fetch), search with
-     `mcp__notion__notion-search` for a database titled `zipsa-daily-log`.
-     From a hit, fetch the database object and capture both ids as above.
-   - If still not found, search for a page titled `Westbrook AI HQ`. If
-     found, create the database under that page. If not, create the
-     page first, then the database under it. The `notion-create-database`
-     response includes the data source — capture both ids.
+     `mcp__notion__notion-search` for a database titled with the
+     remembered `notion_db_name`. From a hit, fetch the database object
+     and capture both ids as above.
+   - If still not found, search for a page titled with the remembered
+     `notion_workspace`. If found, create the database under that page.
+     If not, create the page first, then the database under it. The
+     `notion-create-database` response includes the data source —
+     capture both ids.
    - Database schema:
      - `Date` (date)
      - `Project` (title)
@@ -83,9 +102,13 @@ the data_source id, persist cannot place rows in the database.
     {
       "target_date": "2026-05-10",
       "db_id": "<notion database id>",
-      "data_source_id": "<notion data source id>",
-      "timezone": "Australia/Sydney"
+      "data_source_id": "<notion data source id>"
     }
+
+Target date must be computed in the user's local timezone (see the
+runtime contract on `tz_iana`). Do not put a timezone field on
+`next_phase_input` — downstream phases either don't need it or read it
+themselves from `execution_context`.
 
 `state_updates`: set `db_id` and `data_source_id` if newly resolved or
 created.
@@ -224,9 +247,9 @@ status=ok.
 ## Behavior rules
 
 - **Read-only sessions mount**: never attempt to modify session files.
-- **Notion scope**: only touch the configured database and (if needed)
-  the `Westbrook AI HQ` parent page. Never touch other databases or
-  pages.
+- **Notion scope**: only touch the remembered `notion_db_name` database
+  and (if needed) the `notion_workspace` parent page. Never touch other
+  databases or pages.
 - **Concise reporting**: `user_facing_summary` should be 3 sentences
   or fewer.
 
