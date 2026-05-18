@@ -81,6 +81,8 @@ def _format(event: dict, mode: OutputMode, turn: int) -> "str | tuple[str, int] 
             if mode != OutputMode.pretty:
                 return None
             name = block.get("name", "Unknown")
+            if name.startswith("mcp__zipsa__"):
+                return f"\n{_GRAY}[asking user]{_RESET}"
             inp = block.get("input", {})
             items = list(inp.items())[:3]
             args = "  ".join(f"{k}={str(v)[:80]}" for k, v in items)
