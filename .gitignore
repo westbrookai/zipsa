@@ -59,5 +59,8 @@ coverage/
 .zipsa-mcp-*.json
 .zipsa/
 
+# Per-machine skill install metadata (absolute source paths, install timestamps)
+skills/*/_install.json
+
 # Per-developer overlay files (ZIPSA_DEV_OVERLAY). Not for distribution.
 /dev-overlays/
