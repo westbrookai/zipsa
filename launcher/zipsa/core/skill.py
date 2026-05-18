@@ -130,6 +130,7 @@ class Skill:
         self,
         output_dir: Optional[Path] = None,
         container_workspace: str = "/home/agent/workspace",
+        hitl_port: Optional[int] = None,
     ) -> Path:
         """Generate .claude.json file for skill.
 
@@ -139,6 +140,11 @@ class Skill:
             container_workspace: Container working directory.
                         Stdio servers with mounts get their container path
                         auto-appended as /home/agent/workspace/<server-name>.
+            hitl_port: Host port for the zipsa HITL MCP server. When set, an
+                        additional `zipsa` HTTP MCP entry is injected so the
+                        agent in the container can reach the host-side server
+                        via host.docker.internal. The Authorization header is
+                        produced at runtime from the ZIPSA_HITL_TOKEN env var.
 
         Returns:
             Path to created .claude.json file
@@ -174,6 +180,15 @@ class Skill:
                 if headers_helper:
                     server_config["headersHelper"] = headers_helper
                 mcp_servers[server.name] = server_config
+
+        if hitl_port is not None:
+            mcp_servers["zipsa"] = {
+                "type": "http",
+                "url": f"http://host.docker.internal:{hitl_port}/mcp",
+                "headersHelper": (
+                    'echo \'{"Authorization": "Bearer \'"$ZIPSA_HITL_TOKEN"\'"}\''
+                ),
+            }
 
         claude_config = {
             "hasCompletedOnboarding": True,
