@@ -1,0 +1,99 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: bip-daily-x
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Generate, refine via user feedback, and post a single daily tweet
+    about your Claude Code work.
+  tags: [productivity, build-in-public, x, claude-code]
+
+spec:
+  purpose: |
+    Produce one tweet per day about the user's Claude Code work,
+    iterate until the user is satisfied, then post to X after
+    explicit approval. Refuse anything not in this scope.
+
+  instructions: ./SKILL.md
+
+  model:
+    name: claude-opus-4-7
+
+  # Bind-mount Claude session logs so agenthud picks them up.
+  mounts:
+    - host: ~/.claude/projects
+      container: /home/agent/.claude/projects
+      mode: ro
+
+  # X creds (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
+  # come through ~/.zipsa/.env automatically. The precheck phase
+  # verifies their presence by inspecting execution_context.
+
+  tools:
+    builtin: []
+
+  config:
+    default_target_date: today
+    max_review_iterations: 5
+    max_tweet_chars: 280
+
+  state_schema: {}
+
+  phases:
+    - id: precheck
+      goal: |
+        Verify the 4 X credentials are present, ensure voice is
+        remembered, resolve target date.
+      allowed_tools: []
+      limits:
+        max_turns: 4
+        max_cost_usd: 0.05
+        timeout_seconds: 60
+
+    - id: report
+      goal: |
+        Run agenthud for the target date and produce a structured
+        per-project activity summary.
+      allowed_tools:
+        - Bash(npx:*)
+      limits:
+        max_turns: 5
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+    - id: draft
+      goal: |
+        Write a single tweet (<= max_tweet_chars) in the user's voice
+        from the report.
+      allowed_tools: []
+      limits:
+        max_turns: 3
+        max_cost_usd: 0.05
+        timeout_seconds: 60
+
+    - id: review
+      goal: |
+        Show the draft, accept feedback, regenerate up to 5 times,
+        then confirm before posting.
+      allowed_tools: []
+      limits:
+        max_turns: 10
+        max_cost_usd: 0.20
+        timeout_seconds: 1800
+
+    - id: post
+      goal: |
+        Run /skill/scripts/post.py with the approved draft; surface
+        the tweet URL and id.
+      allowed_tools:
+        - Bash(python3:*)
+      limits:
+        max_turns: 4
+        max_cost_usd: 0.05
+        timeout_seconds: 60
+
+  limits:
+    max_turns: 26
+    max_cost_usd: 0.45
+    timeout_seconds: 2100
