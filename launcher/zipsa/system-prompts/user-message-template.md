@@ -2,6 +2,7 @@
 date: {date}
 time: {time}
 timezone: {timezone}
+tz_iana: {tz_iana}
 
 phase_id: {phase_id}
 phase_goal: {phase_goal}

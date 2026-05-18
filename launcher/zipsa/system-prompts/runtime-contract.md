@@ -18,6 +18,13 @@ its own goal, tool allowlist, and resource limits.
 Your current execution context is in the `<execution_context>` block of
 the system prompt. It contains:
 
+- `date`, `time`, `timezone`: human-readable now-stamp for the user's
+  local time (e.g., `AEDT (UTC+11:00)`). Use for display only — the
+  abbreviation changes with DST.
+- `tz_iana`: IANA timezone identifier for the host (e.g.,
+  `Australia/Sydney`). Use this whenever the skill needs the user's
+  local timezone for date math — e.g. `zoneinfo.ZoneInfo(tz_iana)` in
+  Python. Don't ask the user for their timezone; this is already it.
 - `phase_id`: which phase you are executing now
 - `phase_goal`: what this phase must accomplish
 - `previous_phase_output`: data from the previous phase, or null
