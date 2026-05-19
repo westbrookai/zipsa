@@ -1298,6 +1298,70 @@ class TestLimitsIntegration:
         assert breach_event["limit"] == 10.0
 
     @patch("zipsa.core.executor.subprocess.Popen")
+    def test_breach_with_sigterm_exit_code_does_not_raise(self, mock_popen, tmp_path):
+        """When we intentionally terminate Docker on a limit breach, the
+        process exits with 143 (SIGTERM). The executor must NOT additionally
+        raise 'Docker execution failed with code 143' — that's misleading
+        noise about our own SIGTERM. The user already saw the breach event."""
+        from unittest.mock import MagicMock
+
+        assistant_line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "thinking..."}],
+                "usage": {"input_tokens": 1_000_000},  # ~$15 at Opus, > $5 limit
+            },
+        }) + "\n"
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [assistant_line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=143)
+        mock_process.kill = Mock()
+        # SIGTERM exit code — what Docker reports after we terminate it
+        mock_process.returncode = 143
+        mock_popen.return_value = mock_process
+
+        skill = self._make_skill_with_limits(
+            tmp_path,
+            agg_limits={"max_cost_usd": 5.0},
+        )
+        executor = DockerExecutor()
+
+        # Must complete without RuntimeError
+        events = list(executor.run(skill, "Test", env={}))
+        event_types = [e.get("type") for e in events]
+        assert "zipsa_limits_breach" in event_types
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_nonbreach_nonzero_exit_still_raises(self, mock_popen, tmp_path):
+        """If Docker exits non-zero WITHOUT a breach (e.g. claude crashed),
+        we still raise RuntimeError. Regression guard so the breach-suppress
+        flag doesn't accidentally silence real Docker failures."""
+        from unittest.mock import MagicMock
+        import pytest as _pytest
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [""]  # immediate EOF, no events
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=1)
+        mock_process.kill = Mock()
+        mock_process.returncode = 1  # generic error, NOT 143
+        mock_popen.return_value = mock_process
+
+        skill = self._make_skill_with_limits(tmp_path)
+        executor = DockerExecutor()
+
+        with _pytest.raises(RuntimeError, match="Docker execution failed with code 1"):
+            list(executor.run(skill, "Test", env={}))
+
+    @patch("zipsa.core.executor.subprocess.Popen")
     def test_aggregate_turns_breach_emits_event(self, mock_popen, tmp_path):
         """When aggregate max_turns is exceeded, a zipsa_limits_breach event
         is emitted and the stream stops."""

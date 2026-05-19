@@ -315,11 +315,16 @@ class DockerExecutor:
             )
 
         cost_exceeded = False
+        # Set True iff we initiated the Docker termination (via _stop_process
+        # on a limit breach). Used after the stream loop to distinguish "we
+        # caused the SIGTERM, returncode 143 is expected" from "Docker
+        # genuinely crashed, raise RuntimeError".
+        breach_terminated = False
         process = None
 
         def _stream_with_limits(raw_stream, output_file_handle=None):
             """Unified per-event loop: parse, track limits, yield / stop on breach."""
-            nonlocal cost_exceeded
+            nonlocal cost_exceeded, breach_terminated
             for line in raw_stream:
                 if not line:
                     continue
@@ -338,6 +343,7 @@ class DockerExecutor:
                     breach = check_limits(limits_state, phase_limits, agg_limits)
                     if breach is not None:
                         yield event
+                        breach_terminated = True
                         self._stop_process(process)
                         yield {
                             "type": "zipsa_limits_breach",
@@ -370,7 +376,11 @@ class DockerExecutor:
             # Reap the child process (no timeout — limits enforced per-event above).
             process.wait()
 
-            if process.returncode != 0:
+            # Skip the "failed" raise if we intentionally terminated due to
+            # a limit breach. The user already saw the breach event from the
+            # renderer; a follow-up "Docker execution failed with code 143"
+            # is misleading noise about our own SIGTERM.
+            if process.returncode != 0 and not breach_terminated:
                 raise RuntimeError(
                     f"Docker execution failed with code {process.returncode}"
                 )
