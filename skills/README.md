@@ -60,7 +60,10 @@ metadata:
   version: 0.1.0
   author: your-name
   description: |
-    Brief description of what this skill does
+    One-line user-facing intro. The launcher uses this when the user
+    runs the skill with no query and there is no default_query — the
+    agent reads it and introduces itself + the skill to the user.
+    Write this for end users, not for fellow devs.
   tags: [category, tags]
 
 spec:
@@ -69,6 +72,12 @@ spec:
     This helps the launcher understand when to use this skill.
 
   instructions: ./SKILL.md
+
+  # Optional: a sensible default the launcher substitutes when the user
+  # runs 'zipsa run <name>' with no argument. Pick this for skills that
+  # have a meaningful "default behavior" (e.g. daily-progress: "yesterday").
+  # Omit for skills that always need a specific user request.
+  default_query: "yesterday"
 
   model:
     name: claude-opus-4-7  # Optional: specify model

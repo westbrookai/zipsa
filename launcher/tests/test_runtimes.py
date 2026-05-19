@@ -157,3 +157,43 @@ class TestClaudeRuntime:
         )
 
         assert "--add-dir" not in cmd
+
+    def test_empty_user_input_substitutes_placeholder(self):
+        """`claude --print ''` fails (exit 1) because there's no user turn
+        to respond to. The runtime must substitute a meaningful placeholder
+        that the agent will see — the runtime contract's 'Empty user_query'
+        section tells it what to do."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+        )
+
+        # --print value must NOT be empty
+        idx = cmd.index("--print")
+        print_value = cmd[idx + 1]
+        assert print_value != ""
+        # Placeholder must be self-describing — the agent sees this as the
+        # user turn, so it must signal "this is empty" not just any string.
+        assert "no user_query" in print_value or "empty" in print_value.lower()
+
+    def test_nonempty_user_input_passes_through(self):
+        """Non-empty user_input is NOT modified."""
+        runtime = ClaudeRuntime()
+
+        cmd = runtime.build_command(
+            skill_name="test-skill",
+            user_input="What's the weather?",
+            system_prompt="System",
+            allowed_tools="Read",
+            workspace=Path("/workspace"),
+            env={},
+        )
+
+        idx = cmd.index("--print")
+        assert cmd[idx + 1] == "What's the weather?"

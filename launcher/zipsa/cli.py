@@ -23,6 +23,15 @@ _LAUNCHER_VERSION = pkg_version("zipsa")
 _RUNTIME_VERSION = (Path(__file__).parent.parent / "RUNTIME_VERSION").read_text().strip()
 _DEFAULT_IMAGE = f"ghcr.io/westbrookai/zipsa-runtime:{_RUNTIME_VERSION}"
 
+
+def _resolve_skill_path(name: str) -> Path:
+    """Resolve an installed skill name to its directory path.
+
+    Thin wrapper around resolve_skill so tests can patch a single symbol.
+    """
+    return resolve_skill(name)
+
+
 app = typer.Typer(
     name="zipsa",
     help="SKILL runtime launcher - Execute SKILLs with Claude Code, Codex, or Gemini",
@@ -122,13 +131,22 @@ def run(
     """Execute a skill with the specified runtime."""
     try:
         # Load skill
-        skill = Skill.load(resolve_skill(name))
+        skill = Skill.load(_resolve_skill_path(name))
         typer.echo(f"Loaded skill: {skill.name}", err=True)
 
-        # Validate input
-        if not shell and not user_input:
-            typer.echo("Error: user_input is required unless --shell is specified", err=True)
-            raise typer.Exit(1)
+        # Resolve user_input: substitute default_query if available, else empty
+        # string. The hard-fail for missing input is intentionally removed —
+        # empty input is a valid signal that the agent should introduce itself
+        # and elicit the request via HITL (see runtime-contract.md "Empty
+        # user_query"). Note: default_query="" in the manifest is honored as an
+        # explicit opt-in to the intro flow (same behavior as no default at all
+        # but lets the author make the intent explicit).
+        if not user_input and not shell:
+            default = skill.manifest.spec.default_query
+            user_input = default if default is not None else ""
+        # In shell mode the substitution above is skipped; normalize None → "".
+        if user_input is None:
+            user_input = ""
 
         # Parse environment variables
         env_dict = {}
@@ -146,8 +164,9 @@ def run(
             image=image,
         )
 
-        # Execute skill or start shell
-        output = executor.run(skill, user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
+        # Execute skill or start shell. user_input is always a string here
+        # (substituted above) — no `or ""` guard needed.
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
 
         if output is None:
             # Dry run mode
@@ -156,6 +175,10 @@ def run(
         # Stream output through renderer
         render(output, output_mode)
 
+    except typer.Exit:
+        # Re-raise Exit cleanly so it is not swallowed by the generic handler
+        # below (which would print "Error: <exit-code>" as a double message).
+        raise
     except SkillNotInstalledError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
