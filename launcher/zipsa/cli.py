@@ -12,9 +12,10 @@ from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
+from .core.install_health import check_install
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
-from .installer import install_from_github, install_local
+from .installer import install_from_github, install_local, _write_install_json
 from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError
 from .runtimes import list_runtimes
 
@@ -281,31 +282,34 @@ def validate(
 @app.command(name="list")
 def list_installed():
     """List installed skills with run statistics."""
-    sd = _skills_dir()
+    home = zipsa_home()
+    sd = home / "skills"
     if not sd.exists():
         typer.echo("No installed skills.")
         return
 
-    home = zipsa_home()
     home_subdirs = list(home.iterdir()) if home.exists() else []
 
     installed = []
-    invalid: list[tuple[str, str]] = []
+    broken: list[tuple[str, str]] = []  # (name, reason) for broken entries
     for item in sorted(sd.iterdir()):
         if not item.is_dir() and not item.is_symlink():
             continue
-        manifest_path = item / "manifest.yaml"
-        if not manifest_path.exists():
+
+        health = check_install(item)
+        if not health.ok:
+            broken.append((item.name, health.reason or "unknown reason"))
             continue
+
         try:
             skill = Skill.load(item)
         except ValidationError as e:
             first = e.errors()[0]
             loc = ".".join(str(p) for p in first["loc"])
-            invalid.append((item.name, f"{loc}: {first['msg']}"))
+            broken.append((item.name, f"{loc}: {first['msg']}"))
             continue
         except Exception as e:
-            invalid.append((item.name, str(e).splitlines()[0]))
+            broken.append((item.name, str(e).splitlines()[0]))
             continue
 
         install_json = item / "_install.json"
@@ -350,14 +354,12 @@ def list_installed():
             "item": item,
         })
 
-    if not installed and not invalid:
+    total_count = len(installed) + len(broken)
+    if total_count == 0:
         typer.echo("No installed skills.")
         return
 
-    if installed:
-        typer.echo(f"Installed skills ({len(installed)}):\n")
-    else:
-        typer.echo("No valid installed skills.\n")
+    typer.echo(f"Installed skills ({total_count}):\n")
 
     for entry in installed:
         skill = entry["skill"]
@@ -389,13 +391,10 @@ def list_installed():
 
         typer.echo()
 
-    if invalid:
-        header = typer.style(
-            f"Invalid manifests ({len(invalid)}):", fg=typer.colors.YELLOW, bold=True
-        )
-        typer.echo(header)
-        for name, reason in invalid:
-            typer.echo(f"  {typer.style(name, fg=typer.colors.YELLOW)} — {reason}")
+    for entry_name, reason in broken:
+        typer.echo(f"  {entry_name}  ✗ broken")
+        typer.echo(f"    {reason}")
+        typer.echo(f"    Fix: zipsa install --link <new-path>  (or: zipsa uninstall {entry_name})")
         typer.echo()
 
 
@@ -494,18 +493,65 @@ def install(
         raise typer.Exit(1)
 
     try:
-        if path:
-            name = install_local(path, link=False, force=force)
-            typer.echo(f"Installed {name}")
-        elif link:
-            name = install_local(link, link=True, force=force)
-            typer.echo(f"Installed {name} (linked)")
+        if path or link:
+            local_source = path or link
+            is_link = bool(link)
+            suffix = " (linked)" if is_link else ""
+
+            # Peek at the manifest to get the skill name so we can check
+            # whether an existing entry at that name is broken.  If the
+            # source path doesn't exist yet (e.g. in unit tests that mock
+            # install_local) this will raise FileNotFoundError and we fall
+            # through to the normal install_local delegation below.
+            try:
+                src_path = Path(local_source).resolve()
+                peeked_skill = Skill.load(src_path)
+                skill_name = peeked_skill.name
+                skill_version = peeked_skill.manifest.metadata.version
+                dest = zipsa_home() / "skills" / skill_name
+
+                if dest.exists() or dest.is_symlink():
+                    health = check_install(dest)
+                    if not health.ok:
+                        # Broken entry — replace transparently, no --force needed.
+                        if dest.is_symlink() or dest.is_file():
+                            dest.unlink()
+                        else:
+                            shutil.rmtree(dest)
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        if is_link:
+                            dest.symlink_to(src_path)
+                        else:
+                            shutil.copytree(src_path, dest)
+                        _write_install_json(dest, str(src_path), "local", skill_version, "link" if is_link else "copy")
+                        typer.echo(f"Replaced broken link: {skill_name}{suffix}")
+                        return
+                    elif not force:
+                        typer.echo(
+                            f"Error: Skill '{skill_name}' is already installed. Use --force to overwrite.",
+                            err=True,
+                        )
+                        raise typer.Exit(1)
+                    # else: healthy + --force → fall through to install_local
+
+            except typer.Exit:
+                raise
+            except (FileNotFoundError, ValidationError):
+                # Source not loadable (e.g. fake path in unit tests that
+                # mock install_local) — delegate to install_local directly.
+                pass
+
+            name = install_local(local_source, link=is_link, force=force)
+            typer.echo(f"Installed {name}{suffix}")
+
         elif source:
             name = install_from_github(source, force=force)
             typer.echo(f"Installed {name}")
         else:
             typer.echo("Error: provide a source, --path, or --link", err=True)
             raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except (FileExistsError, FileNotFoundError, ValueError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
