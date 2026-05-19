@@ -8,7 +8,7 @@
 #-----------------------------------------------------------
 
 # Image version (injected at publish time via --build-arg)
-ARG ZIPSA_RUNTIME_VERSION="0.4.6"
+ARG ZIPSA_RUNTIME_VERSION="0.4.7"
 
 # System packages (apt)
 ARG CURL_VERSION="7.88.1-10+deb12u14"
@@ -20,6 +20,21 @@ ARG PYTHON3_VERSION="3.11.2-1+b1"
 ARG PYTHON3_PIP_VERSION="23.0.1+dfsg-1"
 ARG PYTHON3_VENV_VERSION="3.11.2-1+b1"
 ARG PIPX_VERSION="1.1.0-1"
+
+# Debug / utility packages (apt)
+ARG JQ_VERSION="1.6-2.1+deb12u1"
+ARG VIM_VERSION="2:9.0.1378-2+deb12u2"
+ARG LESS_VERSION="590-2.1~deb12u2"
+ARG TREE_VERSION="2.1.0-1"
+ARG RIPGREP_VERSION="13.0.0-4+b2"
+ARG FD_FIND_VERSION="8.6.0-3"
+ARG WGET_VERSION="1.21.3-1+deb12u1"
+ARG NETCAT_OPENBSD_VERSION="1.219-1"
+ARG LSOF_VERSION="4.95.0-1"
+ARG STRACE_VERSION="6.1-0.1"
+ARG HTOP_VERSION="3.2.2-2"
+ARG UNZIP_VERSION="6.0-28"
+ARG BAT_VERSION="0.22.1-4"
 
 # NPM packages
 ARG CLAUDE_CODE_VERSION="2.1.114"
@@ -86,12 +101,32 @@ ARG PYTHON3_VERSION
 ARG PYTHON3_PIP_VERSION
 ARG PYTHON3_VENV_VERSION
 ARG PIPX_VERSION
+ARG JQ_VERSION
+ARG VIM_VERSION
+ARG LESS_VERSION
+ARG TREE_VERSION
+ARG RIPGREP_VERSION
+ARG FD_FIND_VERSION
+ARG WGET_VERSION
+ARG NETCAT_OPENBSD_VERSION
+ARG LSOF_VERSION
+ARG STRACE_VERSION
+ARG HTOP_VERSION
+ARG UNZIP_VERSION
+ARG BAT_VERSION
+ARG CLAUDE_CODE_VERSION
+ARG CODEX_VERSION
+ARG GEMINI_CLI_VERSION
+ARG FX_VERSION
 
 # Metadata
 LABEL maintainer="your-email@example.com"
 LABEL description="SKILL Runtime with Claude Code, Codex, and Gemini CLI (Multi-stage)"
 LABEL version="${ZIPSA_RUNTIME_VERSION}"
 ENV ZIPSA_RUNTIME_VERSION=${ZIPSA_RUNTIME_VERSION}
+ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
+ENV CODEX_VERSION=${CODEX_VERSION}
+ENV GEMINI_CLI_VERSION=${GEMINI_CLI_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -108,19 +143,19 @@ RUN apt-get update && \
         python3-pip=${PYTHON3_PIP_VERSION} \
         python3-venv=${PYTHON3_VENV_VERSION} \
         pipx=${PIPX_VERSION} \
-        jq=1.6-2.1+deb12u1 \
-        vim=2:9.0.1378-2+deb12u2 \
-        less=590-2.1~deb12u2 \
-        tree=2.1.0-1 \
-        ripgrep=13.0.0-4+b2 \
-        fd-find=8.6.0-3 \
-        wget=1.21.3-1+deb12u1 \
-        netcat-openbsd=1.219-1 \
-        lsof=4.95.0-1 \
-        strace=6.1-0.1 \
-        htop=3.2.2-2 \
-        unzip=6.0-28 \
-        bat=0.22.1-4 \
+        jq=${JQ_VERSION} \
+        vim=${VIM_VERSION} \
+        less=${LESS_VERSION} \
+        tree=${TREE_VERSION} \
+        ripgrep=${RIPGREP_VERSION} \
+        fd-find=${FD_FIND_VERSION} \
+        wget=${WGET_VERSION} \
+        netcat-openbsd=${NETCAT_OPENBSD_VERSION} \
+        lsof=${LSOF_VERSION} \
+        strace=${STRACE_VERSION} \
+        htop=${HTOP_VERSION} \
+        unzip=${UNZIP_VERSION} \
+        bat=${BAT_VERSION} \
         && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
     ln -sf /usr/bin/pip3 /usr/bin/pip && \
