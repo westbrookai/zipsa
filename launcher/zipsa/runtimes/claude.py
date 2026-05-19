@@ -17,6 +17,16 @@ class ClaudeRuntime(AgentRuntime):
         """Runtime identifier."""
         return "claude"
 
+    # Placeholder sent to `claude --print` when the launcher passes an
+    # empty user_input. Empty `--print ''` makes claude exit 1 immediately
+    # (no user turn to respond to). This marker is meaningful: the agent
+    # sees it as the user message, the runtime contract's "Empty
+    # user_query" section tells it what to do.
+    _EMPTY_USER_INPUT_PLACEHOLDER = (
+        "[zipsa: no user_query provided — see the runtime contract's "
+        "'Empty user_query' section]"
+    )
+
     def build_command(
         self,
         skill_name: str,
@@ -33,10 +43,11 @@ class ClaudeRuntime(AgentRuntime):
         Returns command array for Claude Code with all necessary flags.
         MCP servers are configured via .claude.json (mounted to /home/agent/.claude.json).
         """
+        effective_input = user_input if user_input else self._EMPTY_USER_INPUT_PLACEHOLDER
         cmd = [
             "claude",
             "--print",
-            user_input,
+            effective_input,
             "--append-system-prompt",
             system_prompt,
             "--allowedTools",
