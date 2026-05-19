@@ -40,7 +40,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, "Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None
+            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -106,7 +106,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, "input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None
+            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -125,7 +125,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, "input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None
+            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -832,6 +832,117 @@ class TestUninstallCommand:
 
         assert result.exit_code == 0
         assert not link_path.is_symlink()
+
+
+class TestRunEmptyQuery:
+    """`zipsa run <skill>` with no query: substitute default_query if
+    declared, else pass empty string. No hard-fail at the CLI."""
+
+    def test_no_query_with_default_query_substitutes(self, tmp_path):
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        # Build a tiny skill manifest with default_query set
+        skill_dir = tmp_path / "fixture-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: fixture-skill
+  version: 1.0.0
+spec:
+  purpose: Test fixture for default_query substitution.
+  instructions: ./SKILL.md
+  default_query: "Test default query"
+  tools: { builtin: [] }
+""")
+        (skill_dir / "SKILL.md").write_text("# Fixture")
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([])
+
+            result = runner.invoke(app, ["run", "fixture-skill"])
+
+        assert result.exit_code == 0, result.output
+        # The user_input passed to executor.run should be the default_query
+        kwargs = executor.run.call_args.kwargs
+        assert kwargs["user_input"] == "Test default query"
+
+    def test_no_query_no_default_passes_empty_string(self, tmp_path):
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = tmp_path / "fixture-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: fixture-skill
+  version: 1.0.0
+spec:
+  purpose: Test fixture for empty-query passthrough.
+  instructions: ./SKILL.md
+  tools: { builtin: [] }
+""")
+        (skill_dir / "SKILL.md").write_text("# Fixture")
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([])
+
+            result = runner.invoke(app, ["run", "fixture-skill"])
+
+        # No hard-fail anymore
+        assert result.exit_code == 0, result.output
+        # And the old "Error: user_input is required" message must NOT appear
+        assert "user_input is required" not in result.output
+        # Empty string was passed
+        kwargs = executor.run.call_args.kwargs
+        assert kwargs["user_input"] == ""
+
+    def test_no_query_does_not_double_print_error(self, tmp_path):
+        """Even when something downstream errors, the CLI should not show
+        a bare 'Error: 1' line in addition to the actual error message."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = tmp_path / "fixture-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: fixture-skill
+  version: 1.0.0
+spec:
+  purpose: Test fixture.
+  instructions: ./SKILL.md
+  tools: { builtin: [] }
+""")
+        (skill_dir / "SKILL.md").write_text("# Fixture")
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            # Force a downstream RuntimeError to make the run fail
+            executor.run.side_effect = RuntimeError("simulated failure")
+
+            result = runner.invoke(app, ["run", "fixture-skill"])
+
+        assert result.exit_code != 0
+        # The actual RuntimeError message should surface ONCE
+        assert "simulated failure" in result.output
+        # The bare 'Error: 1' (or 'Error: <exit code>') double-print must NOT appear
+        assert "Error: 1\n" not in result.output
+        assert "\nError: 1" not in result.output
 
 
 class TestNameResolution:
