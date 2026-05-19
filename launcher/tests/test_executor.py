@@ -1283,10 +1283,11 @@ class TestLimitsIntegration:
         # Breach event must be present
         assert "zipsa_limits_breach" in event_types, f"No breach event in: {event_types}"
 
-        # No events after the breach
+        # Only zipsa_run_complete may follow the breach (it is the terminal event)
         breach_idx = event_types.index("zipsa_limits_breach")
-        assert breach_idx == len(event_types) - 1, (
-            f"Events after breach: {event_types[breach_idx + 1:]}"
+        tail = event_types[breach_idx + 1:]
+        assert tail == [] or tail == ["zipsa_run_complete"], (
+            f"Unexpected events after breach: {tail}"
         )
 
         # Process must have been terminated
@@ -1405,8 +1406,11 @@ class TestLimitsIntegration:
 
         assert "zipsa_limits_breach" in event_types, f"No breach event in: {event_types}"
         breach_idx = event_types.index("zipsa_limits_breach")
-        # Nothing after breach
-        assert breach_idx == len(event_types) - 1
+        # Only zipsa_run_complete may follow the breach (it is the terminal event)
+        tail = event_types[breach_idx + 1:]
+        assert tail == [] or tail == ["zipsa_run_complete"], (
+            f"Unexpected events after breach: {tail}"
+        )
 
         breach_event = events[breach_idx]
         assert breach_event["kind"] == "turns"
@@ -1597,6 +1601,251 @@ class TestLimitsIntegration:
         assert breach_event["kind"] == "turns"
         assert breach_event["scope"] == "aggregate"
         assert breach_event["limit"] == 3.0
+
+
+class TestSummaryWritten:
+    """The executor writes summary.json to run_dir at the end of every
+    run, regardless of how it ended. summary fields reflect the run's
+    final status."""
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_summary_written_on_ok_run(self, mock_popen, tmp_path):
+        from unittest.mock import MagicMock
+        import json as _json
+
+        result_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": '{"status": "ok", "phase": "main", "result": {"hello": "world"}}'}],
+                "usage": {"input_tokens": 100},
+            },
+        }) + "\n"
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [result_line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.wait = Mock(return_value=0)
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor = DockerExecutor()
+
+        # Force run_dir into tmp_path so we can find summary.json
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            list(executor.run(skill, "Hi", env={}))
+
+        # Find the summary.json (only one runs dir)
+        summary_path = next((tmp_path / "runs").glob("*/summary.json"))
+        s = _json.loads(summary_path.read_text())
+        assert s["status"] == "ok"
+        assert s["exit_code"] == 0
+        assert s["skill"] == skill.name
+        assert s["result"] == {"hello": "world"}
+        assert s["error"] is None
+        assert s["schema_version"] == 1
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_summary_written_on_limit_breach(self, mock_popen, tmp_path):
+        """A run that hits the cost limit ends with status=limits_exceeded, exit_code=3."""
+        from unittest.mock import MagicMock
+        import json as _json
+
+        # Assistant message that has high token cost to trigger limit breach.
+        # We use max_cost_usd=0.0001 on the skill so any non-zero usage exceeds it.
+        thinking_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "thinking"}],
+                "usage": {"input_tokens": 10000, "output_tokens": 10000},
+            },
+        }) + "\n"
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [thinking_line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=0)
+        mock_process.kill = Mock()
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        # Patch limits so we breach cost immediately
+        from zipsa.core.models import SkillLimits as _SkillLimits
+        skill.manifest.spec.limits = _SkillLimits(max_cost_usd=0.0001)
+
+        executor = DockerExecutor()
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            list(executor.run(skill, "Hi", env={}))
+
+        summary_path = next((tmp_path / "runs").glob("*/summary.json"))
+        s = _json.loads(summary_path.read_text())
+        assert s["status"] == "limits_exceeded"
+        assert s["exit_code"] == 3
+        assert s["error"] is not None
+        assert s["error"]["details"]["kind"] in ("cost", "time", "turns")
+        assert s["result"] is None
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_summary_written_on_failed_status(self, mock_popen, tmp_path):
+        """A run where the agent emits status=failed ends with status=failed, exit_code=1."""
+        from unittest.mock import MagicMock
+        import json as _json
+
+        failed_payload = _json.dumps({
+            "status": "failed",
+            "phase": "main",
+            "result": None,
+            "error": {"code": "some_error", "message": "Something went wrong"},
+        })
+        result_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": failed_payload}],
+                "usage": {"input_tokens": 50},
+            },
+        }) + "\n"
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [result_line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.wait = Mock(return_value=0)
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor = DockerExecutor()
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            list(executor.run(skill, "Hi", env={}))
+
+        summary_path = next((tmp_path / "runs").glob("*/summary.json"))
+        s = _json.loads(summary_path.read_text())
+        assert s["status"] == "failed"
+        assert s["exit_code"] == 1
+        assert s["result"] is None
+        assert s["error"] is not None
+        assert s["error"]["code"] == "some_error"
+
+    @patch("zipsa.core.executor.subprocess.Popen")
+    def test_multi_phase_breach_emits_run_complete(self, mock_popen, tmp_path):
+        """Multi-phase skill that breaches limits in phase 2 must emit
+        zipsa_run_complete with status=limits_exceeded and exit_code=3.
+
+        Previously the multi-phase breach path returned from _execute_phases
+        WITHOUT yielding zipsa_run_complete, leaving the CLI event stream
+        without the terminal event and defaulting to exit 5 (infra_failed).
+        """
+        from unittest.mock import MagicMock
+        import json as _json
+        import yaml
+
+        # Build a two-phase skill with a very tight cost limit so phase 2 breaches.
+        skill_dir = tmp_path / "two-phase-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "two-phase-skill", "version": "1.0.0"},
+            "spec": {
+                "purpose": "Two phase test skill",
+                "instructions": "./SKILL.md",
+                "tools": {"builtin": ["Read"]},
+                "limits": {"max_cost_usd": 0.0001},
+                "phases": [
+                    {"id": "phase-1", "goal": "Do phase 1", "allowed_tools": ["Read"]},
+                    {"id": "phase-2", "goal": "Do phase 2", "allowed_tools": ["Read"]},
+                ],
+            },
+        }))
+        (skill_dir / "SKILL.md").write_text("# Two Phase Skill")
+        skill = Skill.load(skill_dir)
+
+        # Phase 1 ends cleanly with ok output.
+        phase1_output = _json.dumps({
+            "status": "ok",
+            "phase": "phase-1",
+            "result": None,
+            "state_updates": None,
+            "next_phase_input": None,
+            "user_facing_summary": "Phase 1 done",
+        })
+        phase1_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": phase1_output}],
+                "usage": {"input_tokens": 1},
+            },
+        }) + "\n"
+
+        # Phase 2 triggers a cost breach via high token usage.
+        phase2_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "spending lots"}],
+                "usage": {"input_tokens": 10_000, "output_tokens": 10_000},
+            },
+        }) + "\n"
+
+        phase1_stdout = MagicMock()
+        phase1_stdout.readline.side_effect = [phase1_line, ""]
+        phase2_stdout = MagicMock()
+        phase2_stdout.readline.side_effect = [phase2_line, ""]
+
+        process1 = Mock()
+        process1.stdout = phase1_stdout
+        process1.poll.return_value = 0
+        process1.terminate = Mock()
+        process1.wait = Mock(return_value=0)
+        process1.kill = Mock()
+        process1.returncode = 0
+
+        process2 = Mock()
+        process2.stdout = phase2_stdout
+        process2.poll.return_value = None
+        process2.terminate = Mock()
+        process2.wait = Mock(return_value=0)
+        process2.kill = Mock()
+        process2.returncode = 0
+
+        mock_popen.side_effect = [process1, process2]
+
+        executor = DockerExecutor()
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            events = list(executor.run(skill, "test", env={}))
+
+        event_types = [e.get("type") for e in events]
+
+        # Must have a breach event (sanity check).
+        assert "zipsa_limits_breach" in event_types, (
+            f"Expected zipsa_limits_breach in: {event_types}"
+        )
+        # Must have a zipsa_run_complete event (the fix).
+        assert "zipsa_run_complete" in event_types, (
+            f"Expected zipsa_run_complete in: {event_types}"
+        )
+        # The complete event must carry exit_code=3.
+        complete_event = next(e for e in events if e.get("type") == "zipsa_run_complete")
+        assert complete_event["exit_code"] == 3, (
+            f"Expected exit_code=3 in complete event: {complete_event}"
+        )
+        assert complete_event["status"] == "limits_exceeded", (
+            f"Expected status=limits_exceeded: {complete_event}"
+        )
+        # zipsa_run_complete must be the last event.
+        assert event_types[-1] == "zipsa_run_complete", (
+            f"zipsa_run_complete must be last event, got: {event_types}"
+        )
 
 
 class TestKeyboardInterrupt:

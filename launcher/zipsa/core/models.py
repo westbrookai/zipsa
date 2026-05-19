@@ -156,9 +156,27 @@ class SkillSpec(BaseModel):
     config: dict = Field(default_factory=dict)  # Skill-specific config
     network: Optional[dict] = None  # Network allow list
     default_query: Optional[str] = None  # Default query for skill (when user runs with no args)
+    children: list[str] = Field(default_factory=list)  # Child skills this skill may invoke
     # Multi-phase support (v1: documentation only, v2: strict validation)
     phases: list[PhaseSpec] = Field(default_factory=list)
     state_schema: dict = Field(default_factory=dict)  # v1: docs only
+
+    @field_validator("children")
+    @classmethod
+    def _reject_path_traversal(cls, v: list[str]) -> list[str]:
+        """Reject children entries that contain path traversal characters.
+
+        Child names must be simple skill identifiers (e.g. 'daily-progress').
+        Entries containing '/', '\\', or '..' are path traversal vectors and
+        are rejected at validation time even though execution is sandboxed.
+        """
+        for entry in v:
+            if "/" in entry or "\\" in entry or ".." in entry:
+                raise ValueError(
+                    f"children entry {entry!r} contains a path traversal sequence "
+                    "('/', '\\\\', or '..'); use plain skill names only"
+                )
+        return v
 
 
 class SkillManifest(BaseModel):
