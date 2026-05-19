@@ -312,3 +312,42 @@ end-to-end test: install a skill from the new location, run it,
 upgrade it to a new tag, run again.
 
 ---
+
+## Flaky `test_state_mismatch_raises_oauth_callback_error` (2026-05-19)
+
+**Symptom.** `tests/auth/test_browser.py::TestLocalCallbackServer::
+test_state_mismatch_raises_oauth_callback_error` fails intermittently
+in CI with:
+
+```
+urllib.error.URLError: <urlopen error [Errno 111] Connection refused>
+```
+
+Same commit / same code path passes on Python 3.12 and fails on
+Python 3.13 in the same workflow run (or vice-versa). Re-running the
+job almost always passes. Caught CI on PR #32's merge run; harmless
+on retry but produces a red X that hides real failures and erodes
+trust in main-branch CI signal.
+
+**Root cause (likely).** The test starts a `LocalCallbackServer` in a
+background thread, sleeps `time.sleep(0.1)`, then opens an
+`urllib.request.urlopen` to the local port. The 100ms sleep is racing
+with the server's `socket.bind() + listen()`. On a slow runner /
+Python startup that's slower than 100ms, the urlopen happens before
+the server is ready → connection refused.
+
+**Fix sketch.**
+
+- Replace `time.sleep(0.1)` with a deterministic wait: poll the
+  server's `is_ready()` (add such a method, set by the `serve_forever`
+  loop's "actually listening" callback) with a short timeout.
+- Or: expose the bound port from the server only after `listen()`
+  succeeds, and have the test wait on a `threading.Event`.
+- Pick a free port at test setup (currently hardcoded 54394 →
+  collision risk on shared CI runners that don't fully clean up
+  between tests).
+
+**Test plan.** Add a stress test that runs the test 100x in a loop
+locally and on a CI matrix. Must pass every iteration before closing.
+
+---
