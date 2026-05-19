@@ -232,3 +232,83 @@ JSON's `status` is `"failed"` and (b) `error.code` is `"limits_exceeded"`
 emitted by the agent (not synthesized by the launcher).
 
 ---
+
+## Skill ↔ launcher independent release / distribution (2026-05-19)
+
+**Today.** Skills live at `skills/<name>/` inside the launcher repo.
+"Releasing" a skill change = a launcher-repo PR + merge. There's no
+notion of a skill version that's independent of the launcher repo's
+state at the time `zipsa install` ran.
+
+This couples release cadence in both directions:
+
+- A 1-line typo fix in `skills/weather/SKILL.md` requires a launcher PR.
+- A new skill feature that depends on a new launcher field (e.g.
+  `default_query` in PR #27) ships intertwined with launcher code,
+  because shipping the manifest alone is a no-op for users until the
+  launcher knows the field.
+
+**Why this matters when zipsa goes public.**
+
+- Community contributors who want to publish "their own skill" can't —
+  they'd PR into the main repo or fork it.
+- Skill iteration speed is capped at launcher review speed (small skill
+  tweaks block on launcher CI/review even when the launcher itself isn't
+  touched).
+- No "skill marketplace" or registry concept; every install resolves
+  via hardcoded GitHub paths.
+- Compatibility breakage is invisible: a skill written today against
+  launcher v0.1 will silently misbehave on launcher v0.3 unless we
+  introduce a launcher-API-version negotiation.
+
+**Approaches to consider when this is picked up.**
+
+1. **Skills repo separate from launcher repo.** Lightest split:
+   `westbrookai/zipsa-skills` holds `<name>/` directories. `zipsa
+   install <name>` reads from there. Adds a layer of indirection
+   without forcing a registry. Per-skill GitHub releases (tags) become
+   meaningful.
+
+2. **One repo per skill.** Maximum decoupling, matches how `npm` /
+   `pip` / `cargo` work. `zipsa install <name>` resolves name →
+   registry → repo URL → tag. Heavy for v1 (build the registry, build
+   the search, build the auth for publish), best for v3+.
+
+3. **Status quo + skill tags within the same repo.** Each skill gets
+   its own tag namespace (e.g. `skill/weather/0.3.2`). `zipsa install
+   weather@0.3.2` resolves to that tag's `skills/weather/` snapshot.
+   Cheaper than a new repo. Doesn't solve the contributor-onboarding
+   problem (still need launcher-repo write access).
+
+4. **Launcher API versioning + skill compatibility declaration.**
+   Orthogonal to where skills live: add `min_launcher_version` (or a
+   capabilities list) to manifest. `zipsa install` refuses skills the
+   running launcher can't handle, with a clear upgrade message. This
+   should ship regardless of which distribution model we pick.
+
+**Hard design questions.**
+
+- **Skill identity:** name alone or namespaced (`westbrookai/weather`
+  vs just `weather`)? Namespacing prevents future collisions but is
+  ceremony.
+- **Trust model:** can any GitHub repo be installed as a skill? Sandbox
+  is already strong (manifest tool allowlist, network allowlist,
+  Docker isolation), but credentials in `~/.zipsa/.env` could be
+  exfiltrated by a malicious skill that asks the user to set
+  unrelated env vars.
+- **Update model:** explicit `zipsa update <name>` vs. auto-pull on
+  every run vs. pinned versions only.
+- **Backward compatibility:** how does the "skills directory" inside
+  the current launcher repo retire — sudden cut, or both supported
+  for N months?
+
+**Triggering event.** When zipsa is first shared publicly, OR when a
+second person/team wants to publish a skill that isn't westbrookai's.
+Whichever comes first.
+
+**Test plan.** Define a target distribution model. Stand up the
+chosen split (e.g. extract `skills/` to a separate repo). Write an
+end-to-end test: install a skill from the new location, run it,
+upgrade it to a new tag, run again.
+
+---
