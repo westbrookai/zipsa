@@ -13,6 +13,7 @@ from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
 from .skill import Skill
+from .summary import PhaseSummary, build_summary, write_summary
 from ..runtimes import get_runtime
 from ..auth.oauth import OAuthManager
 from .. import paths as zipsa_paths
@@ -102,10 +103,12 @@ class DockerExecutor:
         skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
         skill_data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create run directory for logging (skip for dry-run and shell mode)
+        # Capture the run start time and create run directory for logging
+        # (skip for dry-run and shell mode)
+        started_at = datetime.now().astimezone()
         run_dir = None
         if not dry_run and not shell:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
+            timestamp = started_at.strftime("%Y-%m-%d_%H%M%S_%f")[:23]
             run_dir = skill_data_dir / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +162,7 @@ class DockerExecutor:
             mcp_debug_host=mcp_debug_host,
             extra_docker_opts=extra_docker_opts,
             env_file=env_file,
+            started_at=started_at,
         )
 
     def _execute_with_hitl(
@@ -171,6 +175,7 @@ class DockerExecutor:
         mcp_debug_host: Optional[Path],
         extra_docker_opts: Optional[list[str]],
         env_file: Path,
+        started_at: Optional[datetime] = None,
     ) -> Iterator[dict]:
         """Wrap real execution with HitlServer lifecycle.
 
@@ -178,10 +183,27 @@ class DockerExecutor:
         includes the zipsa MCP entry pointing at the host-side server. The
         server stays up for the full duration of event consumption, then
         stops in the finally block.
+
+        Tracks run-level final status across all code paths and writes
+        summary.json to run_dir at the end of every run (best-effort).
+        Yields a zipsa_run_complete event as the last event of every run.
         """
         from .hitl_mcp import HitlIO
         from .hitl_runner import HitlServer
         from .memory_store import MemoryStore
+
+        if started_at is None:
+            started_at = datetime.now().astimezone()
+
+        # Run-level final status tracking — defaults represent infra_failed
+        # (Docker crash, exception, etc.) and are overwritten as the run progresses.
+        final_status = "infra_failed"
+        final_exit_code = 5
+        final_error: Optional[dict] = None
+        final_result: Optional[dict] = None
+        phase_summaries: list[PhaseSummary] = []
+        # Limits state ref for cost/turns at summary time (set by inner generators)
+        _limits_state_ref: list[Optional[LimitsState]] = [None]
 
         stdout_lock = threading.Lock()
         hitl_io = HitlIO(
@@ -214,26 +236,177 @@ class DockerExecutor:
             )
 
             if skill.manifest.spec.phases:
-                yield from self._execute_phases(
+                # Multi-phase path: _execute_phases tracks status internally and
+                # yields a zipsa_run_complete event as its last event.
+                for event in self._execute_phases(
                     skill, user_input, env, run_dir, claude_json_path,
                     mcp_debug_host is not None, extra_docker_opts,
-                )
+                    _limits_state_ref=_limits_state_ref,
+                ):
+                    # Capture final status from the complete event or breach event
+                    etype = event.get("type")
+                    if etype == "zipsa_limits_breach":
+                        final_status = "limits_exceeded"
+                        final_exit_code = 3
+                        final_error = {
+                            "code": "limits_exceeded",
+                            "message": (
+                                f"phase {event.get('kind')}: "
+                                f"{event.get('value')} > {event.get('limit')}"
+                            ),
+                            "details": {
+                                "scope": event.get("scope"),
+                                "kind": event.get("kind"),
+                                "value": event.get("value"),
+                                "limit": event.get("limit"),
+                                "phase": event.get("phase"),
+                            },
+                        }
+                    elif etype == "zipsa_run_complete":
+                        final_status = event.get("status", "infra_failed")
+                        final_exit_code = event.get("exit_code", 5)
+                        final_result = event.get("result")
+                        final_error = event.get("error")
+                        phase_summaries = event.get("_phase_summaries", [])
+                    yield event
                 return
 
-            # Single-phase: PreToolUse hook needs phase-allow.json too.
+            # Single-phase path: execute skill directly.
+            # PreToolUse hook needs phase-allow.json too.
             self._write_default_phase_allow_file(claude_json_path.parent, skill)
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env,
                 mcp_debug_host=mcp_debug_host,
                 extra_docker_opts=extra_docker_opts,
             )
-            yield from self._execute_skill(
+            # Shared limits state for the single phase — needed for summary cost/turns.
+            single_limits_state = new_state("main")
+            _limits_state_ref[0] = single_limits_state
+            last_assistant_text = None
+            for event in self._execute_skill(
                 docker_cmd, claude_json_path, skill, run_dir, env_file, user_input,
-            )
+                limits_state=single_limits_state,
+            ):
+                etype = event.get("type")
+                if etype == "assistant":
+                    content = event.get("message", {}).get("content", [])
+                    for block in content:
+                        if block.get("type") == "text":
+                            last_assistant_text = block.get("text", "")
+                            break
+                elif etype == "zipsa_limits_breach":
+                    final_status = "limits_exceeded"
+                    final_exit_code = 3
+                    final_error = {
+                        "code": "limits_exceeded",
+                        "message": (
+                            f"phase {event.get('kind')}: "
+                            f"{event.get('value')} > {event.get('limit')}"
+                        ),
+                        "details": {
+                            "scope": event.get("scope"),
+                            "kind": event.get("kind"),
+                            "value": event.get("value"),
+                            "limit": event.get("limit"),
+                            "phase": event.get("phase"),
+                        },
+                    }
+                    phase_summaries.append(PhaseSummary(
+                        id="main",
+                        status="limits_exceeded",
+                        cost_usd=single_limits_state.phase_cost_usd,
+                        turns=single_limits_state.phase_turns,
+                    ))
+                    yield event
+                    # Breach terminates the run — emit run_complete and return
+                    complete_event = {
+                        "type": "zipsa_run_complete",
+                        "status": final_status,
+                        "exit_code": final_exit_code,
+                    }
+                    yield complete_event
+                    return
+                yield event
+
+            # Determine final status from skill's contract JSON output
+            phase_out = self._extract_skill_output(last_assistant_text) or {}
+            status = phase_out.get("status", "failed")
+
+            # Map HITL-related error codes to user_declined (exit 4)
+            error_code = (phase_out.get("error") or {}).get("code", "")
+            if status in ("failed", "out_of_scope"):
+                if error_code in ("hitl_unattended", "user_declined"):
+                    final_status = "user_declined"
+                    final_exit_code = 4
+                    final_error = phase_out.get("error")
+                elif status == "out_of_scope":
+                    final_status = "out_of_scope"
+                    final_exit_code = 2
+                    final_error = phase_out.get("error") or {
+                        "code": "out_of_scope",
+                        "message": phase_out.get("user_facing_summary", ""),
+                    }
+                else:
+                    final_status = "failed"
+                    final_exit_code = 1
+                    final_error = phase_out.get("error") or {
+                        "code": "failed",
+                        "message": phase_out.get("user_facing_summary", ""),
+                    }
+            elif status == "ok":
+                final_status = "ok"
+                final_exit_code = 0
+                final_result = phase_out.get("result")
+                final_error = None
+            # else: stays infra_failed (should not happen if Docker returned 0)
+
+            # Append single-phase summary
+            phase_summaries.append(PhaseSummary(
+                id="main",
+                status=final_status,
+                cost_usd=single_limits_state.phase_cost_usd,
+                turns=single_limits_state.phase_turns,
+            ))
+
+            complete_event = {
+                "type": "zipsa_run_complete",
+                "status": final_status,
+                "exit_code": final_exit_code,
+            }
+            yield complete_event
+
+        except RuntimeError:
+            # Docker non-zero exit (not breach-terminated) → infra_failed
+            final_status = "infra_failed"
+            final_exit_code = 5
+            final_error = {"code": "docker_failed", "message": "Docker exited with non-zero code"}
+            raise
         finally:
             hitl_server.stop()
             self._hitl_port = None
             self._hitl_token = None
+
+            # Write summary.json — best-effort, never fails the run.
+            if run_dir is not None:
+                try:
+                    finished_at = datetime.now().astimezone()
+                    ls = _limits_state_ref[0]
+                    summary = build_summary(
+                        status=final_status,
+                        exit_code=final_exit_code,
+                        skill=skill.name,
+                        version=skill.manifest.metadata.version,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        cost_usd=ls.run_cost_usd if ls else 0.0,
+                        turns=ls.run_turns if ls else 0,
+                        phases=phase_summaries,
+                        result=final_result if final_status == "ok" else None,
+                        error=final_error if final_status != "ok" else None,
+                    )
+                    write_summary(run_dir / "summary.json", summary)
+                except Exception as e:
+                    print(f"Warning: Failed to write summary.json: {e}", file=sys.stderr)
 
     @staticmethod
     def _stop_process(process) -> None:
@@ -597,6 +770,7 @@ class DockerExecutor:
         claude_json_path: Path,
         mcp_debug: bool,
         extra_docker_opts: Optional[list[str]],
+        _limits_state_ref: Optional[list] = None,
     ) -> Iterator[dict]:
         from .models import PhaseSpec
 
@@ -630,6 +804,16 @@ class DockerExecutor:
         # Shared limits state — accumulates run-level counters across all
         # phases so that spec.limits (aggregate) is enforced over the full run.
         shared_limits_state = new_state(phases[0].id)
+        if _limits_state_ref is not None:
+            _limits_state_ref[0] = shared_limits_state
+
+        # Per-phase rollup for summary.json
+        phase_summaries: list[PhaseSummary] = []
+        # Tracks final run status for the zipsa_run_complete event
+        run_final_status = "infra_failed"
+        run_final_exit_code = 5
+        run_final_result: Optional[dict] = None
+        run_final_error: Optional[dict] = None
 
         try:
             for phase_idx, phase in enumerate(phases):
@@ -684,6 +868,13 @@ class DockerExecutor:
                                     break
                         elif event.get("type") == "zipsa_limits_breach":
                             limits_breached = True
+                            # Record this phase's contribution before returning
+                            phase_summaries.append(PhaseSummary(
+                                id=phase.id,
+                                status="limits_exceeded",
+                                cost_usd=shared_limits_state.phase_cost_usd,
+                                turns=shared_limits_state.phase_turns,
+                            ))
                             yield event
                             return  # state_updates NOT applied on breach
                         yield event
@@ -712,6 +903,12 @@ class DockerExecutor:
                     status = phase_out.get("status", "failed")
 
                     if status == "ok":
+                        phase_summaries.append(PhaseSummary(
+                            id=phase.id,
+                            status="ok",
+                            cost_usd=shared_limits_state.phase_cost_usd,
+                            turns=shared_limits_state.phase_turns,
+                        ))
                         if phase_out.get("state_updates"):
                             self._apply_skill_state(skill, phase_out["state_updates"])
                             skill_state = self._load_skill_state(skill)
@@ -720,14 +917,55 @@ class DockerExecutor:
                         break
 
                     else:  # failed | out_of_scope — state_updates NOT applied
+                        error_code = (phase_out.get("error") or {}).get("code", "")
+                        if error_code in ("hitl_unattended", "user_declined"):
+                            phase_status = "user_declined"
+                        elif status == "out_of_scope":
+                            phase_status = "out_of_scope"
+                        else:
+                            phase_status = "failed"
+
+                        phase_summaries.append(PhaseSummary(
+                            id=phase.id,
+                            status=phase_status,
+                            cost_usd=shared_limits_state.phase_cost_usd,
+                            turns=shared_limits_state.phase_turns,
+                        ))
+                        run_final_status = phase_status
+                        run_final_exit_code = {
+                            "failed": 1, "out_of_scope": 2, "user_declined": 4,
+                        }.get(phase_status, 1)
+                        run_final_error = phase_out.get("error") or {
+                            "code": phase_status,
+                            "message": phase_out.get("user_facing_summary", ""),
+                        }
                         last_phase_out = phase_out
                         yield {"type": "zipsa_phase_error", "phase": phase.id,
                                "status": status, "output": phase_out}
+                        yield {
+                            "type": "zipsa_run_complete",
+                            "status": run_final_status,
+                            "exit_code": run_final_exit_code,
+                            "result": None,
+                            "error": run_final_error,
+                            "_phase_summaries": phase_summaries,
+                        }
                         return
 
-            # All phases completed
+            # All phases completed successfully
             if last_phase_out:
-                yield {"type": "zipsa_run_complete", "result": last_phase_out}
+                run_final_status = "ok"
+                run_final_exit_code = 0
+                run_final_result = last_phase_out.get("result")
+                run_final_error = None
+                yield {
+                    "type": "zipsa_run_complete",
+                    "status": run_final_status,
+                    "exit_code": run_final_exit_code,
+                    "result": last_phase_out,
+                    "error": None,
+                    "_phase_summaries": phase_summaries,
+                }
         finally:
             if npm_volume:
                 subprocess.run(
