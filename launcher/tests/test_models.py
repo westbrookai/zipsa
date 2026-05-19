@@ -410,3 +410,29 @@ class TestDefaultQuery:
         opts INTO the empty-input → agent-intro path. Not None."""
         spec = self._spec(default_query="")
         assert spec.default_query == ""
+
+
+class TestChildren:
+    """SkillSpec.children declares which other skills this skill may invoke
+    via Bash(zipsa:*). Optional list[str]; defaults to []."""
+
+    def _spec(self, **overrides):
+        from zipsa.core.models import SkillSpec
+        data = {
+            "purpose": "test",
+            "instructions": "./SKILL.md",
+        }
+        data.update(overrides)
+        return SkillSpec.model_validate(data)
+
+    def test_children_absent_defaults_to_empty_list(self):
+        spec = self._spec()
+        assert spec.children == []
+
+    def test_children_accepts_list_of_strings(self):
+        spec = self._spec(children=["daily-progress", "bip-daily-x"])
+        assert spec.children == ["daily-progress", "bip-daily-x"]
+
+    def test_children_rejects_non_string_entries(self):
+        with pytest.raises(ValidationError):
+            self._spec(children=["valid-name", 42, None])
