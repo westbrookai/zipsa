@@ -102,10 +102,10 @@ uvx zipsa run ./my-skill "actual query"
 
 Review logs:
 ```
-./my-skill/.zipsa/runs/YYYY-MM-DD_HHMMSS/
+~/.zipsa/my-skill@<version>/runs/YYYY-MM-DD_HHMMSS_µs/
 ├── output.jsonl    # full execution log
-├── summary.jsonl   # key events only
-└── metadata.json   # cost, turns, duration
+├── events.jsonl   # key events only
+└── summary.json    # status, cost, turns, error, usage (single source of truth)
 ```
 
 ---
@@ -135,7 +135,7 @@ limits:
   timeout_seconds: 60
 ```
 
-Start conservative. Observe `metadata.json` after execution and adjust.
+Start conservative. Observe `summary.json` after execution and adjust.
 
 ### MCP Servers — Only What's Needed
 
@@ -263,7 +263,7 @@ Before committing a new or modified skill:
 - [ ] `uvx zipsa validate ./my-skill` passes with no errors
 - [ ] `uvx zipsa run ./my-skill "test" --dry-run` shows correct MCP config and tool allowlist
 - [ ] `uvx zipsa run ./my-skill "test"` completes successfully
-- [ ] `metadata.json` shows cost and turns within limits
+- [ ] `summary.json` shows `status="ok"` with cost and turns within limits
 - [ ] SKILL.md instructions are specific and complete
 - [ ] Tools in manifest match tools referenced in SKILL.md
 - [ ] No secrets or tokens committed
@@ -359,7 +359,7 @@ cat ~/.claude.json    # verify server config
 
 ### Cost or turns exceeded
 
-Check `metadata.json` for actual usage, then adjust limits in manifest.
+Check `summary.json` for actual `cost_usd` / `turns` / `usage`, then adjust limits in manifest.
 
 ---
 

@@ -290,8 +290,9 @@ class TestListCommand:
         assert result.exit_code == 0
         assert "linked" in result.output.lower()
 
-    def test_list_shows_run_stats(self, tmp_path):
-        """list shows run count and success rate from metadata.json files."""
+    def test_list_shows_run_stats_from_legacy_metadata_json(self, tmp_path):
+        """Fallback path: list reads legacy metadata.json files when
+        summary.json (the new primary) is absent (e.g. pre-consolidation runs)."""
         import yaml
         zipsa_home = tmp_path / ".zipsa"
         skill_dir = zipsa_home / "skills" / "my-skill"
@@ -327,6 +328,51 @@ class TestListCommand:
         assert "my-skill" in result.output
         assert "2 run" in result.output  # "2 runs"
         assert "50%" in result.output
+
+    def test_list_shows_run_stats_from_summary_json(self, tmp_path):
+        """Primary path: list reads summary.json (status field) and counts
+        status=='ok' as success. This is what post-consolidation runs produce."""
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        skill_dir = zipsa_home / "skills" / "my-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "my-skill", "version": "0.1.0"},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (skill_dir / "SKILL.md").write_text("# Test")
+        (skill_dir / "_install.json").write_text(json.dumps({
+            "source": "github:test/repo", "ref": "main",
+            "version": "0.1.0", "type": "github",
+            "installed_at": "2026-05-11T00:00:00+00:00",
+        }))
+
+        # 3 runs via summary.json: 2 ok, 1 failed → 67% success
+        runs_dir = zipsa_home / "my-skill@0.1.0" / "runs"
+        cases = [
+            ("2026-05-19_120000_00001", "ok"),
+            ("2026-05-19_120100_00002", "ok"),
+            ("2026-05-19_120200_00003", "failed"),
+        ]
+        for run_id, status in cases:
+            rd = runs_dir / run_id
+            rd.mkdir(parents=True)
+            (rd / "summary.json").write_text(json.dumps({
+                "schema_version": 1, "status": status, "exit_code": 0 if status == "ok" else 1,
+                "skill": "my-skill", "version": "0.1.0",
+            }))
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0
+        assert "my-skill" in result.output
+        assert "3 run" in result.output
+        # 2 out of 3 successful = 66% (integer truncation)
+        assert "66%" in result.output
 
 
 class TestDiscoverCommand:

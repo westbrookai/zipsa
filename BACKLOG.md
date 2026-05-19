@@ -157,7 +157,7 @@ launcher just doesn't currently use either to short-circuit.
 **Fix sketch.**
 
 - Persist per-run progress alongside the existing
-  `~/.zipsa/<skill>@<ver>/runs/<timestamp>/metadata.json`: the index
+  `~/.zipsa/<skill>@<ver>/runs/<timestamp>/summary.json`: the index
   of the last successful phase + the `next_phase_input` it produced.
 - Add `zipsa run --resume <run-id>` (or `--resume-last`): load the
   persisted `next_phase_input`, jump straight to the failed phase,

@@ -438,16 +438,28 @@ def list_installed():
             for run_dir in runs_dir.iterdir():
                 if not run_dir.is_dir():
                     continue
-                meta_file = run_dir / "metadata.json"
-                if not meta_file.exists():
-                    continue
-                try:
-                    meta = json.loads(meta_file.read_text())
-                except Exception:
-                    continue
-                total_runs += 1
-                if not meta.get("is_error", True):
-                    successful_runs += 1
+                # Prefer summary.json (single source of truth). Fall back
+                # to legacy metadata.json for pre-consolidation runs.
+                summary_file = run_dir / "summary.json"
+                if summary_file.exists():
+                    try:
+                        s = json.loads(summary_file.read_text())
+                    except Exception:
+                        continue
+                    total_runs += 1
+                    if s.get("status") == "ok":
+                        successful_runs += 1
+                else:
+                    meta_file = run_dir / "metadata.json"
+                    if not meta_file.exists():
+                        continue
+                    try:
+                        meta = json.loads(meta_file.read_text())
+                    except Exception:
+                        continue
+                    total_runs += 1
+                    if not meta.get("is_error", True):
+                        successful_runs += 1
 
         installed.append({
             "skill": skill,

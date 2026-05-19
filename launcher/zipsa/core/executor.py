@@ -43,6 +43,9 @@ class DockerExecutor:
         # _build_docker_command is invoked.
         self._hitl_port: Optional[int] = None
         self._hitl_token: Optional[str] = None
+        # Image env-var cache (filled on first _get_image_env call). Same
+        # tag → same env, so once per process is enough.
+        self._image_env_cache: dict[str, dict[str, str]] = {}
         if self.dev_overlay is not None:
             desc = self.dev_overlay.description or "(no description)"
             mounts_n = len(self.dev_overlay.mounts)
@@ -98,6 +101,10 @@ class DockerExecutor:
         # OAuth pre-flight: ensure tokens for all oauth2 HTTP servers (skip for dry-run)
         if not dry_run:
             self._ensure_oauth_credentials(skill, env)
+            # Prime the image-env cache once per run (~50-200ms first call,
+            # free afterwards). Surfaces ZIPSA_RUNTIME_VERSION and
+            # CLAUDE_CODE_VERSION in summary.json for debugging.
+            self._get_image_env(self.image)
 
         # Centralized skill data directory: ~/.zipsa/<name>@<version>/
         skill_data_dir = zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
@@ -202,6 +209,16 @@ class DockerExecutor:
         final_error: Optional[dict] = None
         final_result: Optional[dict] = None
         phase_summaries: list[PhaseSummary] = []
+        # Last result event from the Claude SDK stream — used at summary time
+        # to extract stop_reason / usage / model_usage (folded in from the
+        # old metadata.json so summary.json is the single source of truth).
+        last_result_event: Optional[dict] = None
+        # Model and Claude CLI version from the first `system.init`
+        # event. Claude SDK already reports these in init's payload
+        # (`model` and `claude_code_version` fields), so no separate
+        # docker inspect needed — saves the ~50-200ms per-run round-trip.
+        actual_model: Optional[str] = None
+        actual_claude_version: Optional[str] = None
         # Limits state ref for cost/turns at summary time (set by inner generators)
         _limits_state_ref: list[Optional[LimitsState]] = [None]
 
@@ -245,7 +262,14 @@ class DockerExecutor:
                 ):
                     # Capture final status from the complete event or breach event
                     etype = event.get("type")
-                    if etype == "zipsa_limits_breach":
+                    if etype == "result":
+                        last_result_event = event
+                    elif etype == "system" and event.get("subtype") == "init":
+                        if not actual_model:
+                            actual_model = event.get("model")
+                        if not actual_claude_version:
+                            actual_claude_version = event.get("claude_code_version")
+                    elif etype == "zipsa_limits_breach":
                         final_status = "limits_exceeded"
                         final_exit_code = 3
                         final_error = {
@@ -294,6 +318,13 @@ class DockerExecutor:
                         if block.get("type") == "text":
                             last_assistant_text = block.get("text", "")
                             break
+                elif etype == "result":
+                    last_result_event = event
+                elif etype == "system" and event.get("subtype") == "init":
+                    if not actual_model:
+                        actual_model = event.get("model")
+                    if not actual_claude_version:
+                        actual_claude_version = event.get("claude_code_version")
                 elif etype == "zipsa_limits_breach":
                     final_status = "limits_exceeded"
                     final_exit_code = 3
@@ -387,10 +418,27 @@ class DockerExecutor:
             self._hitl_token = None
 
             # Write summary.json — best-effort, never fails the run.
+            # summary.json is the single source of truth for per-run outcome
+            # (it absorbed the old metadata.json's role — see chore: merge
+            # metadata.json into summary.json).
             if run_dir is not None:
                 try:
                     finished_at = datetime.now().astimezone()
                     ls = _limits_state_ref[0]
+                    # Extract the metadata-style fields from the Claude SDK
+                    # result event (None if the run didn't reach a result).
+                    re = last_result_event or {}
+                    # Version fields — best-effort. claude_version + model
+                    # come from Claude SDK system.init (captured during
+                    # the stream); runtime_version from image ENV via
+                    # docker inspect (cached); zipsa_version from
+                    # importlib. All None on failure — never blocks.
+                    image_env = self._image_env_cache.get(self.image, {})
+                    try:
+                        from importlib.metadata import version as _pkg_version
+                        _zipsa_version = _pkg_version("zipsa")
+                    except Exception:
+                        _zipsa_version = None
                     summary = build_summary(
                         status=final_status,
                         exit_code=final_exit_code,
@@ -403,6 +451,15 @@ class DockerExecutor:
                         phases=phase_summaries,
                         result=final_result if final_status == "ok" else None,
                         error=final_error if final_status != "ok" else None,
+                        user_input=user_input,
+                        stop_reason=re.get("stop_reason"),
+                        usage=re.get("usage"),
+                        model_usage=re.get("modelUsage"),
+                        zipsa_version=_zipsa_version,
+                        runtime_image=self.image,
+                        runtime_version=image_env.get("ZIPSA_RUNTIME_VERSION"),
+                        claude_version=actual_claude_version or image_env.get("CLAUDE_CODE_VERSION"),
+                        model=actual_model,
                     )
                     write_summary(run_dir / "summary.json", summary)
                 except Exception as e:
@@ -420,6 +477,33 @@ class DockerExecutor:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+    def _get_image_env(self, image: str) -> dict[str, str]:
+        """Read env vars baked into the image via `docker inspect`.
+
+        Used at run start to surface ZIPSA_RUNTIME_VERSION and
+        CLAUDE_CODE_VERSION in summary.json. Cached per image tag
+        (~200ms first call, free after). Returns empty dict on any
+        failure (network, missing image, no docker) — debugging
+        version surface is best-effort, never blocks the run.
+        """
+        if image in self._image_env_cache:
+            return self._image_env_cache[image]
+        env: dict[str, str] = {}
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .Config.Env}}", image],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            env_list = json.loads(result.stdout.strip())
+            for item in env_list:
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    env[k] = v
+        except Exception:
+            pass  # best-effort; empty dict is acceptable
+        self._image_env_cache[image] = env
+        return env
 
     def _execute_skill(
         self,
@@ -582,14 +666,12 @@ class DockerExecutor:
                 except Exception:
                     pass  # Best-effort cleanup
 
-            # Generate summary and metadata if logging enabled.
+            # Write events.jsonl (filtered event stream) if logging enabled.
+            # Per-run outcome metadata is in summary.json, written by the
+            # outer _execute_with_hitl finally.
             if run_dir:
                 try:
-                    self._save_summary(run_dir)
-                    self._save_metadata(
-                        run_dir, skill, cost_exceeded,
-                        skill.manifest.spec.limits, user_input=user_input,
-                    )
+                    self._save_events(run_dir)
                 except Exception as e:
                     print(f"Warning: Failed to save run logs: {e}", file=sys.stderr)
 
@@ -610,8 +692,8 @@ class DockerExecutor:
         print()
         subprocess.run(docker_cmd)
 
-    def _save_summary(self, run_dir: Path) -> None:
-        """Generate summary.jsonl from output.jsonl.
+    def _save_events(self, run_dir: Path) -> None:
+        """Generate events.jsonl (filtered event stream) from output.jsonl.
 
         Filters for important events only:
         - system (init only)
@@ -620,18 +702,22 @@ class DockerExecutor:
         - result (all)
         - any event with "error" in type
 
+        (Renamed from _save_summary / summary.jsonl — that name collided
+        with summary.json's role. events.jsonl is the accurate name:
+        this file is the filtered event STREAM, not a summary.)
+
         Args:
             run_dir: Run directory containing output.jsonl
         """
         output_file = run_dir / "output.jsonl"
-        summary_file = run_dir / "summary.jsonl"
+        events_file = run_dir / "events.jsonl"
 
         if not output_file.exists():
             return
 
         important_types = {"system", "assistant", "user", "result"}
 
-        with open(output_file, 'r') as inf, open(summary_file, 'w') as outf:
+        with open(output_file, 'r') as inf, open(events_file, 'w') as outf:
             for line in inf:
                 line = line.strip()
                 if not line:
@@ -653,89 +739,12 @@ class DockerExecutor:
                     # Skip malformed lines
                     continue
 
-    def _save_metadata(self, run_dir: Path, skill: Skill, cost_exceeded: bool = False, limits=None, user_input: str = "") -> None:
-        """Extract metrics from output.jsonl and save to metadata.json.
-
-        Extracts execution metrics from the result event.
-
-        Args:
-            run_dir: Run directory containing output.jsonl
-            skill: Skill that was executed
-            cost_exceeded: Whether cost limit was exceeded
-            limits: Skill limits configuration
-            user_input: User's input/query for this execution
-        """
-        output_file = run_dir / "output.jsonl"
-        metadata_file = run_dir / "metadata.json"
-
-        if not output_file.exists():
-            return
-
-        # Scan all events: find result event and last assistant text
-        result_event = None
-        last_assistant_text = None
-        with open(output_file, 'r') as f:
-            for line in f:
-                try:
-                    event = json.loads(line.strip())
-                    event_type = event.get("type")
-                    if event_type == "result":
-                        result_event = event
-                    elif event_type == "assistant":
-                        content = event.get("message", {}).get("content", [])
-                        for block in content:
-                            if block.get("type") == "text":
-                                last_assistant_text = block.get("text", "")
-                                break
-                except json.JSONDecodeError:
-                    continue
-
-        if not result_event:
-            # Execution failed before result
-            metadata = {
-                "run_id": run_dir.name,
-                "skill_name": skill.name,
-                "skill_version": skill.manifest.metadata.version,
-                "timestamp": datetime.now().isoformat(),
-                "is_error": True,
-                "error": "No result event found - execution may have failed",
-                "user_input": user_input
-            }
-        else:
-            # Extract from result event
-            metadata = {
-                "run_id": run_dir.name,
-                "skill_name": skill.name,
-                "skill_version": skill.manifest.metadata.version,
-                "timestamp": datetime.now().isoformat(),
-                "duration_ms": result_event.get("duration_ms"),
-                "duration_api_ms": result_event.get("duration_api_ms"),
-                "num_turns": result_event.get("num_turns"),
-                "total_cost_usd": result_event.get("total_cost_usd"),
-                "is_error": result_event.get("is_error", False),
-                "stop_reason": result_event.get("stop_reason"),
-                "terminal_reason": result_event.get("terminal_reason"),
-                "usage": result_event.get("usage", {}),
-                "model_usage": result_event.get("modelUsage", {}),
-                "user_input": user_input
-            }
-
-        # Override is_error if skill's final JSON reports a non-ok status.
-        # Claude Code reports is_error=False for a clean process exit even when
-        # the skill itself returned status=failed in its contract JSON output.
-        skill_out = self._extract_skill_output(last_assistant_text)
-        skill_status = skill_out.get("status") if skill_out else None
-        if skill_status and skill_status != "ok":
-            metadata["is_error"] = True
-            metadata["skill_status"] = skill_status
-
-        # Add limit information if applicable
-        if limits and limits.max_cost_usd:
-            metadata["cost_exceeded"] = cost_exceeded
-            metadata["cost_limit_usd"] = limits.max_cost_usd
-
-        with open(metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
+    # _save_metadata removed: per-run outcome metadata now lives in
+    # summary.json (single source of truth). See chore: merge metadata.json
+    # into summary.json. The build_summary() call site captures the same
+    # fields (status, cost, turns, duration, usage, stop_reason,
+    # model_usage, user_input) from in-memory run state rather than
+    # re-scanning output.jsonl after the fact.
 
     def _load_skill_state(self, skill: Skill) -> dict:
         state_file = zipsa_paths.skill_data_dir(
@@ -1334,24 +1343,33 @@ class DockerExecutor:
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        # Strategy 3: last {...} containing "status"
-        brace_matches = list(re.finditer(r"\{", text))
-        for m in reversed(brace_matches):
-            depth = 0
-            for i, ch in enumerate(text[m.start():]):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
+        # Strategy 3: last TOP-LEVEL {...} containing "status".
+        # We scan the text once tracking depth so nested objects (e.g.
+        # a contract JSON whose `result` field happens to itself contain
+        # "status") are NOT considered as standalone candidates. Only
+        # outermost balanced {...} blocks are candidates; we return the
+        # last one with a top-level "status" key.
+        top_level_spans = []
+        depth = 0
+        start = None
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
                     depth -= 1
-                    if depth == 0:
-                        candidate = text[m.start(): m.start() + i + 1]
-                        try:
-                            data = json.loads(candidate)
-                            if isinstance(data, dict) and "status" in data:
-                                return data
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-                        break
+                    if depth == 0 and start is not None:
+                        top_level_spans.append((start, i + 1))
+                        start = None
+        for s, e in reversed(top_level_spans):
+            try:
+                data = json.loads(text[s:e])
+                if isinstance(data, dict) and "status" in data:
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                pass
 
         # Strategy 4: failed to extract
         return {

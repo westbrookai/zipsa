@@ -281,9 +281,9 @@ uv run pytest tests/test_executor.py::TestRuntimeConfig::test_auto_inject_env_fr
 
 ### Check Logs
 ```bash
-# Execution logs are saved in skill directory
-cat ../skills/daily-progress/.zipsa/runs/*/output.jsonl
-cat ../skills/daily-progress/.zipsa/runs/*/metadata.json
+# Execution logs are saved in ~/.zipsa/<skill>@<version>/runs/
+cat ~/.zipsa/daily-progress@*/runs/*/output.jsonl
+cat ~/.zipsa/daily-progress@*/runs/*/summary.json
 ```
 
 ---
