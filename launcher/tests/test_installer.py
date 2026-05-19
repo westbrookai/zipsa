@@ -245,6 +245,55 @@ class TestInstallFromGithub:
                 with pytest.raises(FileNotFoundError, match="manifest"):
                     install_from_github("westbrookai/zipsa/skills/nonexistent")
 
+    def test_install_from_github_replaces_broken_entry(self, tmp_path):
+        """install_from_github replaces a broken existing entry transparently
+        without requiring --force, matching the local --link path behavior."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir(parents=True)
+        # Place a dangling symlink (broken entry) at the skill's destination.
+        broken_entry = skills_dir / "test-skill"
+        broken_entry.symlink_to(tmp_path / "gone-source")  # target never created
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                # Should succeed without force=True even though entry exists.
+                name = install_from_github("westbrookai/zipsa/skills/test-skill")
+
+        assert name == "test-skill"
+        # Broken symlink was removed and replaced with a real directory.
+        assert not broken_entry.is_symlink()
+        assert broken_entry.is_dir()
+        assert (broken_entry / "manifest.yaml").exists()
+
+    def test_install_from_github_healthy_existing_still_errors_without_force(self, tmp_path):
+        """Regression: github install over a healthy existing entry still
+        raises FileExistsError without --force."""
+        tarball = _make_fake_tarball("skills/test-skill")
+        sha = "abc1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit_response(sha),
+                    self._mock_response(tarball),
+                ]
+                install_from_github("westbrookai/zipsa/skills/test-skill")
+
+            with pytest.raises(FileExistsError, match="already installed"):
+                with patch("urllib.request.urlopen") as mock_open:
+                    mock_open.side_effect = [
+                        self._mock_commit_response(sha),
+                        self._mock_response(tarball),
+                    ]
+                    install_from_github("westbrookai/zipsa/skills/test-skill")
+
 
 def _make_local_skill(base: Path, name: str = "my-skill", version: str = "0.1.0") -> Path:
     skill_dir = base / name

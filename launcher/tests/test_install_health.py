@@ -95,3 +95,16 @@ class TestBrokenDetection:
         h = check_install(link)
         assert h.ok is False
         assert "manifest.yaml not found" in h.reason
+
+    def test_dangling_relative_symlink_reports_resolved_path(self, tmp_path):
+        """Relative symlink targets should be resolved to absolute paths in
+        the error message — otherwise users see '../foo' which is meaningless
+        out of context."""
+        link = tmp_path / "skill-a"
+        link.symlink_to("../gone-relative")  # relative target
+        h = check_install(link)
+        assert h.ok is False
+        assert "Linked source missing" in h.reason
+        # The absolute resolved path should appear, not the bare relative one
+        expected_resolved = (tmp_path / ".." / "gone-relative").resolve()
+        assert str(expected_resolved) in h.reason

@@ -39,7 +39,12 @@ def check_install(path: Path) -> InstallHealth:
     # message names the missing path.
     if path.is_symlink() and not path.exists():
         try:
-            target = path.readlink()
+            raw_target = path.readlink()
+            # Resolve relative targets to absolute so the message is useful.
+            if not raw_target.is_absolute():
+                target = (path.parent / raw_target).resolve()
+            else:
+                target = raw_target
         except OSError:
             target = "<unreadable>"
         return InstallHealth(ok=False, reason=f"Linked source missing: {target}")
