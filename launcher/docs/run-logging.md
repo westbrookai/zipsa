@@ -7,19 +7,24 @@ Every SKILL execution automatically saves its output to a timestamped directory 
 ## Directory Structure
 
 ```
-<skill_dir>/.zipsa/runs/<YYYY-MM-DD_HHMMSS_microseconds>/
+~/.zipsa/<name>@<version>/runs/<YYYY-MM-DD_HHMMSS_microseconds>/
   ├── output.jsonl      # Complete stdout from container (real-time)
-  ├── summary.jsonl     # Filtered important events (post-execution)
-  └── metadata.json     # Extracted metrics (post-execution)
+  ├── events.jsonl     # Filtered important events (post-execution)
+  └── summary.json      # Single-object run outcome (real-time, schema v1)
 ```
 
 **Example:**
 ```
-zipsa-skills/weather/.zipsa/runs/2026-05-04_090443_123456/
+~/.zipsa/weather@0.3.1/runs/2026-05-19_113200_45358/
   ├── output.jsonl      # All Claude Code stream-json events
-  ├── summary.jsonl     # system init, assistant, user, result events only
-  └── metadata.json     # Tokens, cost, duration, turns
+  ├── events.jsonl     # system init, assistant, user, result events only
+  └── summary.json      # status, cost, turns, error, usage, model_usage, etc.
 ```
+
+> **Note (May 2026):** `summary.json` absorbed the old `metadata.json` —
+> see PR `chore: merge metadata.json into summary.json`. Pre-May 2026
+> run dirs may still have `metadata.json` instead; `zipsa list` reads
+> either.
 
 ## File Descriptions
 
@@ -38,7 +43,7 @@ Complete Docker stdout saved in real-time (line-buffered). Contains all Claude C
 - Understanding tool usage patterns
 - Analyzing thinking process
 
-### summary.jsonl
+### events.jsonl
 
 Filtered version of output.jsonl containing only important events:
 
@@ -53,39 +58,58 @@ Filtered version of output.jsonl containing only important events:
 - Conversation replay
 - Context for future runs
 
-### metadata.json
+### summary.json
 
-Extracted metrics from the `result` event:
+Single-object structured run outcome. The launcher exit code matches
+the `exit_code` field; a parent meta-skill can read this one file to
+branch on what happened. Schema is versioned (`schema_version`).
 
 ```json
 {
-  "run_id": "2026-05-04_090443_123456",
-  "skill_name": "weather",
-  "skill_version": "0.1.0",
-  "timestamp": "2026-05-04T09:04:43Z",
-  "duration_ms": 15562,
-  "duration_api_ms": 14586,
-  "num_turns": 3,
-  "total_cost_usd": 0.099,
-  "is_error": false,
+  "schema_version": 1,
+  "status": "ok",
+  "exit_code": 0,
+  "skill": "weather",
+  "version": "0.3.1",
+  "started_at": "2026-05-19T11:32:00+10:00",
+  "finished_at": "2026-05-19T11:32:18+10:00",
+  "duration_seconds": 18.3,
+  "cost_usd": 0.0707,
+  "turns": 2,
+  "phases": [
+    {"id": "main", "status": "ok", "cost_usd": 0.07, "turns": 2}
+  ],
+  "result": {"temp_C": 19, "city": "Sydney"},
+  "error": null,
+  "user_input": "시드니 날씨",
   "stop_reason": "end_turn",
-  "terminal_reason": "completed",
   "usage": {
-    "input_tokens": 7,
-    "output_tokens": 302,
+    "input_tokens": 7, "output_tokens": 302,
     "cache_creation_input_tokens": 18324,
     "cache_read_input_tokens": 35477
   },
   "model_usage": {
     "claude-sonnet-4-6": {
-      "input_tokens": 7,
-      "output_tokens": 302,
-      "cache_read_input_tokens": 35477,
-      "cost_usd": 0.083909
+      "inputTokens": 7, "outputTokens": 302,
+      "cacheReadInputTokens": 35477, "costUSD": 0.083909
     }
   }
 }
 ```
+
+**Status / exit code mapping:**
+
+| status | exit_code | meaning |
+|---|---|---|
+| `ok` | 0 | run succeeded; `result` populated, `error` null |
+| `failed` | 1 | business failure (skill returned `status=failed`) |
+| `out_of_scope` | 2 | skill refused the request |
+| `limits_exceeded` | 3 | launcher killed the run on a cost/time/turn breach |
+| `user_declined` | 4 | HITL `confirm` no, or `HITL_UNATTENDED` |
+| `infra_failed` | 5 | Docker crashed or some other infra-level failure |
+| (no summary, exit 130) | — | Ctrl+C |
+
+For non-ok statuses, `error` is populated with `{code, message, details}`. `result` is null.
 
 **Use cases:**
 - Cost analysis
@@ -119,19 +143,19 @@ zipsa run weather "test" --dry-run
 ls -lt zipsa-skills/weather/.zipsa/runs/
 ```
 
-**View latest run metadata:**
+**View latest run outcome:**
 ```bash
-cat zipsa-skills/weather/.zipsa/runs/$(ls -t zipsa-skills/weather/.zipsa/runs/ | head -1)/metadata.json | jq .
+cat ~/.zipsa/weather@0.3.1/runs/$(ls -t ~/.zipsa/weather@0.3.1/runs/ | head -1)/summary.json | jq .
 ```
 
-**View latest run summary:**
+**View latest run event log (the JSONL stream):**
 ```bash
-cat zipsa-skills/weather/.zipsa/runs/$(ls -t zipsa-skills/weather/.zipsa/runs/ | head -1)/summary.jsonl
+cat ~/.zipsa/weather@0.3.1/runs/$(ls -t ~/.zipsa/weather@0.3.1/runs/ | head -1)/events.jsonl
 ```
 
-**Calculate total cost for all runs:**
+**Calculate total cost for all runs of a skill:**
 ```bash
-find zipsa-skills/weather/.zipsa/runs -name "metadata.json" -exec jq -r '.total_cost_usd // 0' {} \; | awk '{sum+=$1} END {print sum}'
+find ~/.zipsa/weather@0.3.1/runs -name "summary.json" -exec jq -r '.cost_usd // 0' {} \; | awk '{sum+=$1} END {print sum}'
 ```
 
 ## Error Handling
@@ -140,19 +164,24 @@ find zipsa-skills/weather/.zipsa/runs -name "metadata.json" -exec jq -r '.total_
 
 If Docker execution fails:
 - `output.jsonl` contains partial output (already saved in real-time)
-- `summary.jsonl` and `metadata.json` are still generated from available data
-- `metadata.json` sets `is_error: true`
-- Warning printed to stderr (execution still fails as expected)
+- `events.jsonl` is generated from whatever was streamed
+- `summary.json` is written from in-memory run state with
+  `status="infra_failed"` (or another non-ok status depending on the
+  failure mode) and `error` populated.
+- Warning printed to stderr (execution still fails as expected).
 
-**Example error metadata:**
+**Example error summary:**
 ```json
 {
-  "run_id": "2026-05-04_101530_456789",
-  "skill_name": "weather",
-  "skill_version": "0.1.0",
-  "timestamp": "2026-05-04T10:15:30Z",
-  "is_error": true,
-  "error": "No result event found - execution may have failed"
+  "schema_version": 1,
+  "status": "infra_failed",
+  "exit_code": 5,
+  "skill": "weather",
+  "version": "0.3.1",
+  "error": {
+    "code": "docker_failed",
+    "message": "Docker exited with non-zero code"
+  }
 }
 ```
 
@@ -197,10 +226,11 @@ If logging itself fails (disk full, permission denied):
 
 ### Post-Processing
 
-`summary.jsonl` and `metadata.json` are generated after execution completes:
-- Read from `output.jsonl`
-- Filter/extract relevant data
-- Written in finally block (always runs)
+`events.jsonl` is generated after execution from `output.jsonl` (filter
+the useful events). `summary.json` is generated from in-memory state
+tracked DURING the run (status, cost, turns, errors) plus the captured
+Claude SDK `result` event (usage, model_usage, stop_reason). Both are
+written in the executor's finally block.
 
 ## Troubleshooting
 
@@ -212,10 +242,13 @@ If logging itself fails (disk full, permission denied):
 - Check if Docker execution started successfully
 - Verify runtime (Claude Code) is producing output
 
-**Q: metadata.json shows is_error: true**
-- Check `error` field for details
-- Review `output.jsonl` for execution traces
-- Common cause: Docker execution failed before `result` event
+**Q: summary.json shows status != "ok"**
+- Check `error.code` and `error.message` for details
+- Status maps: `failed` (skill returned status=failed), `out_of_scope`
+  (skill refused), `limits_exceeded` (cost/time/turn breach),
+  `user_declined` (HITL no / unattended), `infra_failed` (Docker
+  crash or no result event)
+- For `infra_failed`: review `output.jsonl` for execution traces
 
 **Q: How to prevent logs from being committed to git?**
 - Add `.zipsa/runs/` to skill's `.gitignore`

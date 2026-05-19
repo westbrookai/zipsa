@@ -46,10 +46,35 @@ def build_summary(
     phases: list[PhaseSummary],
     result: Optional[dict[str, Any]] = None,
     error: Optional[dict[str, Any]] = None,
+    user_input: str = "",
+    stop_reason: Optional[str] = None,
+    usage: Optional[dict[str, Any]] = None,
+    model_usage: Optional[dict[str, Any]] = None,
+    zipsa_version: Optional[str] = None,
+    runtime_image: Optional[str] = None,
+    runtime_version: Optional[str] = None,
+    claude_version: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build the summary dict in the schema documented in the design spec.
 
     `result` is included only when status == "ok"; `error` only otherwise.
+    `user_input` is the query string the user passed to `zipsa run`.
+    `stop_reason`, `usage`, `model_usage` are forwarded verbatim from
+    the Claude Code SDK's final `result` event so callers don't need to
+    re-scan output.jsonl for them.
+
+    Version fields capture the exact toolchain combination that ran:
+      - `zipsa_version`: the launcher's own package version
+      - `runtime_image`: full image ref the user asked for (e.g.
+        ghcr.io/westbrookai/zipsa-runtime:0.4.6, or a local-test tag)
+      - `runtime_version`: image's baked-in ZIPSA_RUNTIME_VERSION ENV
+        (may differ from runtime_image's tag when the tag is :latest)
+      - `claude_version`: image's baked-in CLAUDE_CODE_VERSION ENV
+      - `model`: the model Claude SDK actually ran (from the system
+        init event); may differ from manifest.spec.model if SDK
+        chose a different default
+
     Callers are responsible for the status / error semantics — this
     function does NOT enforce consistency. (The executor's status
     tracking is the source of truth.)
@@ -71,6 +96,15 @@ def build_summary(
         ],
         "result": result,
         "error": error,
+        "user_input": user_input,
+        "stop_reason": stop_reason,
+        "usage": usage,
+        "model_usage": model_usage,
+        "zipsa_version": zipsa_version,
+        "runtime_image": runtime_image,
+        "runtime_version": runtime_version,
+        "claude_version": claude_version,
+        "model": model,
     }
 
 

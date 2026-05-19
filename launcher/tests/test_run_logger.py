@@ -91,16 +91,16 @@ class TestRunLogging:
             '{"type":"result","num_turns":1,"is_error":false}\n'
         )
 
-        # Call _save_summary
+        # Call _save_events (renamed from _save_summary; produces events.jsonl)
         from zipsa.core.executor import DockerExecutor
         executor = DockerExecutor()
-        executor._save_summary(run_dir)
+        executor._save_events(run_dir)
 
-        # Verify summary.jsonl
-        summary_file = run_dir / "summary.jsonl"
-        assert summary_file.exists()
+        # Verify events.jsonl
+        events_file = run_dir / "events.jsonl"
+        assert events_file.exists()
 
-        lines = summary_file.read_text().strip().split('\n')
+        lines = events_file.read_text().strip().split('\n')
         assert len(lines) == 4  # system init, assistant, user, result (no rate_limit)
 
         # Verify content
@@ -112,48 +112,11 @@ class TestRunLogging:
         # Cleanup
         shutil.rmtree(Path(__file__).parent / "test_runs")
 
-    def test_metadata_extraction(self):
-        """Metadata should be extracted from result event."""
-        # Create test run directory
-        run_dir = Path(__file__).parent / "test_runs" / "test-metadata"
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create test output.jsonl with result event
-        output_file = run_dir / "output.jsonl"
-        output_file.write_text(
-            '{"type":"system","subtype":"init"}\n'
-            '{"type":"result","duration_ms":15562,"duration_api_ms":14586,'
-            '"num_turns":3,"total_cost_usd":0.099,"is_error":false,'
-            '"stop_reason":"end_turn","terminal_reason":"completed",'
-            '"usage":{"input_tokens":7,"output_tokens":302},'
-            '"modelUsage":{"claude-sonnet-4-6":{"costUSD":0.08}}}\n'
-        )
-
-        # Create mock skill
-        from zipsa.core.skill import Skill
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        # Call _save_metadata
-        from zipsa.core.executor import DockerExecutor
-        executor = DockerExecutor()
-        executor._save_metadata(run_dir, skill)
-
-        # Verify metadata.json
-        metadata_file = run_dir / "metadata.json"
-        assert metadata_file.exists()
-
-        import json
-        metadata = json.loads(metadata_file.read_text())
-
-        assert metadata["skill_name"] == "test-skill"
-        assert metadata["num_turns"] == 3
-        assert metadata["total_cost_usd"] == 0.099
-        assert metadata["is_error"] is False
-        assert metadata["duration_ms"] == 15562
-
-        # Cleanup
-        shutil.rmtree(Path(__file__).parent / "test_runs")
+    # test_metadata_extraction removed: _save_metadata was deleted in
+    # chore: merge metadata.json into summary.json. Equivalent coverage
+    # lives in test_executor.py::TestSummaryWritten and
+    # test_summary.py::TestBuildSummary (the new summary.json absorbs
+    # the same fields — usage, model_usage, stop_reason, etc.).
 
     @patch("zipsa.core.executor.subprocess.Popen")
     @patch("builtins.print")
@@ -212,10 +175,14 @@ class TestRunLogging:
         lines = output_file.read_text().strip().split('\n')
         assert len(lines) == 2
 
-        metadata_file = run_dir / "metadata.json"
-        assert metadata_file.exists()
+        # summary.json (the new single-source-of-truth) is written even
+        # on partial-log / error paths. status will reflect the failure
+        # (infra_failed when Docker exits non-zero without our SIGTERM).
+        summary_file = run_dir / "summary.json"
+        assert summary_file.exists()
 
         import json
-        metadata = json.loads(metadata_file.read_text())
-        assert metadata["is_error"] is True
-        assert "No result event" in metadata["error"]
+        summary = json.loads(summary_file.read_text())
+        assert summary["status"] != "ok"
+        # error dict is populated for non-ok statuses
+        assert summary.get("error") is not None

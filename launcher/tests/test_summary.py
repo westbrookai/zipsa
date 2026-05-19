@@ -52,6 +52,72 @@ class TestBuildSummary:
         assert s["error"] is None
         assert len(s["phases"]) == 1
         assert s["phases"][0]["status"] == "ok"
+        # New fields absorbed from metadata.json — present but None/empty
+        # when not provided by the caller.
+        assert s["user_input"] == ""
+        assert s["stop_reason"] is None
+        assert s["usage"] is None
+        assert s["model_usage"] is None
+
+    def test_metadata_fields_passed_through(self):
+        """user_input, stop_reason, usage, model_usage forwarded to summary."""
+        s = build_summary(
+            status="ok",
+            exit_code=0,
+            skill="weather",
+            version="0.3.1",
+            started_at=_utc("2026-05-19T11:00:00+10:00"),
+            finished_at=_utc("2026-05-19T11:00:05+10:00"),
+            cost_usd=0.01,
+            turns=1,
+            phases=[],
+            result={},
+            user_input="시드니 날씨",
+            stop_reason="end_turn",
+            usage={"input_tokens": 7, "output_tokens": 302},
+            model_usage={"claude-sonnet-4-6": {"costUSD": 0.08}},
+        )
+        assert s["user_input"] == "시드니 날씨"
+        assert s["stop_reason"] == "end_turn"
+        assert s["usage"]["input_tokens"] == 7
+        assert s["model_usage"]["claude-sonnet-4-6"]["costUSD"] == 0.08
+
+    def test_version_fields_present_for_debugging(self):
+        """Five version fields needed to reproduce / debug a run."""
+        s = build_summary(
+            status="ok", exit_code=0,
+            skill="weather", version="0.3.1",
+            started_at=_utc("2026-05-19T11:00:00+10:00"),
+            finished_at=_utc("2026-05-19T11:00:01+10:00"),
+            cost_usd=0.01, turns=1, phases=[], result={},
+            zipsa_version="0.1.5",
+            runtime_image="ghcr.io/westbrookai/zipsa-runtime:0.4.6",
+            runtime_version="0.4.6",
+            claude_version="2.1.114",
+            model="claude-sonnet-4-6",
+        )
+        assert s["zipsa_version"] == "0.1.5"
+        assert s["runtime_image"] == "ghcr.io/westbrookai/zipsa-runtime:0.4.6"
+        assert s["runtime_version"] == "0.4.6"
+        assert s["claude_version"] == "2.1.114"
+        assert s["model"] == "claude-sonnet-4-6"
+
+    def test_version_fields_default_to_none_when_absent(self):
+        """Best-effort: if image inspect failed or SDK didn't emit init,
+        version fields are present-but-None instead of missing keys.
+        Consumers can safely `.get()` without KeyError handling."""
+        s = build_summary(
+            status="ok", exit_code=0,
+            skill="x", version="1.0.0",
+            started_at=_utc("2026-05-19T11:00:00+10:00"),
+            finished_at=_utc("2026-05-19T11:00:01+10:00"),
+            cost_usd=0.0, turns=0, phases=[], result={},
+        )
+        assert "zipsa_version" in s and s["zipsa_version"] is None
+        assert "runtime_image" in s and s["runtime_image"] is None
+        assert "runtime_version" in s and s["runtime_version"] is None
+        assert "claude_version" in s and s["claude_version"] is None
+        assert "model" in s and s["model"] is None
 
     def test_failed_status_omits_result_includes_error(self):
         s = build_summary(

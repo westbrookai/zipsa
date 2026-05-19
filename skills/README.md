@@ -366,10 +366,10 @@ zipsa run my-skill "actual query"
 
 Logs are saved to:
 ```
-skills/my-skill/.zipsa/runs/YYYY-MM-DD_HHMMSS_ffffff/
+~/.zipsa/my-skill@<version>/runs/YYYY-MM-DD_HHMMSS_ffffff/
 ├── output.jsonl      # Full execution log
-├── summary.jsonl     # Important events only
-└── metadata.json     # Metrics (cost, turns, duration)
+├── events.jsonl     # Important events only
+└── summary.json      # Run outcome (status, cost, turns, error, usage)
 ```
 
 ---
@@ -397,7 +397,7 @@ skills/my-skill/.zipsa/runs/YYYY-MM-DD_HHMMSS_ffffff/
 ### Testing
 - **Test incrementally**: Validate → Dry run → Shell → Execute
 - **Check logs**: Review output.jsonl to understand agent behavior
-- **Monitor costs**: Check metadata.json for cost/turns
+- **Monitor costs**: Check `summary.json` for `cost_usd` / `turns` / `usage`
 - **Iterate**: Refine instructions based on actual execution
 
 ---

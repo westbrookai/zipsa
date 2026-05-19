@@ -573,93 +573,12 @@ class TestDockerExecutor:
         assert env["ZIPSA_TOKEN_NOTION"] == "existing-token"
 
 
-class TestSaveMetadata:
-    """Test _save_metadata writes correct metadata.json."""
-
-    def test_user_input_is_recorded_in_metadata(self, tmp_path):
-        """metadata.json should contain the user_input field."""
-        executor = DockerExecutor()
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-
-        (run_dir / "output.jsonl").write_text(
-            '{"type": "result", "is_error": false, "duration_ms": 1000, '
-            '"duration_api_ms": 800, "num_turns": 2, "total_cost_usd": 0.01, '
-            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
-        )
-
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        executor._save_metadata(run_dir, skill, user_input="test query")
-
-        metadata = json.loads((run_dir / "metadata.json").read_text())
-        assert metadata["user_input"] == "test query"
-
-    def test_user_input_is_recorded_when_no_result_event(self, tmp_path):
-        """user_input is saved even when execution fails before producing a result event."""
-        executor = DockerExecutor()
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-
-        # No result event — simulates crashed execution
-        (run_dir / "output.jsonl").write_text(
-            '{"type": "assistant", "message": {"content": []}}\n'
-        )
-
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        executor._save_metadata(run_dir, skill, user_input="failing query")
-
-        metadata = json.loads((run_dir / "metadata.json").read_text())
-        assert metadata["user_input"] == "failing query"
-        assert metadata["is_error"] is True
-
-    def test_skill_json_status_failed_sets_is_error(self, tmp_path):
-        """is_error should be True when skill's final JSON has status != 'ok'."""
-        executor = DockerExecutor()
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-
-        skill_json = '{"status": "failed", "phase": "write-to-notion", "result": null, "state_updates": null, "user_facing_summary": "Notion unavailable.", "needs_input": null, "error": {"code": "notion_unavailable"}}'
-        (run_dir / "output.jsonl").write_text(
-            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
-            '{"type": "result", "is_error": false, "duration_ms": 1000, '
-            '"duration_api_ms": 800, "num_turns": 1, "total_cost_usd": 0.01, '
-            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
-        )
-
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        executor._save_metadata(run_dir, skill, user_input="daily log")
-
-        metadata = json.loads((run_dir / "metadata.json").read_text())
-        assert metadata["is_error"] is True
-        assert metadata["skill_status"] == "failed"
-
-    def test_skill_json_status_ok_keeps_is_error_false(self, tmp_path):
-        """is_error should remain False when skill's final JSON has status 'ok'."""
-        executor = DockerExecutor()
-        run_dir = tmp_path / "run"
-        run_dir.mkdir()
-
-        skill_json = '{"status": "ok", "phase": "done", "result": "summary", "state_updates": null, "user_facing_summary": "Done.", "needs_input": null, "error": null}'
-        (run_dir / "output.jsonl").write_text(
-            f'{{"type": "assistant", "message": {{"content": [{{"type": "text", "text": {json.dumps(skill_json)}}}]}}}}\n'
-            '{"type": "result", "is_error": false, "duration_ms": 500, '
-            '"duration_api_ms": 400, "num_turns": 1, "total_cost_usd": 0.005, '
-            '"stop_reason": "end_turn", "usage": {}, "modelUsage": {}}\n'
-        )
-
-        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
-        skill = Skill.load(skill_dir)
-
-        executor._save_metadata(run_dir, skill, user_input="some query")
-
-        metadata = json.loads((run_dir / "metadata.json").read_text())
-        assert metadata["is_error"] is False
+# TestSaveMetadata removed: _save_metadata was deleted in
+# chore: merge metadata.json into summary.json. Equivalent behavior
+# (user_input recorded, status reflects skill's contract JSON,
+# usage/stop_reason/model_usage captured) is covered by:
+# - TestSummaryWritten (this file) — exercises the full executor → summary.json path
+# - test_summary.py::TestBuildSummary — verifies the schema for each status
 
 
 class TestExtractSkillOutput:
@@ -688,6 +607,35 @@ class TestExtractSkillOutput:
         out = executor._extract_skill_output(text)
         assert out is not None
         assert out["status"] == "ok"
+
+    def test_strategy3_picks_outer_when_result_has_nested_status(self):
+        """Regression: hello-world emits a contract JSON whose `result`
+        field itself contains a "status" key. Strategy 3 must pick the
+        OUTERMOST {...} (the contract), not the nested inner dict."""
+        executor = DockerExecutor()
+        text = '''Hello from zipsa!
+
+Runtime : Claude Code
+Model   : claude-sonnet-4-6
+Status  : OK
+
+{
+  "status": "ok",
+  "phase": "main",
+  "result": {
+    "runtime": "Claude Code",
+    "model": "claude-sonnet-4-6",
+    "status": "OK"
+  },
+  "user_facing_summary": "Zipsa is running."
+}'''
+        out = executor._extract_skill_output(text)
+        assert out is not None
+        # Must be the OUTER status, not "OK" from the nested result
+        assert out["status"] == "ok"
+        assert out["phase"] == "main"
+        # Inner status preserved inside result
+        assert out["result"]["status"] == "OK"
 
     def test_strategy4_fallback_invalid_output(self):
         """Strategy 4: fallback when no parseable JSON with status."""
