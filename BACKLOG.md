@@ -11,59 +11,22 @@ resolve a BACKLOG item, e.g. `fix: enforce skill limits mid-execution (BACKLOG #
 
 ---
 
-## Broken linked installs are invisible to `zipsa list` but block `zipsa install` (2026-05-18)
+## Broken-install follow-ups: `zipsa doctor` + worktree-cleanup integration (2026-05-19)
 
-**Symptom.** After removing a git worktree where a skill had been
-installed via `zipsa install --link`, the symlink at
-`~/.zipsa/skills/<name>` becomes dangling.
+PR #29 fixed the urgent friction (broken entries visible in `list`,
+transparently replaced by `install`). Two deferred follow-ups remain:
 
-- `zipsa list` silently omits the broken entry. The user sees N skills
-  and assumes everything is fine.
-- `zipsa install --link …` for the same name then fails with
-  `Error: Skill 'X' is already installed. Use --force to overwrite.`
+1. **`zipsa doctor`** — batch find/repair broken entries
+   (currently the user fixes them one at a time via re-install or
+   `uninstall`). Useful when several worktrees get cleaned up at once.
 
-The two commands disagree about whether the skill exists. The user has
-no way to discover or repair the broken install without poking around
-`~/.zipsa/skills/` manually.
+2. **Worktree-cleanup integration** — `git worktree remove` leaves
+   linker symlinks dangling. Either a `superpowers:finishing-a-development-branch`
+   hook that runs `zipsa list` before remove, or a `zipsa` helper that
+   the cleanup flow calls. Same gap applies to any `rm -rf` of a linked
+   source dir, so a wrapper command is more honest than a hook.
 
-**Reproduction.**
-```bash
-zipsa install --link /tmp/worktree/skills/foo
-rm -rf /tmp/worktree                              # or `git worktree remove ...`
-zipsa list                                         # foo not shown
-zipsa install --link ./skills/foo                  # "already installed"
-```
-
-**Root cause.** Two separate gaps:
-
-1. `zipsa list` swallows load failures (broken symlink → manifest read
-   raises → entry filtered out). Hiding errors is the wrong default for
-   a status command.
-2. The launcher has no concept of "uninstall on worktree removal."
-   `git worktree remove` knows nothing about `~/.zipsa/skills/` and
-   leaves the symlinks behind. Same problem would happen if someone
-   `rm -rf`s the source dir for any other reason.
-
-**Fix sketch.**
-
-- `zipsa list`: when a skill directory exists but its manifest can't be
-  loaded, show it with a clear `[broken]` marker and the underlying
-  reason (e.g. `linked source missing: <path>`). Continue listing other
-  skills.
-- `zipsa install`: when the existing entry is broken, treat
-  re-installation as an upgrade rather than a duplicate — i.e. fall
-  through to the normal install path instead of erroring. (Still respect
-  `--force` semantics for the not-broken case.)
-- Optional: `zipsa doctor` (or `zipsa list --fix`) that finds dangling
-  linked installs and offers to remove them.
-- Workflow nudge: the `finishing-a-development-branch` / worktree
-  cleanup flow should run `zipsa list` and warn about broken links
-  before removing a worktree that has linked skills in it.
-
-**Test plan.** Add an integration test that creates a tmp source dir,
-installs --link from it, deletes the source dir, and asserts both
-`list` and `install` behave sensibly (list shows broken marker; install
-overwrites cleanly).
+Pick up if dangling-link pain recurs.
 
 ---
 
