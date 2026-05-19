@@ -231,8 +231,11 @@ class TestListCommand:
             result = runner.invoke(app, ["list"])
 
         assert result.exit_code == 0
-        assert "Invalid manifests" in result.output
+        # Now rendered as a broken row with ✗ marker and recovery hint,
+        # not under a separate "Invalid manifests" header.
         assert "broken-skill" in result.output
+        assert "broken" in result.output.lower()
+        assert "Invalid manifest" in result.output
 
     def test_list_empty_when_no_skills_installed(self, tmp_path):
         """list reports no installed skills."""
@@ -968,4 +971,152 @@ class TestNameResolution:
         result = runner.invoke(app, ["view", "ghost"])
         assert result.exit_code == 1
         assert "ghost" in result.output
+
+
+class TestListBrokenEntries:
+    """zipsa list must SHOW broken entries with a marker + reason +
+    recovery hint, not silently filter them."""
+
+    def test_list_renders_broken_dangling_symlink(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        # Build a fake zipsa_home with one healthy and one broken entry.
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        # Healthy: real dir with valid manifest
+        healthy = skills_dir / "healthy-skill"
+        healthy.mkdir()
+        (healthy / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: healthy-skill, version: 1.0.0}\n"
+            "spec: {purpose: ok, instructions: ./SKILL.md}\n"
+        )
+
+        # Broken: dangling symlink
+        gone = tmp_path / "removed-source"
+        broken = skills_dir / "broken-skill"
+        broken.symlink_to(gone)
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0, result.output
+        # Both names appear in output
+        assert "healthy-skill" in result.output
+        assert "broken-skill" in result.output
+        # Broken marker and reason both present
+        assert "broken" in result.output.lower()
+        assert "Linked source missing" in result.output
+        assert str(gone) in result.output
+        # Recovery hint
+        assert "zipsa install --link" in result.output
+
+    def test_list_count_includes_broken(self, tmp_path, monkeypatch):
+        """Installed skills (N): N counts broken entries too — they
+        ARE installed, they just don't load."""
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        for i in range(2):
+            d = skills_dir / f"healthy-{i}"
+            d.mkdir()
+            (d / "manifest.yaml").write_text(
+                "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+                f"metadata: {{name: healthy-{i}, version: 1.0.0}}\n"
+                "spec: {purpose: ok, instructions: ./SKILL.md}\n"
+            )
+        (skills_dir / "broken").symlink_to(tmp_path / "gone")
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["list"])
+
+        assert "(3)" in result.output or "Installed skills (3)" in result.output
+
+
+class TestInstallReplacesBroken:
+    """zipsa install replaces a broken entry transparently — no --force
+    needed, message says what happened."""
+
+    def test_install_link_replaces_broken_entry(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        # Existing broken entry: dangling symlink named "test-skill"
+        (skills_dir / "test-skill").symlink_to(tmp_path / "gone")
+
+        # New source to install
+        new_src = tmp_path / "new-src"
+        new_src.mkdir()
+        (new_src / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: test-skill, version: 1.0.0}\n"
+            "spec: {purpose: ok, instructions: ./SKILL.md}\n"
+        )
+        (new_src / "SKILL.md").write_text("# Test")
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["install", "--link", str(new_src)])
+
+        assert result.exit_code == 0, result.output
+        # Output mentions the replacement
+        assert "Replaced broken link" in result.output
+        assert "test-skill" in result.output
+        # Symlink now points to the new source
+        link = skills_dir / "test-skill"
+        assert link.is_symlink()
+        assert link.resolve() == new_src.resolve()
+
+    def test_install_link_healthy_existing_still_errors_without_force(self, tmp_path, monkeypatch):
+        """Regression: healthy existing install + new install without
+        --force still errors with 'already installed'."""
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        # Healthy existing entry
+        existing = skills_dir / "test-skill"
+        existing.mkdir()
+        (existing / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: test-skill, version: 1.0.0}\n"
+            "spec: {purpose: ok, instructions: ./SKILL.md}\n"
+        )
+
+        # New source
+        new_src = tmp_path / "new-src"
+        new_src.mkdir()
+        (new_src / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: test-skill, version: 2.0.0}\n"
+            "spec: {purpose: ok, instructions: ./SKILL.md}\n"
+        )
+        (new_src / "SKILL.md").write_text("# Test")
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["install", "--link", str(new_src)])
+
+        assert result.exit_code != 0
+        assert "already installed" in result.output.lower()
 

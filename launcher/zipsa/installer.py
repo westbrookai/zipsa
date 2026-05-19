@@ -198,12 +198,24 @@ def install_from_github(source_str: str, force: bool = False) -> str:
         version = skill.manifest.metadata.version
         dest = skills_dir() / name
 
-        if dest.exists() and not force:
-            raise FileExistsError(
-                f"Skill '{name}' is already installed. Use --force to overwrite."
-            )
-        if dest.exists():
-            shutil.rmtree(dest)
+        # If an existing entry is broken, replace it transparently (no
+        # --force needed), matching the local --link/--path behaviour.
+        if dest.exists() or dest.is_symlink():
+            from .core.install_health import check_install
+            health = check_install(dest)
+            if not health.ok:
+                if dest.is_symlink() or dest.is_file():
+                    dest.unlink()
+                else:
+                    shutil.rmtree(dest)
+                # Fall through — dest no longer exists, install proceeds.
+            elif not force:
+                raise FileExistsError(
+                    f"Skill '{name}' is already installed. Use --force to overwrite."
+                )
+            else:
+                shutil.rmtree(dest)
+
 
         shutil.copytree(tmp_path, dest)
 
