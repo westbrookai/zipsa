@@ -1,4 +1,4 @@
-# SKILL Runtime Docker Image - Multi-stage Build
+# Zipsa Runtime Docker Image - Multi-stage Build
 # Base: Debian Slim for glibc compatibility
 # Purpose: Runtime environment for Claude Code, Codex, Gemini CLI with MCP support
 # Strategy: Builder compiles all npm packages + Node.js; runtime copies them in
@@ -8,7 +8,7 @@
 #-----------------------------------------------------------
 
 # Image version (injected at publish time via --build-arg)
-ARG ZIPSA_RUNTIME_VERSION="0.4.7"
+ARG ZIPSA_RUNTIME_VERSION="0.4.8"
 
 # System packages (apt)
 ARG CURL_VERSION="7.88.1-10+deb12u14"
@@ -41,6 +41,10 @@ ARG CLAUDE_CODE_VERSION="2.1.114"
 ARG CODEX_VERSION="0.121.0"
 ARG GEMINI_CLI_VERSION="0.32.1"
 ARG FX_VERSION="35.0.0"
+
+# Standalone binaries
+ARG YQ_VERSION="4.53.2"
+ARG UV_VERSION="0.11.15"
 
 #-----------------------------------------------------------
 # Stage 1: Builder - Node.js + all npm packages
@@ -76,7 +80,7 @@ RUN apt-get update && \
 RUN npm install -g --omit=dev @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && \
     npm cache clean --force
 
-RUN npm install -g --omit=dev @openai/codex@${CODEX_VERSION} || echo "Codex installation skipped" && \
+RUN npm install -g --omit=dev @openai/codex@${CODEX_VERSION} && \
     npm cache clean --force
 
 RUN npm install -g --omit=dev @google/gemini-cli@${GEMINI_CLI_VERSION} && \
@@ -118,11 +122,19 @@ ARG CLAUDE_CODE_VERSION
 ARG CODEX_VERSION
 ARG GEMINI_CLI_VERSION
 ARG FX_VERSION
+ARG YQ_VERSION
+ARG UV_VERSION
 
-# Metadata
-LABEL maintainer="your-email@example.com"
-LABEL description="SKILL Runtime with Claude Code, Codex, and Gemini CLI (Multi-stage)"
+# OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+LABEL org.opencontainers.image.title="Zipsa Runtime"
+LABEL org.opencontainers.image.description="Runtime environment for Claude Code, Codex, and Gemini CLI with MCP support"
+LABEL org.opencontainers.image.version="${ZIPSA_RUNTIME_VERSION}"
+LABEL org.opencontainers.image.vendor="WestbrookAI"
+LABEL org.opencontainers.image.authors="choonsik@westbrookai.com"
+LABEL org.opencontainers.image.source="https://github.com/westbrookai/zipsa"
+# Legacy LABELs preserved for backward compatibility with publish workflow validation
 LABEL version="${ZIPSA_RUNTIME_VERSION}"
+
 ENV ZIPSA_RUNTIME_VERSION=${ZIPSA_RUNTIME_VERSION}
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 ENV CODEX_VERSION=${CODEX_VERSION}
@@ -181,8 +193,8 @@ RUN ln -sf /usr/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm && \
     node --version && npm --version && npx --version && \
     claude --version && codex --version && gemini --version && fx --version
 
-# Install yq (YAML processor) - binary download
-RUN curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(dpkg --print-architecture)" \
+# Install yq (YAML processor) - pinned binary download
+RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_$(dpkg --print-architecture)" \
     -o /usr/local/bin/yq && \
     chmod +x /usr/local/bin/yq && \
     yq --version
@@ -201,8 +213,8 @@ USER agent
 
 ENV PATH="/home/agent/.local/bin:${PATH}"
 
-# Install uv and configure shell
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+# Install uv (pinned version) and configure shell
+RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && \
     uv --version && uvx --version && \
     echo 'alias ll="ls -lah"' >> /home/agent/.bashrc && \
     echo 'alias claude-help="claude --help"' >> /home/agent/.bashrc && \
@@ -213,4 +225,4 @@ WORKDIR /home/agent/workspace
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD node --version || exit 1
 
-CMD ["claude", "--help"]
+CMD ["bash"]
