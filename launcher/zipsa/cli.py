@@ -134,12 +134,19 @@ def run(
         skill = Skill.load(_resolve_skill_path(name))
         typer.echo(f"Loaded skill: {skill.name}", err=True)
 
-        # Resolve user_input: substitute default_query if available, else empty string.
-        # The hard-fail for missing input is intentionally removed — empty input is
-        # a valid signal that the agent should introduce itself and elicit the request.
+        # Resolve user_input: substitute default_query if available, else empty
+        # string. The hard-fail for missing input is intentionally removed —
+        # empty input is a valid signal that the agent should introduce itself
+        # and elicit the request via HITL (see runtime-contract.md "Empty
+        # user_query"). Note: default_query="" in the manifest is honored as an
+        # explicit opt-in to the intro flow (same behavior as no default at all
+        # but lets the author make the intent explicit).
         if not user_input and not shell:
             default = skill.manifest.spec.default_query
             user_input = default if default is not None else ""
+        # In shell mode the substitution above is skipped; normalize None → "".
+        if user_input is None:
+            user_input = ""
 
         # Parse environment variables
         env_dict = {}
@@ -157,8 +164,9 @@ def run(
             image=image,
         )
 
-        # Execute skill or start shell
-        output = executor.run(skill, user_input=user_input or "", env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
+        # Execute skill or start shell. user_input is always a string here
+        # (substituted above) — no `or ""` guard needed.
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
 
         if output is None:
             # Dry run mode

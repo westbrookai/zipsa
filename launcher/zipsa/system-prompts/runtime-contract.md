@@ -44,9 +44,9 @@ your FIRST action in the FIRST phase must be:
    the SKILL.md overview. If SKILL.md has an "Examples" section,
    lift 1–2 examples into your prompt so the user knows what
    shape of input you expect.
-3. Use the user-interaction tool (per the "Interacting with the user"
-   intent table) to elicit the user's specific request. Treat the
-   response AS the `user_query` for the rest of the run.
+3. Call `mcp__zipsa__ask` with a prompt that combines the introduction
+   and the actual question. Treat the response AS the `user_query` for
+   the rest of the run.
 4. Then proceed with the skill's normal phase 1 work using that
    response.
 
