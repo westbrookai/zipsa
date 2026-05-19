@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Generator, Iterator, Optional
 
 import typer
 from importlib.metadata import version as pkg_version
@@ -58,6 +58,69 @@ def main(
 
 
 _RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
+
+
+def _validate_children(parent: Skill) -> None:
+    """Warn (on stderr) about (a) declared children that aren't installed,
+    (b) sum of children's max_cost_usd / timeout_seconds exceeding
+    parent's. Never raises."""
+    skills_dir = zipsa_home() / "skills"
+
+    missing = []
+    child_skills = []
+    for child_name in parent.manifest.spec.children:
+        path = skills_dir / child_name
+        health = check_install(path)
+        if not health.ok:
+            missing.append((child_name, health.reason))
+            continue
+        try:
+            child_skills.append(Skill.load(path))
+        except Exception as e:
+            missing.append((child_name, f"failed to load: {e}"))
+
+    if missing:
+        typer.echo(
+            f"Warning: {parent.name} declares children that can't be loaded:", err=True
+        )
+        for child_name, reason in missing:
+            typer.echo(f"  {child_name}: {reason}", err=True)
+
+    parent_limits = parent.manifest.spec.limits
+    if parent_limits and child_skills:
+        # Budget check: cost
+        sum_cost = sum(
+            (c.manifest.spec.limits.max_cost_usd or 0.0)
+            for c in child_skills if c.manifest.spec.limits
+        )
+        if parent_limits.max_cost_usd is not None and sum_cost > parent_limits.max_cost_usd:
+            typer.echo(
+                f"Warning: {parent.name} child cost limits don't add up.", err=True
+            )
+            typer.echo(
+                f"  parent.max_cost_usd  = ${parent_limits.max_cost_usd:.4f}", err=True
+            )
+            typer.echo(f"  children sum         = ${sum_cost:.4f}", err=True)
+            for c in child_skills:
+                if c.manifest.spec.limits and c.manifest.spec.limits.max_cost_usd:
+                    typer.echo(
+                        f"    {c.name:20} = ${c.manifest.spec.limits.max_cost_usd:.4f}",
+                        err=True,
+                    )
+
+        # Same for timeout
+        sum_to = sum(
+            (c.manifest.spec.limits.timeout_seconds or 0)
+            for c in child_skills if c.manifest.spec.limits
+        )
+        if parent_limits.timeout_seconds is not None and sum_to > parent_limits.timeout_seconds:
+            typer.echo(
+                f"Warning: {parent.name} child timeouts don't add up.", err=True
+            )
+            typer.echo(
+                f"  parent.timeout_seconds = {parent_limits.timeout_seconds}s", err=True
+            )
+            typer.echo(f"  children sum           = {sum_to}s", err=True)
 
 
 def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
@@ -128,6 +191,10 @@ def run(
         OutputMode,
         typer.Option("--output-mode", help="Output format: pretty (default), answer, json"),
     ] = OutputMode.pretty,
+    summary_to: Annotated[
+        Optional[Path],
+        typer.Option("--summary-to", help="Copy run summary.json to this path after the run."),
+    ] = None,
 ):
     """Execute a skill with the specified runtime."""
     try:
@@ -159,6 +226,10 @@ def run(
                 key, value = pair.split("=", 1)
                 env_dict[key] = value
 
+        # Validate declared children before invoking executor (warn-only).
+        if skill.manifest.spec.children:
+            _validate_children(skill)
+
         # Create executor
         executor = DockerExecutor(
             runtime=runtime,
@@ -170,11 +241,42 @@ def run(
         output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
 
         if output is None:
-            # Dry run mode
+            # Dry run or shell mode — no exit code translation, no summary copy.
             return
 
-        # Stream output through renderer
-        render(output, output_mode)
+        # Tee the event stream: renderer sees every event; we capture the
+        # zipsa_run_complete event to translate it to a process exit code.
+        # Default to infra_failed (5) in case the event never arrives.
+        exit_code = 5
+        run_dir_from_event: Optional[Path] = None
+
+        def _tee(events: Iterator[dict]) -> Generator[dict, None, None]:
+            nonlocal exit_code, run_dir_from_event
+            for event in events:
+                if event.get("type") == "zipsa_run_complete":
+                    exit_code = event.get("exit_code", 5)
+                yield event
+
+        render(_tee(output), output_mode)
+
+        # Copy summary.json to --summary-to path if requested.
+        # The executor writes it to run_dir/summary.json. We find run_dir
+        # by scanning the skill's runs directory for the latest run.
+        if summary_to:
+            from .paths import skill_data_dir as _skill_data_dir
+            data_dir = _skill_data_dir(skill.name, skill.manifest.metadata.version)
+            runs_dir = data_dir / "runs"
+            if runs_dir.exists():
+                try:
+                    run_dir_path = _find_run_dir(runs_dir)
+                    src = run_dir_path / "summary.json"
+                    if src.exists():
+                        summary_to.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy(src, summary_to)
+                except (ValueError, OSError):
+                    pass  # Quiet on any error — best effort
+
+        raise typer.Exit(exit_code)
 
     except typer.Exit:
         # Re-raise Exit cleanly so it is not swallowed by the generic handler

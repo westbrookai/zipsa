@@ -27,9 +27,11 @@ class TestRunCommand:
         mock_skill.name = "test-skill"
         mock_skill_cls.load.return_value = mock_skill
 
+        mock_skill.manifest.spec.children = []
         mock_executor = Mock()
         mock_executor.run.return_value = iter([
-            {"type": "text", "content": "Hello"}
+            {"type": "text", "content": "Hello"},
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
         ])
         mock_executor_cls.return_value = mock_executor
 
@@ -49,8 +51,11 @@ class TestRunCommand:
     def test_run_with_runtime(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Run with custom runtime."""
         mock_skill = Mock()
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
-        mock_executor_cls.return_value.run.return_value = iter([])
+        mock_executor_cls.return_value.run.return_value = iter([
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+        ])
 
         result = runner.invoke(
             app, ["run", "test-skill", "input", "--runtime", "codex"]
@@ -68,9 +73,12 @@ class TestRunCommand:
     def test_run_with_env_vars(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Run with environment variables."""
         mock_skill = Mock()
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
-        mock_executor.run.return_value = iter([])
+        mock_executor.run.return_value = iter([
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+        ])
         mock_executor_cls.return_value = mock_executor
 
         result = runner.invoke(
@@ -97,6 +105,7 @@ class TestRunCommand:
     def test_run_dry_run(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         """Dry run should not execute."""
         mock_skill = Mock()
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
         mock_executor.run.return_value = None
@@ -116,9 +125,12 @@ class TestRunCommand:
         """--mcp-debug should pass mcp_debug=True to executor."""
         mock_skill = Mock()
         mock_skill.name = "test-skill"
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
-        mock_executor.run.return_value = iter([])
+        mock_executor.run.return_value = iter([
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+        ])
         mock_executor_cls.return_value = mock_executor
 
         result = runner.invoke(app, ["run", "test-skill", "input", "--mcp-debug"])
@@ -418,10 +430,12 @@ class TestRunOutputMode:
         """run without --output-mode should use pretty rendering."""
         mock_skill = Mock()
         mock_skill.name = "test-skill"
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
 
         events = [
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}}
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
         ]
         mock_executor = Mock()
         mock_executor.run.return_value = iter(events)
@@ -440,11 +454,13 @@ class TestRunOutputMode:
     def test_run_answer_mode_prints_only_text(self, mock_skill_cls, mock_executor_cls, mock_resolve):
         mock_skill = Mock()
         mock_skill.name = "test-skill"
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
 
         events = [
             {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "hmm"}]}},
             {"type": "assistant", "message": {"content": [{"type": "text", "text": "Final answer."}]}},
+            {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
         ]
         mock_executor = Mock()
         mock_executor.run.return_value = iter(events)
@@ -464,17 +480,30 @@ class TestRunOutputMode:
         import json as _json
         mock_skill = Mock()
         mock_skill.name = "test-skill"
+        mock_skill.manifest.spec.children = []
         mock_skill_cls.load.return_value = mock_skill
 
         event = {"type": "result", "total_cost_usd": 0.01}
+        complete_event = {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0}
         mock_executor = Mock()
-        mock_executor.run.return_value = iter([event])
+        mock_executor.run.return_value = iter([event, complete_event])
         mock_executor_cls.return_value = mock_executor
 
         result = runner.invoke(app, ["run", "test-skill", "hello", "--output-mode", "json"])
 
         assert result.exit_code == 0
-        assert _json.loads(result.output.strip().splitlines()[-1]) == event
+        # Filter to only lines that parse as JSON (skip non-JSON stderr lines)
+        json_lines = []
+        for line in result.output.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json_lines.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                pass
+        assert event in json_lines
+        assert complete_event in json_lines
 
 
 class TestRuntimesCommand:
@@ -866,7 +895,9 @@ spec:
         with patch("zipsa.cli.DockerExecutor") as exec_cls, \
              patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
             executor = exec_cls.return_value
-            executor.run.return_value = iter([])
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
 
             result = runner.invoke(app, ["run", "fixture-skill"])
 
@@ -898,7 +929,9 @@ spec:
         with patch("zipsa.cli.DockerExecutor") as exec_cls, \
              patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
             executor = exec_cls.return_value
-            executor.run.return_value = iter([])
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
 
             result = runner.invoke(app, ["run", "fixture-skill"])
 
@@ -1120,3 +1153,331 @@ class TestInstallReplacesBroken:
         assert result.exit_code != 0
         assert "already installed" in result.output.lower()
 
+
+class TestRunExitCodes:
+    """zipsa run exit code matches the final status of the run.
+
+    The executor yields a zipsa_run_complete event as the last event;
+    the CLI translates its exit_code field into the process exit code.
+    Default is 5 (infra_failed) when the event never arrives.
+    """
+
+    def _make_skill_dir(self, tmp_path) -> Path:
+        """Create a minimal real skill manifest directory."""
+        skill_dir = tmp_path / "exit-code-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: exit-code-skill, version: 1.0.0}\n"
+            "spec: {purpose: Test exit codes., instructions: ./SKILL.md, tools: {builtin: []}}\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# Exit Code Test")
+        return skill_dir
+
+    def test_run_ok_exits_0(self, tmp_path):
+        """When executor emits zipsa_run_complete with exit_code=0, CLI exits 0."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = self._make_skill_dir(tmp_path)
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, ["run", "exit-code-skill", "hello"])
+
+        assert result.exit_code == 0
+
+    def test_run_failed_exits_1(self, tmp_path):
+        """When executor emits zipsa_run_complete with exit_code=1, CLI exits 1."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = self._make_skill_dir(tmp_path)
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "failed", "exit_code": 1},
+            ])
+            result = runner.invoke(app, ["run", "exit-code-skill", "hello"])
+
+        assert result.exit_code == 1
+
+    def test_run_limits_exceeded_exits_3(self, tmp_path):
+        """When executor emits zipsa_run_complete with exit_code=3, CLI exits 3."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = self._make_skill_dir(tmp_path)
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_limits_breach", "scope": "phase", "kind": "cost",
+                 "value": 0.1, "limit": 0.05, "phase": "main"},
+                {"type": "zipsa_run_complete", "status": "limits_exceeded", "exit_code": 3},
+            ])
+            result = runner.invoke(app, ["run", "exit-code-skill", "hello"])
+
+        assert result.exit_code == 3
+
+    def test_run_no_complete_event_exits_infra_failed(self, tmp_path):
+        """When no zipsa_run_complete event is emitted, CLI exits 5 (infra_failed)."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = self._make_skill_dir(tmp_path)
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            # No zipsa_run_complete event — simulates a crash mid-stream
+            executor.run.return_value = iter([
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "partial"}]}},
+            ])
+            result = runner.invoke(app, ["run", "exit-code-skill", "hello"])
+
+        assert result.exit_code == 5
+
+
+class TestSummaryToFlag:
+    """--summary-to copies run summary.json to the given path after the run."""
+
+    def test_summary_to_copies_file(self, tmp_path):
+        """After run, summary.json from run_dir is copied to --summary-to path."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        from zipsa import paths as zipsa_paths_mod
+
+        # Build a minimal skill directory
+        skill_dir = tmp_path / "summary-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: summary-skill, version: 1.0.0}\n"
+            "spec: {purpose: Test., instructions: ./SKILL.md, tools: {builtin: []}}\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# Test")
+
+        # Set up a fake run_dir with summary.json already written
+        fake_data_dir = tmp_path / "zipsa-data"
+        fake_run_dir = fake_data_dir / "runs" / "2026-05-19_120000_00001"
+        fake_run_dir.mkdir(parents=True)
+        summary_content = '{"status": "ok", "exit_code": 0}'
+        (fake_run_dir / "summary.json").write_text(summary_content)
+
+        summary_dest = tmp_path / "out" / "summary.json"
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir), \
+             patch("zipsa.paths.skill_data_dir", return_value=fake_data_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, [
+                "run", "summary-skill", "hello",
+                "--summary-to", str(summary_dest),
+            ])
+
+        assert result.exit_code == 0, result.output
+        assert summary_dest.exists(), "summary.json should have been copied"
+        assert summary_dest.read_text() == summary_content
+
+    def test_summary_to_quiet_when_no_runs(self, tmp_path):
+        """--summary-to is quiet (no error) when there are no runs (e.g. first run crashed)."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = tmp_path / "summary-skill"
+        skill_dir.mkdir()
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: summary-skill, version: 1.0.0}\n"
+            "spec: {purpose: Test., instructions: ./SKILL.md, tools: {builtin: []}}\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# Test")
+
+        # Empty data dir — no runs/
+        fake_data_dir = tmp_path / "zipsa-data-empty"
+        fake_data_dir.mkdir()
+        summary_dest = tmp_path / "out" / "summary.json"
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir), \
+             patch("zipsa.paths.skill_data_dir", return_value=fake_data_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, [
+                "run", "summary-skill", "hello",
+                "--summary-to", str(summary_dest),
+            ])
+
+        # Should not fail — just quietly skip copying
+        assert result.exit_code == 0, result.output
+        assert not summary_dest.exists()
+
+
+class TestChildrenValidation:
+    """When spec.children is declared, the launcher warns on stderr about
+    (a) missing children and (b) budget mismatches before invoking executor."""
+
+    def _make_parent_manifest(
+        self,
+        tmp_path: Path,
+        children: list,
+        max_cost_usd=None,
+        timeout_seconds=None,
+    ) -> Path:
+        """Build a parent skill directory with the given children and limits."""
+        skill_dir = tmp_path / "parent-skill"
+        skill_dir.mkdir(exist_ok=True)
+        limits_yaml = ""
+        if max_cost_usd is not None or timeout_seconds is not None:
+            limits_yaml = "  limits:\n"
+            if max_cost_usd is not None:
+                limits_yaml += f"    max_cost_usd: {max_cost_usd}\n"
+            if timeout_seconds is not None:
+                limits_yaml += f"    timeout_seconds: {timeout_seconds}\n"
+        children_yaml = "  children:\n" + "".join(f"    - {c}\n" for c in children)
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: parent-skill, version: 1.0.0}\n"
+            f"spec:\n  purpose: Test.\n  instructions: ./SKILL.md\n"
+            f"  tools: {{builtin: []}}\n{limits_yaml}{children_yaml}"
+        )
+        (skill_dir / "SKILL.md").write_text("# Parent")
+        return skill_dir
+
+    def _make_child_manifest(
+        self,
+        skills_dir: Path,
+        name: str,
+        max_cost_usd=None,
+        timeout_seconds=None,
+    ) -> Path:
+        """Create a child skill under skills_dir/<name>."""
+        child_dir = skills_dir / name
+        child_dir.mkdir(parents=True, exist_ok=True)
+        limits_yaml = ""
+        if max_cost_usd is not None or timeout_seconds is not None:
+            limits_yaml = "  limits:\n"
+            if max_cost_usd is not None:
+                limits_yaml += f"    max_cost_usd: {max_cost_usd}\n"
+            if timeout_seconds is not None:
+                limits_yaml += f"    timeout_seconds: {timeout_seconds}\n"
+        (child_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            f"metadata: {{name: {name}, version: 1.0.0}}\n"
+            f"spec:\n  purpose: Child skill.\n  instructions: ./SKILL.md\n"
+            f"  tools: {{builtin: []}}\n{limits_yaml}"
+        )
+        (child_dir / "SKILL.md").write_text(f"# {name}")
+        return child_dir
+
+    def test_missing_child_emits_warning(self, tmp_path, monkeypatch):
+        """Parent declares a child that isn't installed: warning on stderr."""
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+        # No "missing-child" in skills_dir — so it's not installed
+
+        parent_dir = self._make_parent_manifest(tmp_path, children=["missing-child"])
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=parent_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, ["run", "parent-skill", "hello"])
+
+        assert result.exit_code == 0, result.output
+        assert "Warning" in result.stderr
+        assert "missing-child" in result.stderr
+
+    def test_budget_sum_warning(self, tmp_path, monkeypatch):
+        """Parent has max_cost_usd=0.05; children sum to $0.10 → budget warning."""
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        # Two children, each $0.05 → sum $0.10 > parent $0.05
+        self._make_child_manifest(skills_dir, "child-a", max_cost_usd=0.05)
+        self._make_child_manifest(skills_dir, "child-b", max_cost_usd=0.05)
+
+        parent_dir = self._make_parent_manifest(
+            tmp_path, children=["child-a", "child-b"], max_cost_usd=0.05
+        )
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=parent_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, ["run", "parent-skill", "hello"])
+
+        assert result.exit_code == 0, result.output
+        assert "Warning" in result.stderr
+        assert "cost" in result.stderr.lower() or "don't add up" in result.stderr
+
+    def test_no_warning_when_budgets_fit(self, tmp_path, monkeypatch):
+        """Parent has max_cost_usd=$1.00; children sum $0.50 → no budget warning."""
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        zhome = tmp_path / "zipsa-home"
+        skills_dir = zhome / "skills"
+        skills_dir.mkdir(parents=True)
+
+        self._make_child_manifest(skills_dir, "child-a", max_cost_usd=0.25)
+        self._make_child_manifest(skills_dir, "child-b", max_cost_usd=0.25)
+
+        parent_dir = self._make_parent_manifest(
+            tmp_path, children=["child-a", "child-b"], max_cost_usd=1.00
+        )
+
+        monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=parent_dir):
+            executor = exec_cls.return_value
+            executor.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            result = runner.invoke(app, ["run", "parent-skill", "hello"])
+
+        assert result.exit_code == 0, result.output
+        # No Warning lines in stderr
+        warning_lines = [l for l in result.stderr.splitlines() if "Warning" in l]
+        assert not warning_lines, f"Unexpected warnings: {warning_lines}"
