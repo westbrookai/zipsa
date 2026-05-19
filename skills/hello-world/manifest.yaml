@@ -2,11 +2,9 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: hello-world
-  version: 0.1.1
+  version: 0.1.2
   author: westbrookai
-  description: |
-    Smoke test skill. Verifies zipsa is installed, the runtime image is running,
-    and the agent is executing correctly.
+  description: "Greets you and confirms zipsa is up and running. A smoke test."
   tags: [example, smoke-test]
 
 spec:
@@ -15,6 +13,8 @@ spec:
     Outputs a greeting and identifies the active runtime and model.
 
   instructions: ./SKILL.md
+
+  default_query: "Say hi and confirm zipsa is running."
 
   tools:
     builtin: []
