@@ -16,7 +16,7 @@ from .core.install_health import check_install
 from .core.renderer import OutputMode, render
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
-from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir
 from .runtimes import list_runtimes
 
 
@@ -263,7 +263,6 @@ def run(
         # The executor writes it to run_dir/summary.json. We find run_dir
         # by scanning the skill's runs directory for the latest run.
         if summary_to:
-            from .paths import skill_data_dir as _skill_data_dir
             data_dir = _skill_data_dir(skill.name, skill.manifest.metadata.version)
             runs_dir = data_dir / "runs"
             if runs_dir.exists():
@@ -282,6 +281,9 @@ def run(
         # Re-raise Exit cleanly so it is not swallowed by the generic handler
         # below (which would print "Error: <exit-code>" as a double message).
         raise
+    except KeyboardInterrupt:
+        # Ctrl+C — exit 130 (canonical SIGINT convention).
+        raise typer.Exit(130)
     except SkillNotInstalledError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

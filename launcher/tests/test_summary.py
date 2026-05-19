@@ -9,7 +9,6 @@ import pytest
 from zipsa.core.summary import (
     SCHEMA_VERSION,
     PhaseSummary,
-    RunSummary,
     build_summary,
     write_summary,
 )

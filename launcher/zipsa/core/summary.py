@@ -33,10 +33,6 @@ class PhaseSummary:
     turns: int
 
 
-# For compatibility with import statements that use RunSummary
-RunSummary = dict
-
-
 def build_summary(
     *,
     status: Status,

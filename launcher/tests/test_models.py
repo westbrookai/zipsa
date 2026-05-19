@@ -436,3 +436,10 @@ class TestChildren:
     def test_children_rejects_non_string_entries(self):
         with pytest.raises(ValidationError):
             self._spec(children=["valid-name", 42, None])
+
+    def test_children_rejects_path_traversal(self):
+        """Children entries with '/', '\\', or '..' must be rejected."""
+        from pydantic import ValidationError
+        for bad in ["../escape", "skill/with-slash", "..", "skill\\..\\other"]:
+            with pytest.raises(ValidationError):
+                self._spec(children=[bad])

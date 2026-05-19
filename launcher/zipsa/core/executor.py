@@ -875,7 +875,31 @@ class DockerExecutor:
                                 cost_usd=shared_limits_state.phase_cost_usd,
                                 turns=shared_limits_state.phase_turns,
                             ))
+                            run_final_status = "limits_exceeded"
+                            run_final_exit_code = 3
+                            run_final_error = {
+                                "code": "limits_exceeded",
+                                "message": (
+                                    f"phase {event.get('kind')}: "
+                                    f"{event.get('value')} > {event.get('limit')}"
+                                ),
+                                "details": {
+                                    "scope": event.get("scope"),
+                                    "kind": event.get("kind"),
+                                    "value": event.get("value"),
+                                    "limit": event.get("limit"),
+                                    "phase": event.get("phase"),
+                                },
+                            }
                             yield event
+                            yield {
+                                "type": "zipsa_run_complete",
+                                "status": run_final_status,
+                                "exit_code": run_final_exit_code,
+                                "result": None,
+                                "error": run_final_error,
+                                "_phase_summaries": phase_summaries,
+                            }
                             return  # state_updates NOT applied on breach
                         yield event
 

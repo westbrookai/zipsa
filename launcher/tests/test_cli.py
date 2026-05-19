@@ -1249,6 +1249,23 @@ class TestRunExitCodes:
 
         assert result.exit_code == 5
 
+    def test_run_keyboard_interrupt_exits_130(self, tmp_path):
+        """Ctrl+C during a run must exit 130 (canonical SIGINT)."""
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+
+        skill_dir = self._make_skill_dir(tmp_path)
+        runner = CliRunner()
+        with patch("zipsa.cli.DockerExecutor") as exec_cls, \
+             patch("zipsa.cli._resolve_skill_path", return_value=skill_dir):
+            executor = exec_cls.return_value
+            # Simulate Ctrl+C raised during event stream consumption
+            executor.run.side_effect = KeyboardInterrupt()
+            result = runner.invoke(app, ["run", "exit-code-skill", "hello"])
+
+        assert result.exit_code == 130
+
 
 class TestSummaryToFlag:
     """--summary-to copies run summary.json to the given path after the run."""
@@ -1282,7 +1299,7 @@ class TestSummaryToFlag:
         runner = CliRunner()
         with patch("zipsa.cli.DockerExecutor") as exec_cls, \
              patch("zipsa.cli._resolve_skill_path", return_value=skill_dir), \
-             patch("zipsa.paths.skill_data_dir", return_value=fake_data_dir):
+             patch("zipsa.cli._skill_data_dir", return_value=fake_data_dir):
             executor = exec_cls.return_value
             executor.run.return_value = iter([
                 {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
@@ -1319,7 +1336,7 @@ class TestSummaryToFlag:
         runner = CliRunner()
         with patch("zipsa.cli.DockerExecutor") as exec_cls, \
              patch("zipsa.cli._resolve_skill_path", return_value=skill_dir), \
-             patch("zipsa.paths.skill_data_dir", return_value=fake_data_dir):
+             patch("zipsa.cli._skill_data_dir", return_value=fake_data_dir):
             executor = exec_cls.return_value
             executor.run.return_value = iter([
                 {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
