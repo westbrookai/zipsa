@@ -17,8 +17,21 @@ summarizes and writes to Notion.
 
 ## Per-user setup
 
-Two values are user-specific. On first run, ask for them and remember
-the answers so future runs don't re-ask:
+Three values are user-specific.
+
+**Launcher-resolved (before container starts):**
+
+- **`project_roots`** — directories containing the user's git projects.
+  Declared as `spec.requires.project_roots` in the manifest. The
+  launcher prompts for these on first `zipsa run` (or via
+  `zipsa configure daily-progress`) and saves them at
+  `~/.zipsa/daily-progress@<version>/requires.yaml`. Each path is
+  mounted at its own absolute host path inside the container so
+  `agenthud --with-git` can resolve each session's `cwd → .git` lookup.
+  This skill never prompts for project_roots itself — the values are
+  present at startup or the run aborts (exit 4).
+
+**Agent-time prompts (remembered in skill memory):**
 
 - **Notion workspace name** — the top-level Notion workspace where the
   daily-log database should live (e.g. a parent page that holds the DB).
@@ -28,7 +41,7 @@ the answers so future runs don't re-ask:
   `notion_db_name` (suggest something like `zipsa-daily-log` as a
   default in the prompt, but accept whatever the user types).
 
-Phrase the prompts in the user's language.
+Phrase the Notion prompts in the user's language.
 
 ## Period semantics
 
@@ -45,7 +58,7 @@ Phrase the prompts in the user's language.
 These come from the manifest (`spec.config`):
 
 - `default_target_date`: `yesterday`
-- `agenthud_version`: `0.8.4` (pinned for reproducibility)
+- `agenthud_version`: `0.9.2` (pinned for reproducibility)
 
 ## Phases
 
@@ -123,19 +136,30 @@ Steps:
 1. Invoke agenthud via Bash:
 
    ```bash
-   npx agenthud@0.8.4 report \
+   npx agenthud@0.9.2 report \
      --date <target_date> \
      --format json \
      --include response,bash,edit,thinking \
-     --detail-limit 0
+     --detail-limit 0 \
+     --with-git
    ```
 
    Notes:
    - `~/.claude/projects` is bind-mounted into the container at the
      default path agenthud expects, so no env var setup is needed.
+   - `--with-git` makes agenthud emit `◆` commit entries for each
+     session, resolved via `git --git-dir=<session.cwd>/.git log`.
+     This only works because the launcher mounts `requires.project_roots`
+     at their absolute host paths (see Per-user setup). If git isn't
+     available for a particular session (project not in
+     `project_roots`), agenthud silently skips git for that session
+     without failing — but the commit entries are part of why we run
+     `--with-git` in the first place, so callers should ensure
+     `project_roots` covers the projects they care about.
    - The command output is a JSON document with shape
      `{date, sessions: [{project, start, end, activities, subAgents}]}`.
-     Capture stdout in full.
+     Activities for each session now include `◆` commit entries when
+     git resolution succeeded. Capture stdout in full.
    - If no sessions match the date, agenthud emits a document with
      `sessions: []`. Treat that as "no activity on that date" and pass
      `projects: []` to the next phase.

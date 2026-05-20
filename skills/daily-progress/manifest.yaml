@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.4.0
+  version: 0.5.0
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -20,11 +20,32 @@ spec:
   model:
     name: claude-opus-4-7
 
-  # Bind-mount Claude's session logs at their default location so agenthud
-  # picks them up without any extra configuration.
+  # Per-user host-side values the launcher needs before container start.
+  # `project_roots` is asked once on first run (or via `zipsa configure`),
+  # saved to ~/.zipsa/daily-progress@<version>/requires.yaml, and used
+  # to mount the user's git project parent directories below.
+  requires:
+    project_roots:
+      type: list[directory]
+      prompt: |
+        Which directories contain your git projects?
+        These get mounted read-only so agenthud --with-git can resolve
+        the .git directory referenced by each Claude session's `cwd`.
+        One path per line, ~ is expanded; empty line to finish.
+
   mounts:
+    # Bind-mount Claude's session logs at their default location so agenthud
+    # picks them up without any extra configuration.
     - host: ~/.claude/projects
       container: /home/agent/.claude/projects
+      mode: ro
+
+    # Mount each project root at its own host path inside the container.
+    # Required by agenthud --with-git: each session's JSONL records a
+    # host-side `cwd` (e.g. /Users/x/Code/zipsa), and agenthud runs
+    # `git --git-dir=<cwd>/.git log` on those paths verbatim.
+    - source: requires.project_roots
+      preserve_host_path: true
       mode: ro
 
   # MCP servers used by this skill
@@ -50,7 +71,7 @@ spec:
   # timezone comes from the runtime's execution_context.
   config:
     default_target_date: yesterday   # yesterday | today
-    agenthud_version: "0.8.4"        # pinned for reproducibility
+    agenthud_version: "0.9.2"        # pinned for reproducibility
 
   # Cross-run state schema (managed by launcher via state_updates)
   state_schema:
