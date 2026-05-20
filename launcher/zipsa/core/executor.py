@@ -529,6 +529,7 @@ class DockerExecutor:
         phase_id: str = "main",
         phase_limits: Optional[SkillLimits] = None,
         limits_state: Optional[LimitsState] = None,
+        model: Optional[str] = None,
     ) -> Iterator[dict]:
         """Execute Docker command and stream output.
 
@@ -562,8 +563,11 @@ class DockerExecutor:
         if run_dir:
             output_file = run_dir / "output.jsonl"
 
-        # Model needed before limits_state setup (used in update_for_event).
-        model = (skill.manifest.spec.model or {}).get("name", "claude-opus-4-7")
+        # Model needed before limits_state setup (used in update_for_event
+        # for pricing). Caller may override (per-phase model); else fall back
+        # to spec.model.name; else default Opus.
+        if model is None:
+            model = (skill.manifest.spec.model or {}).get("name", "claude-opus-4-7")
 
         # Limits setup — single call site shared by both branches.
         agg_limits = skill.manifest.spec.limits or SkillLimits()
@@ -861,6 +865,12 @@ class DockerExecutor:
                     if phase_dir:
                         phase_dir.mkdir(parents=True, exist_ok=True)
 
+                    # Per-phase model override: phase.model wins over spec.model.
+                    # None means "no override" → runtime/spec default applies.
+                    phase_model = (
+                        (phase.model or skill.manifest.spec.model or {}).get("name")
+                    )
+
                     docker_cmd = self._build_docker_command(
                         skill, user_message, claude_json_path, env,
                         allowed_tools_override=phase_allowed_tools,
@@ -868,6 +878,7 @@ class DockerExecutor:
                         phase_id=phase.id,
                         npm_volume=npm_volume,
                         requires_values=self._requires_values,
+                        model=phase_model,
                     )
 
                     # Stream events, capture last assistant text.
@@ -881,6 +892,7 @@ class DockerExecutor:
                         phase_id=phase.id,
                         phase_limits=phase.limits or SkillLimits(),
                         limits_state=shared_limits_state,
+                        model=phase_model,
                     ):
                         if event.get("type") == "assistant":
                             content = event.get("message", {}).get("content", [])
@@ -1103,6 +1115,7 @@ class DockerExecutor:
         phase_id: Optional[str] = None,
         npm_volume: Optional[str] = None,
         requires_values: Optional[dict[str, object]] = None,
+        model: Optional[str] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -1296,6 +1309,10 @@ class DockerExecutor:
             ]
 
             # MCP config is now in .claude.json (mounted to /home/agent/.claude.json)
+            # model: prefer explicit param, else fall back to spec.model.name,
+            # else None (let runtime pick its default). Phase-level overrides
+            # are computed by _execute_phases and passed via the `model` param.
+            effective_model = model or (skill.manifest.spec.model or {}).get("name")
             runtime_cmd = self.runtime.build_command(
                 skill_name=skill.name,
                 user_input=user_input,
@@ -1305,6 +1322,7 @@ class DockerExecutor:
                 env=env,
                 mcp_debug_file=mcp_debug_container,
                 extra_dirs=extra_dirs,
+                model=effective_model,
             )
 
             cmd.extend(["bash", "-c", f"{cp_preamble} && {shlex.join(runtime_cmd)}"])
