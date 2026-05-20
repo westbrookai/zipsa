@@ -1,0 +1,25 @@
+#!/bin/sh
+# Skill-vendored agenthud wrapper.
+#
+# Why this exists:
+#  - `Bash(npx:*)` is too broad as an allow pattern — it lets the agent
+#    invoke any npm package. This wrapper at a fixed path lets the skill
+#    pin the allow list to `Bash(/skill/scripts/agenthud:*)` — only this
+#    exact binary, nothing else.
+#  - First `npx agenthud@X.Y.Z` invocation in a fresh container prints
+#    npm "Need to install..." / progress messages to STDOUT, corrupting
+#    any caller that captures stdout. The throwaway --version call below
+#    warms the cache before the real invocation so the user-visible
+#    stdout is guaranteed clean JSON.
+#
+# Version is pinned here, not by the agent. If you bump the skill to a
+# new agenthud version, bump the literal below in one place.
+
+set -e
+AGENTHUD_VERSION="0.9.2"
+
+# Warmup — discard output, populate npx cache.
+npx -y "agenthud@${AGENTHUD_VERSION}" --version > /dev/null 2>&1
+
+# Real call — stdout/stderr forwarded to the caller.
+exec npx -y "agenthud@${AGENTHUD_VERSION}" "$@"

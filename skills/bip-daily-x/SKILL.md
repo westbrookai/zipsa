@@ -56,13 +56,13 @@ extract per-project slices for the draft phase.
 
 Steps:
 
-1. Invoke agenthud via Bash, redirecting stdout to a file. Do NOT
-   capture stdout into the Bash tool result — high-activity days
-   produce 50-200KB+ of JSON, past Claude Code's ~30k-char Bash
-   output truncation.
+1. Invoke the skill-vendored agenthud wrapper, redirecting stdout to
+   a file. Do NOT capture stdout into the Bash tool result —
+   high-activity days produce 50-200KB+ of JSON, past Claude Code's
+   ~30k-char Bash output truncation.
 
    ```bash
-   npx agenthud@0.9.2 report \
+   /skill/scripts/agenthud report \
      --date <target_date> \
      --format json \
      --include response,bash,edit \
@@ -70,6 +70,16 @@ Steps:
      --with-git \
      > /tmp/agenthud-report.json
    ```
+
+   The wrapper at `/skill/scripts/agenthud` is a shell script bundled
+   with the skill. It pins `agenthud@0.9.2`, warms the npx cache
+   before the real invocation (so first-run npm noise doesn't corrupt
+   our JSON capture), and forwards stdout/stderr/exit code unchanged.
+
+   The phase's `allowed_tools` whitelists exactly this path —
+   `Bash(/skill/scripts/agenthud:*)` — instead of the broader
+   `Bash(npx:*)`. That keeps the agent from invoking arbitrary
+   npm packages.
 
    Notes:
    - `~/.claude/projects` is bind-mounted at agenthud's default path.

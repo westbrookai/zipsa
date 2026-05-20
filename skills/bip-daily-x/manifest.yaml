@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.2.3
+  version: 0.2.4
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet
@@ -94,7 +94,7 @@ spec:
       model:
         name: claude-haiku-4-5-20251001
       allowed_tools:
-        - Bash(npx:*)
+        - Bash(/skill/scripts/agenthud:*)   # tight: only this wrapper, no arbitrary npx
         - Bash(echo:*)        # harmless; lets agent log status
         - Bash(jq:*)          # primary slicing tool for large reports
         - Bash(wc:*)          # let agent check file size
