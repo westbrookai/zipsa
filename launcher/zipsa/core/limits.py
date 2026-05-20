@@ -15,7 +15,7 @@ uses the pricing table in `zipsa.core.pricing`. Turn tracking counts
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from .pricing import estimate_cost
@@ -45,6 +45,15 @@ class LimitsState:
     _hitl_open_at: Optional[float] = None
     _phase_hitl_paused: float = 0.0
     _run_hitl_paused: float = 0.0
+
+    # Message-id dedupe for cost counting. Claude Code's stream-json splits
+    # one assistant message into multiple events (one per content block:
+    # thinking, text, tool_use, ...) and every event carries the SAME
+    # usage object. Without dedupe, the same usage gets counted N times
+    # and inflates phase_cost_usd by a factor of N (= content block count).
+    # Reset per phase (messages don't span phases — separate claude --print
+    # invocations have distinct message id space).
+    _counted_message_ids: set = field(default_factory=set)
 
     def phase_compute_elapsed(self) -> float:
         """Wall time since phase started, minus HITL pauses."""
@@ -90,6 +99,7 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
         state.phase_turns = 0
         state.phase_cost_usd = 0.0
         state._phase_hitl_paused = 0.0
+        state._counted_message_ids = set()
         # _hitl_open_at intentionally NOT cleared — a HITL ask could (in theory)
         # span a phase boundary, but in practice it can't (the agent must emit
         # a final JSON before the phase ends, and ask/confirm blocks that).
@@ -105,12 +115,20 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
                 state.run_turns += 1
         # Cost: sum usage from this message. Use the per-message model
         # if present (matches what was actually billed), else fall back.
+        # Dedupe by message id: stream-json emits one event per content
+        # block but each carries the SAME usage object — without dedupe
+        # we'd count usage N times where N = content block count.
         usage = msg.get("usage")
         if isinstance(usage, dict):
-            effective_model = msg.get("model") or model
-            cost = estimate_cost(effective_model, usage)
-            state.phase_cost_usd += cost
-            state.run_cost_usd += cost
+            msg_id = msg.get("id")
+            already_counted = msg_id is not None and msg_id in state._counted_message_ids
+            if not already_counted:
+                effective_model = msg.get("model") or model
+                cost = estimate_cost(effective_model, usage)
+                state.phase_cost_usd += cost
+                state.run_cost_usd += cost
+                if msg_id is not None:
+                    state._counted_message_ids.add(msg_id)
         # HITL pause start: tool_use for an ask/confirm/choose/ask_once
         for block in content:
             if block.get("type") == "tool_use" and block.get("name") in _HITL_TOOL_NAMES:

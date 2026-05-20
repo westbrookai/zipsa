@@ -2,6 +2,7 @@
 """Limits module tests — pure unit, no Docker."""
 
 from dataclasses import asdict
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -19,15 +20,15 @@ from zipsa.core.models import SkillLimits
 PRICING_MODEL = "claude-haiku-4-5-20251001"
 
 
-def _assistant_event(model: str, usage: dict, has_thinking: bool = True):
+def _assistant_event(model: str, usage: dict, has_thinking: bool = True, msg_id: Optional[str] = None):
     """Shape matches what runtime.parse_output produces."""
     content = []
     if has_thinking:
         content.append({"type": "thinking", "thinking": "..."})
-    return {
-        "type": "assistant",
-        "message": {"model": model, "content": content, "usage": usage},
-    }
+    msg = {"model": model, "content": content, "usage": usage}
+    if msg_id is not None:
+        msg["id"] = msg_id
+    return {"type": "assistant", "message": msg}
 
 
 def _tool_use(name: str) -> dict:
@@ -113,6 +114,54 @@ class TestUpdateForEvent:
         assert s.phase_cost_usd == 0.0
         # Run-level preserved
         assert s.run_cost_usd == pytest.approx(0.80)
+
+    def test_duplicate_message_id_counts_cost_once(self):
+        """Real Claude Code stream-json splits one assistant message into
+        multiple events (thinking, text, tool_use, tool_use, ...) all
+        carrying the SAME usage object. Without dedupe the cost would
+        inflate by the content-block count."""
+        s = new_state("p")
+        usage = {"input_tokens": 1_000_000}
+        # Same msg_id, 4 events (simulating thinking + text + 2 tool_use blocks)
+        for _ in range(4):
+            update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id="msg_abc"), PRICING_MODEL)
+        # Cost counted ONCE not 4×: $0.80, not $3.20
+        assert s.phase_cost_usd == pytest.approx(0.80)
+        assert s.run_cost_usd == pytest.approx(0.80)
+
+    def test_different_message_ids_count_separately(self):
+        """Distinct assistant messages (different ids) each contribute cost."""
+        s = new_state("p")
+        usage = {"input_tokens": 1_000_000}
+        update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id="msg_a"), PRICING_MODEL)
+        update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id="msg_b"), PRICING_MODEL)
+        # Two separate messages: 2 × $0.80
+        assert s.phase_cost_usd == pytest.approx(1.60)
+
+    def test_phase_start_clears_message_id_dedupe(self):
+        """A message id from phase 1 must not block counting in phase 2
+        (defensive: ids shouldn't collide across claude --print invocations,
+        but reset for cleanliness)."""
+        s = new_state("p1")
+        usage = {"input_tokens": 1_000_000}
+        update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id="msg_a"), PRICING_MODEL)
+        update_for_event(s, _phase_start("p2"), PRICING_MODEL)
+        # Same id in new phase counts again
+        update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id="msg_a"), PRICING_MODEL)
+        assert s.phase_cost_usd == pytest.approx(0.80)  # phase reset, counted once in p2
+        assert s.run_cost_usd == pytest.approx(1.60)    # run accumulates both
+
+    def test_missing_message_id_falls_back_to_counting_every_event(self):
+        """Defensive: if msg has no id (shouldn't happen for real Claude
+        events but might for malformed input or tests), keep the old
+        behavior of counting every event so cost tracking doesn't silently
+        zero out."""
+        s = new_state("p")
+        usage = {"input_tokens": 1_000_000}
+        for _ in range(3):
+            update_for_event(s, _assistant_event(PRICING_MODEL, usage, msg_id=None), PRICING_MODEL)
+        # No id → counted 3 times
+        assert s.phase_cost_usd == pytest.approx(2.40)
 
     def test_hitl_pause_and_resume_excludes_compute_time(self):
         s = new_state("p")
