@@ -238,10 +238,12 @@ class DockerExecutor:
             stdout_lock=stdout_lock,
             is_interactive=sys.stdin.isatty(),
         )
-        skill_memory_path = (
-            zipsa_paths.skill_data_dir(skill.name, skill.manifest.metadata.version)
-            / "memory" / "skill-mem.json"
-        )
+        # Per-skill memory is cross-version: lives at
+        # ~/.zipsa/memory/<skill>/skill-mem.json. resolve_skill_memory_path
+        # silently migrates from the latest legacy per-version location
+        # (~/.zipsa/<skill>@<ver>/memory/skill-mem.json) on first run after
+        # upgrade so user values captured via ask_once survive version bumps.
+        skill_memory_path = zipsa_paths.resolve_skill_memory_path(skill.name)
         global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global-mem.json"
         skill_store = MemoryStore(skill_memory_path)
         global_store = MemoryStore(global_memory_path)
