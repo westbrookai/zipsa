@@ -1648,3 +1648,69 @@ class TestRunPreflightRequires:
         monkeypatch.setattr("sys.stdin.isatty", lambda: False)
         result = runner.invoke(app, ["run", "needs-cfg", "hi", "--dry-run"])
         assert result.exit_code == 4
+
+
+class TestListRequiresIndicator:
+    def test_list_shows_needs_configure_when_unset(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "needs"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: needs, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+            "    b: {type: string, prompt: 'b?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" in result.output
+        assert "2 required" in result.output
+        assert "0 set" in result.output
+
+    def test_list_no_indicator_when_all_set(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "done"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: done, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        (tmp_path / "done@0.1.0").mkdir()
+        (tmp_path / "done@0.1.0" / "requires.yaml").write_text("a: hello\n")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" not in result.output
+
+    def test_list_no_indicator_for_skills_without_requires(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "plain"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: plain, version: 0.1.0}\n"
+            "spec: {purpose: x, instructions: ./SKILL.md}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" not in result.output

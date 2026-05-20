@@ -22,6 +22,8 @@ class InstallHealth:
     """Result of a health check on one installed-skill entry."""
     ok: bool
     reason: Optional[str] = None  # set iff ok is False
+    requires_total: int = 0       # number of declared spec.requires entries
+    requires_set: int = 0         # number currently present in requires.yaml
 
 
 def check_install(path: Path) -> InstallHealth:
@@ -61,11 +63,22 @@ def check_install(path: Path) -> InstallHealth:
     try:
         # Local import keeps install_health side-effect-free at import time.
         from .skill import Skill
-        Skill.load(path)
+        skill = Skill.load(path)
     except Exception as e:
         head = str(e).splitlines()[0] if str(e) else type(e).__name__
         # Keep the reason short — long pydantic stacks blow out terminals.
         head = head[:160]
         return InstallHealth(ok=False, reason=f"Invalid manifest: {head}")
 
-    return InstallHealth(ok=True)
+    requires_spec = skill.manifest.spec.requires
+    requires_total = len(requires_spec)
+    requires_set = 0
+    if requires_total > 0:
+        from .requires import load_requires, classify_state
+        from zipsa.paths import skill_requires_file
+        req_file = skill_requires_file(skill.name, skill.manifest.metadata.version)
+        saved = load_requires(req_file) if req_file.exists() else {}
+        ok_map, _np, _nr = classify_state(requires_spec, saved)
+        requires_set = len(ok_map)
+
+    return InstallHealth(ok=True, requires_total=requires_total, requires_set=requires_set)

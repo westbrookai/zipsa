@@ -496,6 +496,7 @@ def list_installed():
             "successful_runs": successful_runs,
             "is_link": item.is_symlink(),
             "item": item,
+            "health": health,  # NEW
         })
 
     total_count = len(installed) + len(broken)
@@ -508,6 +509,7 @@ def list_installed():
     for entry in installed:
         skill = entry["skill"]
         meta = entry["meta"]
+        health = entry["health"]
 
         name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
         version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
@@ -515,7 +517,17 @@ def list_installed():
             label = typer.style(" (linked)", fg=typer.colors.YELLOW)
         else:
             label = ""
-        typer.echo(f"  {name}{version}{label}")
+
+        if health.requires_total > 0 and health.requires_set < health.requires_total:
+            warn = typer.style(
+                f"  ⚠ needs configure ({health.requires_total} required, "
+                f"{health.requires_set} set)",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            warn = ""
+
+        typer.echo(f"  {name}{version}{label}{warn}")
 
         if entry["total_runs"] == 0:
             typer.echo(typer.style("    never run", fg=typer.colors.BRIGHT_BLACK))
