@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.2.2
+  version: 0.2.3
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet
@@ -100,7 +100,7 @@ spec:
         - Bash(wc:*)          # let agent check file size
         - Read                # fallback for small files / inspecting jq output
       limits:
-        max_turns: 12
+        max_turns: 14
         max_cost_usd: 0.20
         timeout_seconds: 240
 
@@ -145,6 +145,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 35    # 6 + 12 + 3 + 10 + 4
+    max_turns: 37    # 6 + 14 + 3 + 10 + 4
     max_cost_usd: 0.60
     timeout_seconds: 2250
