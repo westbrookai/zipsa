@@ -319,6 +319,35 @@ overrides what the agent can call during that phase.
 
 See `skills/daily-progress/` for a full multi-phase example.
 
+### 8. `spec.requires` — host-side values prompted from the user
+
+Use when the skill needs per-user values that the launcher must know
+*before starting the container* (e.g. mount sources).
+
+```yaml
+spec:
+  requires:
+    project_roots:
+      type: "list[directory]"   # also: string, directory
+      prompt: |
+        Which directories contain your git projects?
+        (one path per line, ~ is expanded)
+```
+
+Reference the value from `spec.mounts`:
+
+```yaml
+spec:
+  mounts:
+    - source: requires.project_roots
+      container_prefix: /projects/   # one mount per item
+      mode: ro
+```
+
+The launcher prompts the user on first `zipsa run`, saves to
+`~/.zipsa/<skill>@<version>/requires.yaml`, and reads it on every
+subsequent run. Users can re-set values with `zipsa configure <skill>`.
+
 ---
 
 ## Testing a SKILL
