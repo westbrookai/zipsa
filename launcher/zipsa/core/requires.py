@@ -328,7 +328,12 @@ def prompt_for_value(
                 first_line = first_line.rstrip("\n")
                 if first_line == "":
                     if current is not None:
-                        return current
+                        # Re-validate `current` before keeping. In the stale
+                        # path case the caller passes the previously-saved
+                        # value here; if it no longer validates (path gone),
+                        # the user pressing enter must NOT silently re-accept
+                        # it (would result in a -v mount of a missing host).
+                        return validate_value(entry.type, current)
                     _writeln("(empty: please enter at least one path)")
                     continue
                 lines.append(first_line)
@@ -348,7 +353,9 @@ def prompt_for_value(
                     raise EOFError("no input")
                 line = line.rstrip("\n")
                 if line == "" and current is not None:
-                    return current
+                    # Re-validate `current` before keeping (same rationale
+                    # as the list case above).
+                    return validate_value(entry.type, current)
                 value = line
 
             return validate_value(entry.type, value)

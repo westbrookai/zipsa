@@ -385,3 +385,78 @@ class TestPromptForValue:
         out = io.StringIO()
         with pytest.raises(EOFError):
             prompt_for_value(entry, io.StringIO(""), out)
+
+    def test_enter_with_stale_current_directory_rejects(self, tmp_path):
+        """When current is a path that no longer exists, pressing enter
+        must NOT silently re-accept it. validate_value catches it; the
+        retry loop should prompt again."""
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        valid = tmp_path / "valid"
+        valid.mkdir()
+        stale = tmp_path / "stale"  # never created
+        entry = RequiresEntry(type="directory", prompt="?")
+        out = io.StringIO()
+        # User presses enter twice (would re-accept stale), then types valid
+        result = prompt_for_value(entry, io.StringIO(f"\n\n{valid}\n"), out, current=str(stale))
+        assert result == str(valid.resolve())
+
+    def test_enter_with_stale_current_list_rejects(self, tmp_path):
+        """Same protection for list[directory]: enter with stale current
+        must re-validate, not silently re-accept."""
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        valid = tmp_path / "valid"
+        valid.mkdir()
+        stale = [str(tmp_path / "gone")]  # never created
+        entry = RequiresEntry(type="list[directory]", prompt="?")
+        out = io.StringIO()
+        # Enter (re-validate stale → fails), then type valid path + blank line
+        result = prompt_for_value(entry, io.StringIO(f"\n{valid}\n\n"), out, current=stale)
+        assert result == [str(valid.resolve())]
+
+
+class TestResolveRequires:
+    """End-to-end interactive coverage for resolve_requires's carry-over flow."""
+
+    def test_carry_over_accepted_interactive(self, tmp_path, monkeypatch):
+        """Y on the carry-over prompt copies the previous-version values
+        into the current version's resolved set."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.core.requires import resolve_requires, save_requires
+        from zipsa.core.models import RequiresEntry
+        from zipsa.paths import skill_data_dir, skill_requires_file
+        import io
+
+        code = tmp_path / "Code"
+        code.mkdir()
+        # Previous version has saved values
+        prev_dir = skill_data_dir("s", "0.1.0")
+        prev_dir.mkdir(parents=True)
+        save_requires(prev_dir / "requires.yaml", {"roots": [str(code)]})
+
+        spec = {"roots": RequiresEntry(type="list[directory]", prompt="?")}
+        # User presses enter on [Y/n] → accept default Y
+        result = resolve_requires(
+            "s", "0.2.0", spec,
+            io.StringIO("\n"), io.StringIO(),
+            is_interactive=True,
+        )
+        assert result == {"roots": [str(code.resolve())]}
+        # Saved to new version too
+        assert skill_requires_file("s", "0.2.0").exists()
+
+    def test_no_requires_returns_empty_no_io(self, tmp_path, monkeypatch):
+        """Empty spec.requires → return {} immediately, no stream reads."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.core.requires import resolve_requires
+        import io
+        # Streams that would raise if read
+        result = resolve_requires(
+            "s", "0.1.0", {},
+            io.StringIO(""), io.StringIO(),
+            is_interactive=False,
+        )
+        assert result == {}

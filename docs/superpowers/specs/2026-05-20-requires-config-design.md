@@ -202,9 +202,12 @@ zipsa run daily-progress yesterday
      │
      ├─ if needs_prompt and no previous version: TTY prompt inline (or exit 4)
      │  if needs_prompt and previous version has compatible values:
-     │     prompt "Carry over from <prev>? [Y/edit/start-fresh]"
+     │     prompt "Carry over from <prev>? [Y/n]"   (Y == accept, n == fresh prompt)
      │
-     ├─ if needs_revalidation: TTY prompt [edit / keep / skip-missing] (or exit 4)
+     ├─ if needs_revalidation: TTY re-prompt with the stale value shown as
+     │    current; enter must re-validate (not silently re-accept) — empty
+     │    input on a stale current behaves the same as fresh prompting.
+     │    (Or exit 4 in non-interactive mode.)
      │
      ├─ save updated requires.yaml (atomic: tmp → rename)
      │
@@ -234,17 +237,25 @@ $ zipsa run daily-progress yesterday
 
 ### Stale path UX
 
+v1 implementation: the standard inline prompt is re-shown with the saved
+value as `current:`. Pressing enter re-runs validation against the
+current value — if the path still doesn't exist, the user sees the
+validation error and is prompted to type a fresh value. No
+3-option `[edit/keep/skip-missing]` UI in v1 (deferred — most users
+will either re-type or run `zipsa configure`).
+
 ```
 $ zipsa run daily-progress yesterday
-[zipsa] daily-progress requires.yaml has stale paths:
-
-  project_roots:
-    /Users/neochoon/Code        ✓ exists
-    /Users/neochoon/OldProject  ✗ missing
-    /Users/neochoon/WestbrookAI ✓ exists
-
-  Update? [edit/keep/skip-missing] (default: edit)
-  > skip-missing
+[zipsa] daily-progress has stale paths in: project_roots.
+project_roots — Which directories contain your git projects?
+Current:
+  /Users/neochoon/Code
+  /Users/neochoon/OldProject       ← no longer exists
+  /Users/neochoon/WestbrookAI
+Press enter to keep, or type new value(s):
+  > ~/Code
+  > ~/WestbrookAI
+  > 
 
 [zipsa] Updated. Continuing run...
 ```
@@ -253,16 +264,16 @@ $ zipsa run daily-progress yesterday
 
 ```
 $ zipsa run daily-progress yesterday          # first 0.5.0 run
-[zipsa] No requires.yaml for daily-progress@0.5.0
 [zipsa] Found previous install: daily-progress@0.4.0
-        project_roots: 2 paths
-
-  Carry over? [Y/edit/start-fresh] (default: Y)
-  > 
-
-[zipsa] Copied to daily-progress@0.5.0/requires.yaml
+  project_roots: 2 item(s)
+Carry over? [Y/n]: 
 [zipsa] Starting run...
 ```
+
+`[Y/n]` only: Y accepts the prior values, n falls through to the normal
+inline prompt for fresh values. v1 deliberately drops the `edit` /
+`start-fresh` distinction the design originally sketched — `n` already
+covers "start fresh" and `edit` adds little value at this scale.
 
 ### Non-interactive matrix
 
