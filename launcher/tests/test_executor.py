@@ -1,6 +1,7 @@
 """Tests for Docker executor."""
 
 import json
+import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from zipsa.core.executor import DockerExecutor
@@ -1828,3 +1829,127 @@ class TestKeyboardInterrupt:
 
         mock_process.terminate.assert_called()
         mock_process.wait.assert_called()
+
+
+class TestMountExpansion:
+    def test_static_mount_unchanged(self, tmp_path):
+        """Existing static mounts: -v <host>:<container>:<mode>."""
+        from zipsa.core.executor import DockerExecutor
+        from zipsa.core.skill import Skill
+
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  mounts:\n"
+            f"    - {{host: {tmp_path}, container: /static, mode: ro}}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            requires_values={},
+        )
+        assert any(f"{tmp_path.resolve()}:/static:ro" in arg for arg in cmd)
+
+    def test_single_directory_dynamic_mount(self, tmp_path):
+        from zipsa.core.executor import DockerExecutor
+        from zipsa.core.skill import Skill
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    vault: {type: directory, prompt: 'where'}\n"
+            "  mounts:\n"
+            "    - {source: requires.vault, container: /vault, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            requires_values={"vault": str(vault)},
+        )
+        assert any(f"{vault}:/vault:ro" in arg for arg in cmd)
+
+    def test_list_directory_dynamic_expands_per_item(self, tmp_path):
+        from zipsa.core.executor import DockerExecutor
+        from zipsa.core.skill import Skill
+
+        a = tmp_path / "code"
+        b = tmp_path / "personal"
+        a.mkdir()
+        b.mkdir()
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    project_roots:\n"
+            "      type: 'list[directory]'\n"
+            "      prompt: '?'\n"
+            "  mounts:\n"
+            "    - {source: requires.project_roots, container_prefix: /projects/, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            requires_values={"project_roots": [str(a), str(b)]},
+        )
+        assert any(f"{a}:/projects/code:ro" in arg for arg in cmd)
+        assert any(f"{b}:/projects/personal:ro" in arg for arg in cmd)
+
+    def test_basename_collision_raises(self, tmp_path):
+        from zipsa.core.executor import DockerExecutor, MountCollisionError
+        from zipsa.core.skill import Skill
+
+        a = tmp_path / "code" / "zipsa"
+        b = tmp_path / "personal" / "zipsa"
+        a.mkdir(parents=True)
+        b.mkdir(parents=True)
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    project_roots:\n"
+            "      type: 'list[directory]'\n"
+            "      prompt: '?'\n"
+            "  mounts:\n"
+            "    - {source: requires.project_roots, container_prefix: /projects/, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        with pytest.raises(MountCollisionError, match="zipsa"):
+            ex._build_docker_command(
+                skill, "hi", tmp_path / "claude.json", {},
+                requires_values={"project_roots": [str(a), str(b)]},
+            )

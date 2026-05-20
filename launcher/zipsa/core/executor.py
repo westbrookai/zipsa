@@ -22,6 +22,10 @@ from .. import paths as zipsa_paths
 CONTAINER_WORKSPACE = "/home/agent/workspace"
 
 
+class MountCollisionError(ValueError):
+    """Raised when two dynamic mount entries resolve to the same container path."""
+
+
 class DockerExecutor:
     """Orchestrates Docker container execution for skills."""
 
@@ -1089,6 +1093,7 @@ class DockerExecutor:
         allowed_tools_override: Optional[str] = None,
         phase_id: Optional[str] = None,
         npm_volume: Optional[str] = None,
+        requires_values: Optional[dict[str, object]] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -1098,10 +1103,12 @@ class DockerExecutor:
             claude_json_path: Path to .claude.json file (on host)
             env: Environment variables
             shell: If True, build command for interactive shell
+            requires_values: Resolved requires values keyed by requires key name
 
         Returns:
             Command array for subprocess
         """
+        requires_values = requires_values or {}
         cmd = [
             "docker",
             "run",
@@ -1164,10 +1171,51 @@ class DockerExecutor:
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
-        # Generic spec.mounts entries — explicit container path, independent of MCP
+        # spec.mounts: both static (host) and dynamic (source -> requires.X)
+        seen_container_paths: set[str] = set()
         for m in skill.manifest.spec.mounts:
-            host_path = Path(m.host).expanduser().resolve()
-            cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+            if m.host is not None:
+                # Static mount
+                host_path = Path(m.host).expanduser().resolve()
+                cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+                seen_container_paths.add(m.container)
+                continue
+
+            # Dynamic mount (m.source is "requires.<key>")
+            key = m.source.removeprefix("requires.")
+            value = requires_values.get(key)
+            if value is None:
+                # Should have been caught in pre-flight; defensive
+                raise ValueError(
+                    f"mount source 'requires.{key}' has no value at run time"
+                )
+
+            if isinstance(value, str):
+                # Single directory
+                host_path = Path(value).expanduser().resolve()
+                if m.container in seen_container_paths:
+                    raise MountCollisionError(
+                        f"container path {m.container} already used by another mount"
+                    )
+                cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+                seen_container_paths.add(m.container)
+
+            elif isinstance(value, list):
+                # list[directory] expanded with container_prefix + basename(item)
+                for item in value:
+                    host_path = Path(item).expanduser().resolve()
+                    container_path = m.container_prefix + host_path.name
+                    if container_path in seen_container_paths:
+                        raise MountCollisionError(
+                            f"basename collision in requires.{key}: "
+                            f"multiple paths resolve to {container_path}"
+                        )
+                    cmd.extend(["-v", f"{host_path}:{container_path}:{m.mode}"])
+                    seen_container_paths.add(container_path)
+            else:
+                raise ValueError(
+                    f"requires.{key} has unexpected type {type(value).__name__}"
+                )
 
         # Auto-mount the skill's own source directory so skills can bundle
         # helper scripts (e.g. scripts/post.py) and reach them at /skill.
