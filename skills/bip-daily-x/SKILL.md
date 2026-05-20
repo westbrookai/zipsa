@@ -5,22 +5,30 @@ via user feedback, and post to X after explicit approval.
 
 ## Per-user setup
 
-This skill posts to the user's own X account using credentials they
-provide in `~/.zipsa/.env`:
+Three groups of user-specific values:
 
-- `X_API_KEY`
-- `X_API_SECRET`
-- `X_ACCESS_TOKEN`
-- `X_ACCESS_SECRET`
+**Launcher-resolved (before container starts):**
 
-These are OAuth 1.0a credentials (4 strings, no expiry). The user
-generates them once at https://console.x.com under their own X
-Developer App. The launcher passes them into this skill's container
-automatically; this skill never touches them directly — it just
-expects them in env.
+- **`project_roots`** — directories containing the user's git projects,
+  declared in `spec.requires`. The launcher prompts on first run (or
+  via `zipsa configure bip-daily-x`), saves at
+  `~/.zipsa/bip-daily-x@<version>/requires.yaml`, and mounts each path
+  at its own absolute host path so `agenthud --with-git` can resolve
+  session-cwd → .git lookups. Tweet drafting uses the resulting `◆`
+  commit entries — knowing what shipped is part of what's tweet-worthy.
 
-The user's preferred tweet voice is asked once on first run and
-remembered as `voice` in skill memory.
+**Environment (via `~/.zipsa/.env`, auto-injected into container):**
+
+- `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` —
+  OAuth 1.0a credentials (4 strings, no expiry) generated once at
+  https://console.x.com under the user's X Developer App. The
+  launcher passes them automatically; this skill never touches them
+  directly. Precheck verifies presence via the bundled script.
+
+**Agent-time (remembered in skill memory):**
+
+- `voice` — 1–2 sentences describing the user's preferred tweet tone.
+  Asked once on first run, then reused.
 
 ## Phases
 
@@ -42,21 +50,92 @@ remembered as `voice` in skill memory.
 
 ### report
 
-Invoke agenthud for the target date:
+Fetch a structured per-project activity report from agenthud, then
+extract per-project slices for the draft phase.
 
-```bash
-npx agenthud@0.8.4 report \
-  --date <target_date> \
-  --format json \
-  --include response,bash,edit,thinking \
-  --detail-limit 0
-```
+Steps:
 
-If the result has `sessions: []`, stop the skill with `status=ok` and
-`user_facing_summary` "No Claude Code activity today — skipping post."
-No draft, no prompts, no post.
+1. Invoke agenthud via Bash, redirecting stdout to a file. Do NOT
+   capture stdout into the Bash tool result — high-activity days
+   produce 50-200KB+ of JSON, past Claude Code's ~30k-char Bash
+   output truncation.
 
-Otherwise pass the per-project structured report to the next phase.
+   ```bash
+   npx agenthud@0.9.2 report \
+     --date <target_date> \
+     --format json \
+     --include response,bash,edit \
+     --detail-limit 200 \
+     --with-git \
+     > /tmp/agenthud-report.json
+   ```
+
+   Notes:
+   - `~/.claude/projects` is bind-mounted at agenthud's default path.
+   - **`thinking` deliberately excluded** — Claude's internal reasoning
+     is verbose and tweets are about what was SHIPPED, not what was
+     thought.
+   - `--with-git` requires the `project_roots` mounts to resolve each
+     session's `cwd → .git` (see Per-user setup). Tweet-worthy
+     commits appear as `◆` entries in activities.
+   - `--detail-limit 200` caps activity body length so file size stays
+     manageable on busy days.
+
+2. Check for empty sessions: if the file's `.sessions` is empty,
+   short-circuit. Use a small jq query:
+
+   ```bash
+   jq '.sessions | length' /tmp/agenthud-report.json
+   ```
+
+   If `0`: stop the skill with `status=ok` and `user_facing_summary`
+   "No Claude Code activity today — skipping post." No draft, no
+   prompts, no post.
+
+3. Slice the file with jq — DO NOT try to Read the whole thing.
+   Reading paged through with Read inflates context as cache_read
+   accumulates. Use jq to extract only what you need:
+
+   **Project list:**
+   ```bash
+   jq '[.sessions[].project] | unique' /tmp/agenthud-report.json
+   ```
+
+   **Per-project slim summary** (for the draft phase):
+   ```bash
+   jq --arg p "launcher" '
+     [.sessions[] | select(.project == $p) | {
+       session_id, start, end,
+       activity_count: (.activities | length),
+       commits: [.activities[] | select(.type == "commit") | .label],
+       sample_activities: ([.activities[] | {type, label, text}] | .[:8])
+     }]
+   ' /tmp/agenthud-report.json
+   ```
+
+   For a tweet draft you really only need ~3-5 sample activities per
+   project plus the commits. Trim the slice further if needed.
+
+4. Build `next_phase_input` for draft phase:
+
+   ```json
+   {
+     "target_date": "2026-05-20",
+     "voice": "<from memory>",
+     "max_tweet_chars": 280,
+     "projects": [
+       {
+         "name": "launcher",
+         "highlights": ["...activity 1...", "...activity 2..."],
+         "commits": ["fix: ...", "feat: ..."]
+       }
+     ]
+   }
+   ```
+
+   Pick the 1-3 most share-worthy items across all projects. Tweet
+   draft uses these — it's not "all activities," it's "the things
+   worth tweeting about."
 
 ### draft
 
