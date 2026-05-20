@@ -143,8 +143,8 @@ Steps:
    npx agenthud@0.9.2 report \
      --date <target_date> \
      --format json \
-     --include response,bash,edit,thinking \
-     --detail-limit 500 \
+     --include response,bash,edit \
+     --detail-limit 200 \
      --with-git \
      > /tmp/agenthud-report.json
    ```
@@ -152,6 +152,11 @@ Steps:
    Notes:
    - `~/.claude/projects` is bind-mounted into the container at the
      default path agenthud expects, so no env var setup is needed.
+   - **`thinking` deliberately excluded** from `--include`: Claude's
+     internal reasoning blocks are the largest activity type and not
+     useful for a daily log (what was DONE matters; what was THOUGHT
+     internally doesn't). Bash/Edit/Response cover the externally
+     visible work.
    - `--with-git` makes agenthud emit `◆` commit entries for each
      session, resolved via `git --git-dir=<session.cwd>/.git log`.
      This only works because the launcher mounts `requires.project_roots`
@@ -161,9 +166,11 @@ Steps:
      without failing — but the commit entries are part of why we run
      `--with-git` in the first place, so callers should ensure
      `project_roots` covers the projects they care about.
-   - `--detail-limit 500` caps each activity body at 500 chars so a
-     single activity can't blow the file size to MBs. Adjust if you
-     need more (each step in a long Edit can lose info at 500).
+   - `--detail-limit 200` caps each activity body at 200 chars so the
+     file size stays manageable on busy days. Combined with dropping
+     `thinking`, a heavy day's report should stay under ~150KB and
+     fit in 2-3 Read calls. Increase if you need more activity body
+     context (at the cost of bigger reads).
    - The output is a JSON document with shape
      `{date, sessions: [{project, start, end, activities, subAgents}]}`.
      Activities for each session now include `◆` commit entries when

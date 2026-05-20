@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.3
+  version: 0.5.4
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -114,11 +114,14 @@ spec:
         the target date, then group/summarize for Notion.
       allowed_tools:
         - Bash(npx:*)
-        - Read                # to page through /tmp/agenthud-report.json
+        - Bash(echo:*)        # harmless; lets agent log status if it chains commands
+        - Read                # page through /tmp/agenthud-report.json
       limits:
-        max_turns: 6
-        max_cost_usd: 0.30
-        timeout_seconds: 180
+        # Reading large reports needs paging — bump turns vs the original 6.
+        # Cost bumped accordingly (Sonnet cache_read accumulates across reads).
+        max_turns: 12
+        max_cost_usd: 0.50
+        timeout_seconds: 240
 
     - id: persist
       goal: |
@@ -135,6 +138,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 29
-    max_cost_usd: 0.95
-    timeout_seconds: 480
+    max_turns: 35    # 8 + 12 + 12 + buffer
+    max_cost_usd: 1.10
+    timeout_seconds: 540
