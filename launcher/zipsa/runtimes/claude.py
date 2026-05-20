@@ -37,11 +37,16 @@ class ClaudeRuntime(AgentRuntime):
         env: dict[str, str],
         mcp_debug_file: Optional[str] = None,
         extra_dirs: Optional[list[str]] = None,
+        model: Optional[str] = None,
     ) -> list[str]:
         """Build Claude Code CLI command.
 
         Returns command array for Claude Code with all necessary flags.
         MCP servers are configured via .claude.json (mounted to /home/agent/.claude.json).
+
+        If model is given, passes it to claude via --model so the actual
+        runtime model matches what the manifest declares (used to be only
+        used for pricing/limits).
         """
         effective_input = user_input if user_input else self._EMPTY_USER_INPUT_PLACEHOLDER
         cmd = [
@@ -56,6 +61,8 @@ class ClaudeRuntime(AgentRuntime):
             "--output-format=stream-json",
             "--verbose",
         ]
+        if model:
+            cmd.extend(["--model", model])
         for d in (extra_dirs or []):
             cmd.extend(["--add-dir", d])
         if mcp_debug_file:

@@ -226,6 +226,9 @@ class PhaseSpec(BaseModel):
     goal: str
     allowed_tools: list[str] = Field(default_factory=list)
     limits: Optional[SkillLimits] = None
+    # Per-phase model override. Falls back to spec.model when None.
+    # Same shape as SkillSpec.model: {"name": "claude-haiku-4-5-..."}.
+    model: Optional[dict] = None
 
     @field_validator("allowed_tools")
     @classmethod

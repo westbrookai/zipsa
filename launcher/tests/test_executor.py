@@ -2108,3 +2108,115 @@ class TestMountExpansion:
                 skill, "hi", tmp_path / "claude.json", {},
                 requires_values={"project_roots": [str(a), str(a)]},
             )
+
+
+class TestModelWiring:
+    """Test that spec.model and phase.model actually reach the claude CLI
+    via --model. Previously spec.model was used only for pricing."""
+
+    def _make_skill(self, tmp_path, manifest_yaml):
+        from zipsa.core.skill import Skill
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(manifest_yaml)
+        return Skill.load(skill_dir)
+
+    def test_no_model_omits_flag(self, tmp_path):
+        """Skill without spec.model → no --model in docker cmd."""
+        from zipsa.core.executor import DockerExecutor
+        skill = self._make_skill(tmp_path,
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+        )
+        assert "--model" not in cmd
+
+    def test_spec_model_emits_flag(self, tmp_path):
+        """Skill with spec.model.name → --model flag with that value."""
+        from zipsa.core.executor import DockerExecutor
+        skill = self._make_skill(tmp_path,
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  model: {name: claude-haiku-4-5-20251001}\n"
+        )
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+        )
+        # --model appears followed by the model name
+        joined = " ".join(cmd)
+        assert "--model claude-haiku-4-5-20251001" in joined
+
+    def test_explicit_model_kwarg_wins_over_spec(self, tmp_path):
+        """Per-phase override: model kwarg beats skill.spec.model."""
+        from zipsa.core.executor import DockerExecutor
+        skill = self._make_skill(tmp_path,
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  model: {name: claude-opus-4-7}\n"
+        )
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            model="claude-haiku-4-5-20251001",
+        )
+        joined = " ".join(cmd)
+        assert "--model claude-haiku-4-5-20251001" in joined
+        assert "claude-opus-4-7" not in joined
+
+
+class TestPhaseSpecModel:
+    """Test that PhaseSpec.model exists and is honored by the phase loop."""
+
+    def test_phase_model_field_loads(self):
+        from zipsa.core.models import PhaseSpec
+        p = PhaseSpec(
+            id="precheck", goal="check",
+            model={"name": "claude-haiku-4-5-20251001"},
+        )
+        assert p.model == {"name": "claude-haiku-4-5-20251001"}
+
+    def test_phase_model_defaults_none(self):
+        from zipsa.core.models import PhaseSpec
+        p = PhaseSpec(id="precheck", goal="check")
+        assert p.model is None
+
+    def test_phase_model_in_manifest_loads(self, tmp_path):
+        from zipsa.core.skill import Skill
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  model: {name: claude-opus-4-7}\n"
+            "  phases:\n"
+            "    - id: precheck\n"
+            "      goal: 'check things'\n"
+            "      model: {name: claude-haiku-4-5-20251001}\n"
+            "    - id: main\n"
+            "      goal: 'do work'\n"
+        )
+        skill = Skill.load(skill_dir)
+        assert skill.manifest.spec.phases[0].model == {"name": "claude-haiku-4-5-20251001"}
+        assert skill.manifest.spec.phases[1].model is None  # falls back to spec.model

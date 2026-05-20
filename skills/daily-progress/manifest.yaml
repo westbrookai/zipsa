@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.1
+  version: 0.5.2
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -87,6 +87,13 @@ spec:
         Verify Notion is reachable, resolve target date from the user
         query, ensure per-user Notion workspace/db name are known, and
         locate or create the Notion database.
+      # Override the skill-level model (Opus): precheck is mechanical
+      # (MCP availability check + DB lookup/create), so Haiku is
+      # plenty and ~25x cheaper. Report + persist phases inherit
+      # spec.model (Opus) since they involve summarization + structured
+      # Notion writes.
+      model:
+        name: claude-haiku-4-5-20251001
       allowed_tools:
         - mcp__notion__notion-search
         - mcp__notion__notion-fetch
