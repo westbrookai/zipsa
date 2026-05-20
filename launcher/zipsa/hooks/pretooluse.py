@@ -42,8 +42,16 @@ def emit(decision: str, reason: str) -> None:
     sys.exit(0)
 
 
+_DENIAL_PREFIX = "[HOOK_DENIAL]"
+
+
 def deny(reason: str) -> None:
-    emit("deny", reason)
+    # Prefix every denial so the launcher's limits tracker can distinguish
+    # hook denials (deterministic config decisions) from other tool errors
+    # (transient / recoverable). The contract instructs the agent to stop
+    # retrying after a hook denial; the launcher enforces a hard cap as
+    # defense in depth.
+    emit("deny", f"{_DENIAL_PREFIX} {reason}")
 
 
 def allow(reason: str = "ok") -> None:

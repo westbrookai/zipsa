@@ -128,6 +128,37 @@ inline instead (see "Asking the user").
   status=failed.
 - Tool errors retry once at most. Persistent failure → status=failed.
 - Suppress narration ("I will now...", "Let me try..."). Just act.
+
+### Hook denials (deterministic — do NOT retry variations)
+
+If a tool call result starts with `[HOOK_DENIAL]`, the launcher's hook
+explicitly refused the call. Hook denials are **deterministic**: the
+same call (or a minor variant) will be denied again. Retrying is pure
+budget waste.
+
+What to do:
+
+1. If the denial reason suggests YOUR typo (e.g. you typed `gut status`
+   instead of `git status`): retry **once** with the corrected command.
+2. Otherwise (tool not in allow list, parser hitting an unsupported
+   construct, etc.): emit IMMEDIATELY:
+   ```json
+   {
+     "status": "failed",
+     "error": {
+       "code": "tool_not_allowed",
+       "message": "<command you tried> denied: <reason from hook>"
+     }
+   }
+   ```
+   Then stop. Do not attempt alternative commands (writing files via
+   `echo`, calling `node -e`, etc.). The skill author needs the
+   denied-command + reason to fix the manifest's `allowed_tools` —
+   they can't act on a wall of summary text.
+
+The launcher tracks hook denials per phase. After 3 denials in one
+phase, the launcher force-terminates the run regardless of your
+behaviour. Trust this signal — it means stop iterating.
 - `WebFetch` requires BOTH `url` AND `prompt` parameters. The `prompt`
   tells the fetcher what to extract from the page. For raw verbatim
   bodies (e.g. JSON APIs), use `prompt: "Return the response body verbatim."`.

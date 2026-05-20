@@ -294,3 +294,88 @@ class TestCheckLimits:
         s.phase_cost_usd = 0.01
         # Within phase budget, no aggregate limits at all
         assert check_limits(s, self._limits(), None) is None
+
+
+def _tool_result_with_content(content: str) -> dict:
+    """A `user` tool_result event carrying arbitrary content text (used to
+    simulate hook denial messages reaching the agent)."""
+    return {
+        "type": "user",
+        "message": {
+            "content": [{"type": "tool_result", "tool_use_id": "tu_X", "content": content}],
+        },
+    }
+
+
+class TestHookDenialCounting:
+    def test_hook_denial_prefix_increments_counter(self):
+        s = new_state("p")
+        ev = _tool_result_with_content("[HOOK_DENIAL] command 'curl' not allowed")
+        update_for_event(s, ev, PRICING_MODEL)
+        assert s.phase_hook_denials == 1
+
+    def test_non_denial_tool_result_does_not_increment(self):
+        """Tool results without the prefix are normal tool errors or
+        successes — must NOT count toward the denial cap."""
+        s = new_state("p")
+        ev = _tool_result_with_content("Error: agenthud exit 1 (network timeout)")
+        update_for_event(s, ev, PRICING_MODEL)
+        assert s.phase_hook_denials == 0
+
+    def test_block_list_content_format_also_detected(self):
+        """Anthropic's API also delivers tool_result.content as a list of
+        blocks (e.g. [{'type': 'text', 'text': '...'}]). Detect that too."""
+        s = new_state("p")
+        ev = {
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result", "tool_use_id": "tu_X",
+                "content": [{"type": "text", "text": "[HOOK_DENIAL] not allowed"}],
+            }]},
+        }
+        update_for_event(s, ev, PRICING_MODEL)
+        assert s.phase_hook_denials == 1
+
+    def test_phase_start_resets_denial_counter(self):
+        s = new_state("p1")
+        update_for_event(s, _tool_result_with_content("[HOOK_DENIAL] x"), PRICING_MODEL)
+        update_for_event(s, _tool_result_with_content("[HOOK_DENIAL] y"), PRICING_MODEL)
+        assert s.phase_hook_denials == 2
+        update_for_event(s, _phase_start("p2"), PRICING_MODEL)
+        assert s.phase_hook_denials == 0
+
+
+class TestHookDenialBreach:
+    def _limits(self, **kw) -> SkillLimits:
+        defaults = {"max_turns": 999, "max_cost_usd": 99.0, "timeout_seconds": 9999}
+        defaults.update(kw)
+        return SkillLimits(**defaults)
+
+    def test_below_cap_no_breach(self):
+        s = new_state("p")
+        s.phase_hook_denials = 2  # cap is 3
+        assert check_limits(s, self._limits(), self._limits()) is None
+
+    def test_at_cap_returns_breach(self):
+        from zipsa.core.limits import MAX_HOOK_DENIALS_PER_PHASE
+        s = new_state("p")
+        s.phase_hook_denials = MAX_HOOK_DENIALS_PER_PHASE
+        b = check_limits(s, self._limits(), self._limits())
+        assert b is not None
+        assert b.scope == "phase"
+        assert b.kind == "hook_denials"
+        assert b.value == float(MAX_HOOK_DENIALS_PER_PHASE)
+        assert b.limit == float(MAX_HOOK_DENIALS_PER_PHASE)
+
+    def test_hook_denial_breach_short_circuits_other_breaches(self):
+        """Hook-denial cap is checked first — even if turn/cost limits
+        would also fire, the breach reported should be hook_denials so
+        the executor surfaces the most actionable error to the user."""
+        from zipsa.core.limits import MAX_HOOK_DENIALS_PER_PHASE
+        s = new_state("p")
+        s.phase_hook_denials = MAX_HOOK_DENIALS_PER_PHASE
+        s.phase_turns = 999_999
+        s.phase_cost_usd = 999.0
+        b = check_limits(s, self._limits(max_turns=1, max_cost_usd=0.01), self._limits())
+        assert b is not None
+        assert b.kind == "hook_denials"

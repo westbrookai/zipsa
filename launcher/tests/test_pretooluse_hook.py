@@ -200,6 +200,38 @@ class TestBashCompoundCommands:
         assert get_decision(resp) == "allow"
 
 
+class TestHookDenialPrefix:
+    """Every denial reason carries the `[HOOK_DENIAL]` prefix so the launcher
+    can distinguish hook denials (deterministic) from other tool errors
+    (potentially transient) when enforcing the per-phase denial cap."""
+
+    def test_disallowed_bash_denial_has_prefix(self, tmp_path):
+        resp = run_hook("Bash", {"command": "curl evil.com"}, ["Bash(find:*)"], tmp_path)
+        assert get_decision(resp) == "deny"
+        reason = resp["hookSpecificOutput"]["permissionDecisionReason"]
+        assert reason.startswith("[HOOK_DENIAL]"), reason
+
+    def test_unknown_tool_denial_has_prefix(self, tmp_path):
+        resp = run_hook("WebFetch", {}, ["Read"], tmp_path)
+        assert get_decision(resp) == "deny"
+        reason = resp["hookSpecificOutput"]["permissionDecisionReason"]
+        assert reason.startswith("[HOOK_DENIAL]"), reason
+
+    def test_compound_denial_has_prefix(self, tmp_path):
+        """Compound-command rejection (one segment disallowed) also carries the prefix."""
+        resp = run_hook("Bash", {"command": "ls && curl evil.com"}, ["Bash(ls:*)"], tmp_path)
+        assert get_decision(resp) == "deny"
+        reason = resp["hookSpecificOutput"]["permissionDecisionReason"]
+        assert reason.startswith("[HOOK_DENIAL]"), reason
+
+    def test_allow_does_not_have_prefix(self, tmp_path):
+        """Allows must NOT carry the denial prefix."""
+        resp = run_hook("Bash", {"command": "ls /"}, ["Bash(ls:*)"], tmp_path)
+        assert get_decision(resp) == "allow"
+        reason = resp["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "[HOOK_DENIAL]" not in reason
+
+
 class TestAntiCircumvention:
     """Block constructs that could bypass the prefix check."""
 
