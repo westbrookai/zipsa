@@ -1172,10 +1172,20 @@ class DockerExecutor:
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
         # spec.mounts: both static (host) and dynamic (source -> requires.X)
-        seen_container_paths: set[str] = set()
+        # Seed collision tracker with zipsa-internal container paths so a
+        # manifest that declares e.g. `container: /skill` errors cleanly
+        # instead of silently double-mounting (undefined Docker behavior).
+        seen_container_paths: set[str] = {
+            "/.zipsa", "/skill", "/zipsa-hooks/pretooluse.py",
+        }
         for m in skill.manifest.spec.mounts:
             if m.host is not None:
                 # Static mount
+                if m.container in seen_container_paths:
+                    raise MountCollisionError(
+                        f"container path {m.container} already used "
+                        "(by a zipsa-internal mount or earlier spec.mounts entry)"
+                    )
                 host_path = Path(m.host).expanduser().resolve()
                 cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
                 seen_container_paths.add(m.container)
