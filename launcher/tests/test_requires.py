@@ -315,3 +315,73 @@ class TestCarryOver:
         from zipsa.core.models import RequiresEntry
         result = carry_over_from_previous("s", "0.5.0", {"x": RequiresEntry(type="string", prompt="?")})
         assert result is None
+
+
+class TestPromptForValue:
+    def test_string_input(self):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        entry = RequiresEntry(type="string", prompt="?")
+        out = io.StringIO()
+        result = prompt_for_value(entry, io.StringIO("hi\n"), out)
+        assert result == "hi"
+
+    def test_directory_input_normalizes(self, tmp_path):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        d = tmp_path / "x"
+        d.mkdir()
+        entry = RequiresEntry(type="directory", prompt="?")
+        out = io.StringIO()
+        result = prompt_for_value(entry, io.StringIO(f"{d}\n"), out)
+        assert result == str(d.resolve())
+
+    def test_list_directory_multi_line(self, tmp_path):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        a = tmp_path / "a"; a.mkdir()
+        b = tmp_path / "b"; b.mkdir()
+        entry = RequiresEntry(type="list[directory]", prompt="?")
+        out = io.StringIO()
+        result = prompt_for_value(entry, io.StringIO(f"{a}\n{b}\n\n"), out)
+        assert result == [str(a.resolve()), str(b.resolve())]
+
+    def test_enter_with_current_keeps(self):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        entry = RequiresEntry(type="string", prompt="?")
+        out = io.StringIO()
+        result = prompt_for_value(entry, io.StringIO("\n"), out, current="kept")
+        assert result == "kept"
+
+    def test_invalid_then_valid(self, tmp_path):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        d = tmp_path / "x"; d.mkdir()
+        entry = RequiresEntry(type="directory", prompt="?")
+        out = io.StringIO()
+        result = prompt_for_value(entry, io.StringIO(f"/no/such\n{d}\n"), out)
+        assert result == str(d.resolve())
+
+    def test_three_invalid_raises(self):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        entry = RequiresEntry(type="directory", prompt="?")
+        out = io.StringIO()
+        with pytest.raises(ValueError, match="failed after 3"):
+            prompt_for_value(entry, io.StringIO("/no\n/no\n/no\n"), out)
+
+    def test_eof_immediately_raises_eoferror(self):
+        import io
+        from zipsa.core.requires import prompt_for_value
+        from zipsa.core.models import RequiresEntry
+        entry = RequiresEntry(type="string", prompt="?")
+        out = io.StringIO()
+        with pytest.raises(EOFError):
+            prompt_for_value(entry, io.StringIO(""), out)

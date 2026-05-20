@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Annotated, Generator, Iterator, Optional
 
@@ -14,9 +15,16 @@ from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
+from .core.requires import (
+    load_requires,
+    save_requires,
+    prompt_for_value,
+    classify_state,
+    carry_over_from_previous,
+)
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
-from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
 from .runtimes import list_runtimes
 
 
@@ -572,6 +580,61 @@ def discover(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def configure(
+    name: Annotated[str, typer.Argument(help="Installed skill name")],
+):
+    """Set host-side values that the skill needs to run (spec.requires)."""
+    try:
+        skill = Skill.load(_resolve_skill_path(name))
+    except SkillNotInstalledError:
+        typer.echo(f"Error: skill '{name}' is not installed. Try: zipsa install <source>", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Error loading {name!r}: {e}", err=True)
+        raise typer.Exit(1)
+
+    spec = skill.manifest.spec.requires
+    if not spec:
+        typer.echo(f"{name} has no required configuration.")
+        raise typer.Exit(0)
+
+    typer.echo(f"\n[zipsa] {name}@{skill.manifest.metadata.version}\n")
+
+    req_file = skill_requires_file(name, skill.manifest.metadata.version)
+    saved = load_requires(req_file) if req_file.exists() else {}
+
+    # Use sys.stdin/stdout lazily at call site so CliRunner can patch them.
+    stream_in = sys.stdin
+    stream_out = sys.stdout
+
+    new_values: dict[str, object] = dict(saved)  # start from existing
+    try:
+        for key, entry in spec.items():
+            typer.echo(f"{key} — {entry.prompt}")
+            current = saved.get(key)
+            try:
+                value = prompt_for_value(entry, stream_in, stream_out, current=current)
+            except EOFError:
+                typer.echo("Error: configure requires an interactive terminal.", err=True)
+                raise typer.Exit(4)
+            except ValueError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(1)
+            new_values[key] = value
+            if isinstance(value, list):
+                typer.echo(f"  ✓ saved {len(value)} item(s)")
+            else:
+                typer.echo(f"  ✓ saved")
+            typer.echo()
+    except KeyboardInterrupt:
+        typer.echo("\nCancelled. No changes saved.")
+        raise typer.Exit(130)
+
+    save_requires(req_file, new_values)
+    typer.echo(f"Saved to {req_file}")
 
 
 @app.command()

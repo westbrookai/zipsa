@@ -11,9 +11,12 @@ test with tmp_path.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
+
+if TYPE_CHECKING:
+    from zipsa.core.models import RequiresEntry
 
 
 def validate_value(type_name: str, value: Any) -> Any:
@@ -191,3 +194,75 @@ def carry_over_from_previous(
     if not filtered:
         return None
     return prev_version, filtered
+
+
+def prompt_for_value(
+    entry: "RequiresEntry",
+    stream_in,  # readable, with .readline()
+    stream_out,  # writable, .write() + .flush()
+    current: Any = None,
+    max_attempts: int = 3,
+) -> Any:
+    """Prompt the user for a single value matching `entry.type`.
+
+    Returns the validated (and normalized) value. Raises ValueError after
+    `max_attempts` failed validations. Raises EOFError if stream_in returns
+    "" before any line (treated as Ctrl+D / no TTY).
+    """
+    def _writeln(msg: str = "") -> None:
+        stream_out.write(msg + "\n")
+        stream_out.flush()
+
+    if current is not None:
+        _writeln("Current:")
+        if isinstance(current, list):
+            for item in current:
+                _writeln(f"  {item}")
+        else:
+            _writeln(f"  {current}")
+        _writeln("Press enter to keep, or type new value(s):")
+
+    for attempt in range(max_attempts):
+        try:
+            if entry.type == "list[directory]":
+                lines: list[str] = []
+                first_line = stream_in.readline()
+                if first_line == "":
+                    raise EOFError("no input")
+                first_line = first_line.rstrip("\n")
+                if first_line == "":
+                    if current is not None:
+                        return current
+                    _writeln("(empty: please enter at least one path)")
+                    continue
+                lines.append(first_line)
+                while True:
+                    line = stream_in.readline()
+                    if line == "":  # EOF
+                        break
+                    line = line.rstrip("\n")
+                    if line == "":
+                        break
+                    lines.append(line)
+                value = lines
+            else:
+                # string or directory: single line
+                line = stream_in.readline()
+                if line == "":
+                    raise EOFError("no input")
+                line = line.rstrip("\n")
+                if line == "" and current is not None:
+                    return current
+                value = line
+
+            return validate_value(entry.type, value)
+
+        except EOFError:
+            raise
+        except ValueError as e:
+            _writeln(f"  ✗ {e}")
+            if attempt < max_attempts - 1:
+                _writeln(f"  Try again ({max_attempts - attempt - 1} attempts left):")
+            continue
+
+    raise ValueError(f"validation failed after {max_attempts} attempts")
