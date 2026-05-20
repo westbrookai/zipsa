@@ -2,11 +2,12 @@
 
 import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional
 
 
 _BASH_PATTERN_RE = re.compile(r"^Bash\(([^)]+):\*\)$")
+_REQUIRES_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def _validate_bash_entries(entries: list[str]) -> list[str]:
@@ -56,23 +57,71 @@ class VolumeMount(BaseModel):
 class SkillMount(BaseModel):
     """Generic bind mount declared at spec.mounts level (independent of MCP).
 
-    Unlike VolumeMount (which is scoped to an MCP server and has its container
-    path auto-generated), SkillMount has an explicit container path so the
-    skill can decide where in the container the host data appears.
+    Two forms:
+      - Static: set `host` + `container`. host expanded at run time.
+      - Dynamic: set `source` (e.g. 'requires.project_roots') + either
+        `container` (single directory) or `container_prefix`
+        (list[directory] expanded to one mount per item).
     """
 
-    host: str
-    container: str
+    host: Optional[str] = None
+    source: Optional[str] = None
+    container: Optional[str] = None
+    container_prefix: Optional[str] = None
     mode: Literal["ro", "rw"] = "ro"
 
     @field_validator("container")
     @classmethod
-    def _container_must_be_absolute(cls, v: str) -> str:
-        if not v.startswith("/"):
+    def _container_must_be_absolute(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.startswith("/"):
             raise ValueError(
                 f"container path must be absolute (starts with '/'), got {v!r}"
             )
         return v
+
+    @field_validator("container_prefix")
+    @classmethod
+    def _container_prefix_rules(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.startswith("/"):
+            raise ValueError(
+                f"container_prefix must be absolute (starts with '/'), got {v!r}"
+            )
+        if not v.endswith("/"):
+            raise ValueError(
+                f"container_prefix must end with '/', got {v!r}"
+            )
+        return v
+
+    @field_validator("source")
+    @classmethod
+    def _source_must_reference_requires(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.startswith("requires."):
+            raise ValueError(
+                f"source must start with 'requires.', got {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _check_field_combinations(self) -> "SkillMount":
+        # host XOR source
+        if self.host is not None and self.source is not None:
+            raise ValueError("'host' and 'source' are mutually exclusive")
+        if self.host is None and self.source is None:
+            raise ValueError("must set either 'host' (static) or 'source' (dynamic)")
+
+        # container XOR container_prefix
+        if self.container is not None and self.container_prefix is not None:
+            raise ValueError("container and container_prefix are mutually exclusive")
+        if self.container is None and self.container_prefix is None:
+            raise ValueError("must set either 'container' or 'container_prefix'")
+
+        # Static mounts can't use container_prefix
+        if self.host is not None and self.container_prefix is not None:
+            raise ValueError("static mounts (host) cannot use container_prefix")
+
+        return self
 
 
 class MCPServerStdio(BaseModel):
@@ -129,6 +178,25 @@ class SkillLimits(BaseModel):
     timeout_seconds: Optional[int] = None
 
 
+class RequiresEntry(BaseModel):
+    """One per-user, per-skill host-side value the launcher must obtain
+    before starting the container.
+
+    Declared in spec.requires.<key>; values stored in
+    ~/.zipsa/<skill>@<version>/requires.yaml.
+    """
+
+    type: Literal["string", "directory", "list[directory]"]
+    prompt: str
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must be non-empty")
+        return v
+
+
 class PhaseSpec(BaseModel):
     """Single phase declaration within a multi-phase skill."""
 
@@ -154,6 +222,7 @@ class SkillSpec(BaseModel):
     mounts: list[SkillMount] = Field(default_factory=list)  # Generic bind mounts
     limits: Optional[SkillLimits] = None
     config: dict = Field(default_factory=dict)  # Skill-specific config
+    requires: dict[str, RequiresEntry] = Field(default_factory=dict)  # Per-user host-side values
     network: Optional[dict] = None  # Network allow list
     default_query: Optional[str] = None  # Default query for skill (when user runs with no args)
     children: list[str] = Field(default_factory=list)  # Child skills this skill may invoke
@@ -177,6 +246,44 @@ class SkillSpec(BaseModel):
                     "('/', '\\\\', or '..'); use plain skill names only"
                 )
         return v
+
+    @field_validator("requires")
+    @classmethod
+    def _validate_requires_keys(cls, v: dict[str, RequiresEntry]) -> dict[str, RequiresEntry]:
+        for key in v.keys():
+            if not _REQUIRES_KEY_RE.match(key):
+                raise ValueError(
+                    f"requires key {key!r} must be lowercase letters/digits/"
+                    "underscores and start with a letter"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def _check_mount_requires_consistency(self) -> "SkillSpec":
+        for i, mount in enumerate(self.mounts):
+            if mount.source is None:
+                continue
+            key = mount.source.removeprefix("requires.")
+            if key not in self.requires:
+                raise ValueError(
+                    f"mounts[{i}].source references unknown requires key: {key!r}"
+                )
+            entry = self.requires[key]
+            if entry.type == "directory" and mount.container_prefix is not None:
+                raise ValueError(
+                    f"mounts[{i}]: use 'container' for single directory "
+                    f"(requires.{key} has type=directory)"
+                )
+            if entry.type == "list[directory]" and mount.container is not None:
+                raise ValueError(
+                    f"mounts[{i}]: use 'container_prefix' for list "
+                    f"(requires.{key} has type=list[directory])"
+                )
+            if entry.type == "string":
+                raise ValueError(
+                    f"mounts[{i}]: requires.{key} (type=string) cannot be used as a mount source"
+                )
+        return self
 
 
 class SkillManifest(BaseModel):
