@@ -138,6 +138,67 @@ class TestBashCompoundCommands:
         # grep is not in allow list
         assert get_decision(resp) == "deny"
 
+    def test_pipe_inside_single_quotes_is_not_a_segment_boundary(self, tmp_path):
+        """jq filter operators (|) inside single-quoted strings are NOT
+        shell pipes. The hook must respect quoting when splitting on |."""
+        resp = run_hook(
+            "Bash",
+            {"command": "jq '.sessions | length' /tmp/report.json"},
+            ["Bash(jq:*)"],
+            tmp_path,
+        )
+        assert get_decision(resp) == "allow"
+
+    def test_pipe_inside_double_quotes_is_not_a_segment_boundary(self, tmp_path):
+        """Same rule applies to double-quoted strings."""
+        resp = run_hook(
+            "Bash",
+            {"command": 'jq ".sessions | length" /tmp/report.json'},
+            ["Bash(jq:*)"],
+            tmp_path,
+        )
+        assert get_decision(resp) == "allow"
+
+    def test_semicolon_inside_quotes_is_not_a_segment_boundary(self, tmp_path):
+        resp = run_hook(
+            "Bash",
+            {"command": "echo 'hello; world'"},
+            ["Bash(echo:*)"],
+            tmp_path,
+        )
+        assert get_decision(resp) == "allow"
+
+    def test_brackets_in_jq_filter_with_quotes(self, tmp_path):
+        """Real-world failing case: jq array constructor inside quotes."""
+        resp = run_hook(
+            "Bash",
+            {"command": "jq -r '[.sessions[].project] | unique | .[]' /tmp/report.json"},
+            ["Bash(jq:*)"],
+            tmp_path,
+        )
+        assert get_decision(resp) == "allow"
+
+    def test_real_pipe_after_quoted_filter_still_splits(self, tmp_path):
+        """The hook must still recognize a REAL shell pipe that appears
+        AFTER a quoted argument. Make sure we don't over-correct."""
+        resp = run_hook(
+            "Bash",
+            {"command": "jq '.foo' /tmp/x.json | grep bar"},
+            ["Bash(jq:*)"],  # grep not allowed
+            tmp_path,
+        )
+        assert get_decision(resp) == "deny"
+
+    def test_redirection_inside_command_allowed(self, tmp_path):
+        """`cmd > file` should be one segment (redirection, not a pipe)."""
+        resp = run_hook(
+            "Bash",
+            {"command": "npx agenthud@0.9.2 report --date 2026-05-19 > /tmp/r.json"},
+            ["Bash(npx:*)"],
+            tmp_path,
+        )
+        assert get_decision(resp) == "allow"
+
 
 class TestAntiCircumvention:
     """Block constructs that could bypass the prefix check."""

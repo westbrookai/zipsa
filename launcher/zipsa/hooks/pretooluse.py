@@ -81,14 +81,62 @@ def parse_bash_patterns(allowed_tools: list[str]) -> tuple[set[str], bool]:
 
 
 def split_compound(command: str) -> list[str]:
-    """Split a shell command into segments by &&, ||, ;, |."""
-    # Replace the multi-char operators first, then single-char.
-    # Order matters: && before &, || before |.
-    placeholder = "\x00SPLIT\x00"
-    tmp = command
-    for op in ("&&", "||", ";", "|"):
-        tmp = tmp.replace(op, placeholder)
-    return [seg.strip() for seg in tmp.split(placeholder) if seg.strip()]
+    """Split a shell command into segments by &&, ||, ;, | — respecting
+    single and double quotes.
+
+    Previous implementation used `.replace()` which incorrectly split on
+    operator characters inside quoted strings — e.g. `jq '.foo | .bar'`
+    became two broken segments because the jq filter's `|` was treated
+    as a shell pipe. This walker tracks quote state and only splits on
+    unquoted operators.
+
+    Limitations (acceptable for v1 — agents don't write these):
+    - Does not handle backslash-escaping outside quotes (`\\|` would
+      still split).
+    - Does not handle here-docs or process substitution.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+
+        # Quote tracking — single and double can't open inside each other.
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+            i += 1
+            continue
+        if c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+            i += 1
+            continue
+
+        # Operators only outside quotes.
+        if not in_single and not in_double:
+            # Two-char operators first (so "&&" doesn't read as "& &").
+            if c in "&|" and i + 1 < n and command[i + 1] == c:
+                segments.append("".join(current).strip())
+                current = []
+                i += 2
+                continue
+            # Single-char operators: ; and |
+            if c in ";|":
+                segments.append("".join(current).strip())
+                current = []
+                i += 1
+                continue
+
+        current.append(c)
+        i += 1
+
+    if current:
+        segments.append("".join(current).strip())
+    return [s for s in segments if s]
 
 
 def first_word(segment: str) -> str:
