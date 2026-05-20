@@ -1,7 +1,6 @@
 """Tests for the requires-config core module."""
 
 from pathlib import Path
-import io
 import pytest
 import yaml
 
@@ -184,6 +183,42 @@ class TestClassifyState:
         ok, needs_prompt, needs_revalidation = classify_state(spec, saved)
         assert ok == {"path": str(d)}
         assert needs_prompt == []
+
+    def test_list_directory_all_valid(self, tmp_path):
+        from zipsa.core.requires import classify_state
+        from zipsa.core.models import RequiresEntry
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        spec = {"paths": RequiresEntry(type="list[directory]", prompt="?")}
+        saved = {"paths": [str(a), str(b)]}
+        ok, needs_prompt, needs_revalidation = classify_state(spec, saved)
+        assert ok == {"paths": [str(a.resolve()), str(b.resolve())]}
+        assert needs_prompt == []
+        assert needs_revalidation == []
+
+    def test_list_directory_one_stale_marks_revalidation(self, tmp_path):
+        from zipsa.core.requires import classify_state
+        from zipsa.core.models import RequiresEntry
+        a = tmp_path / "a"
+        a.mkdir()
+        spec = {"paths": RequiresEntry(type="list[directory]", prompt="?")}
+        saved = {"paths": [str(a), str(tmp_path / "missing")]}
+        ok, needs_prompt, needs_revalidation = classify_state(spec, saved)
+        assert ok == {}
+        assert needs_prompt == []
+        assert needs_revalidation == ["paths"]
+
+    def test_list_directory_non_string_element_marks_prompt(self, tmp_path):
+        from zipsa.core.requires import classify_state
+        from zipsa.core.models import RequiresEntry
+        spec = {"paths": RequiresEntry(type="list[directory]", prompt="?")}
+        saved = {"paths": ["/some/path", 42]}  # 42 is not a string
+        ok, needs_prompt, needs_revalidation = classify_state(spec, saved)
+        assert ok == {}
+        assert needs_prompt == ["paths"]
+        assert needs_revalidation == []
 
 
 class TestCarryOver:
