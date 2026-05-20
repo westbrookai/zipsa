@@ -133,15 +133,20 @@ group/summarize for Notion.
 
 Steps:
 
-1. Invoke agenthud via Bash:
+1. Invoke agenthud via Bash, redirecting stdout to a file. Do NOT
+   capture stdout into the Bash tool result — high-activity days
+   produce 50-200KB of JSON, well past Claude Code's ~30k-char Bash
+   output truncation. Write to a tmpfile and use the Read tool with
+   pagination instead.
 
    ```bash
    npx agenthud@0.9.2 report \
      --date <target_date> \
      --format json \
      --include response,bash,edit,thinking \
-     --detail-limit 0 \
-     --with-git
+     --detail-limit 500 \
+     --with-git \
+     > /tmp/agenthud-report.json
    ```
 
    Notes:
@@ -156,15 +161,33 @@ Steps:
      without failing — but the commit entries are part of why we run
      `--with-git` in the first place, so callers should ensure
      `project_roots` covers the projects they care about.
-   - The command output is a JSON document with shape
+   - `--detail-limit 500` caps each activity body at 500 chars so a
+     single activity can't blow the file size to MBs. Adjust if you
+     need more (each step in a long Edit can lose info at 500).
+   - The output is a JSON document with shape
      `{date, sessions: [{project, start, end, activities, subAgents}]}`.
      Activities for each session now include `◆` commit entries when
-     git resolution succeeded. Capture stdout in full.
-   - If no sessions match the date, agenthud emits a document with
-     `sessions: []`. Treat that as "no activity on that date" and pass
-     `projects: []` to the next phase.
+     git resolution succeeded.
 
-2. For each project in the report, build a summary tuple:
+2. Read the file with the Read tool. For large reports, page through
+   using `offset` / `limit` (Read returns up to 2000 lines per call by
+   default and tells you the file's total line count).
+
+   ```
+   Read("/tmp/agenthud-report.json")   # first call: full file or first 2000 lines
+   # if truncated, continue with:
+   Read("/tmp/agenthud-report.json", offset=2000, limit=2000)
+   ```
+
+   If the file is small (a few KB), one Read call is enough. Do not
+   try to `cat /tmp/agenthud-report.json` via Bash — that re-introduces
+   the truncation problem this rewrite fixes.
+
+3. If no sessions match the date, agenthud emits a document with
+   `sessions: []`. Treat that as "no activity on that date" and pass
+   `projects: []` to the next phase.
+
+4. For each project in the report, build a summary tuple:
    - `name`: the `project` field
    - `sessions`: 1 if the project appears once; if the same project
      name appears as multiple distinct sessions (rare — agenthud groups

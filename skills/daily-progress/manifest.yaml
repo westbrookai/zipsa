@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.0
+  version: 0.5.1
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -103,6 +103,7 @@ spec:
         the target date, then group/summarize for Notion.
       allowed_tools:
         - Bash(npx:*)
+        - Read                # to page through /tmp/agenthud-report.json
       limits:
         max_turns: 6
         max_cost_usd: 0.30
