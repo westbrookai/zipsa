@@ -569,6 +569,12 @@ class TestDynamicMount:
         with pytest.raises(ValidationError, match="requires\\."):
             SkillMount(source="config.x", container="/y")
 
+    def test_host_with_container_prefix_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="static mounts.*cannot use container_prefix"):
+            SkillMount(host="~/x", container_prefix="/y/")
+
 
 class TestRequiresMountIntegration:
     def test_source_referencing_existing_key_passes(self):
