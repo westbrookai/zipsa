@@ -2013,3 +2013,98 @@ class TestMountExpansion:
                 skill, "hi", tmp_path / "claude.json", {},
                 requires_values={},
             )
+
+    def test_preserve_host_path_single_directory(self, tmp_path):
+        """source + preserve_host_path: directory value → mount at its own
+        absolute host path inside the container (no basename, no prefix)."""
+        from zipsa.core.executor import DockerExecutor
+        from zipsa.core.skill import Skill
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    vault: {type: directory, prompt: 'where'}\n"
+            "  mounts:\n"
+            "    - {source: requires.vault, preserve_host_path: true, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            requires_values={"vault": str(vault)},
+        )
+        assert any(f"{vault}:{vault}:ro" in arg for arg in cmd)
+
+    def test_preserve_host_path_list_directory_expands_per_item(self, tmp_path):
+        """list[directory] + preserve_host_path: each item mounts at its own
+        absolute host path, no transformation."""
+        from zipsa.core.executor import DockerExecutor
+        from zipsa.core.skill import Skill
+
+        a = tmp_path / "Code"
+        b = tmp_path / "WestbrookAI"
+        a.mkdir()
+        b.mkdir()
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    project_roots: {type: 'list[directory]', prompt: '?'}\n"
+            "  mounts:\n"
+            "    - {source: requires.project_roots, preserve_host_path: true, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            requires_values={"project_roots": [str(a), str(b)]},
+        )
+        assert any(f"{a}:{a}:ro" in arg for arg in cmd)
+        assert any(f"{b}:{b}:ro" in arg for arg in cmd)
+
+    def test_preserve_host_path_collision_on_duplicates(self, tmp_path):
+        """Same resolved path twice in a list → MountCollisionError."""
+        from zipsa.core.executor import DockerExecutor, MountCollisionError
+        from zipsa.core.skill import Skill
+
+        a = tmp_path / "Code"
+        a.mkdir()
+        skill_dir = tmp_path / "s"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# x")
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: t\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    project_roots: {type: 'list[directory]', prompt: '?'}\n"
+            "  mounts:\n"
+            "    - {source: requires.project_roots, preserve_host_path: true, mode: ro}\n"
+        )
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        with pytest.raises(MountCollisionError, match=str(a)):
+            ex._build_docker_command(
+                skill, "hi", tmp_path / "claude.json", {},
+                requires_values={"project_roots": [str(a), str(a)]},
+            )

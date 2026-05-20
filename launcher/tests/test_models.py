@@ -575,6 +575,43 @@ class TestDynamicMount:
         with pytest.raises(ValidationError, match="static mounts.*cannot use container_prefix"):
             SkillMount(host="~/x", container_prefix="/y/")
 
+    def test_source_with_preserve_host_path_loads(self):
+        from zipsa.core.models import SkillMount
+        m = SkillMount(source="requires.project_roots", preserve_host_path=True, mode="ro")
+        assert m.preserve_host_path is True
+        assert m.container is None
+        assert m.container_prefix is None
+
+    def test_preserve_host_path_defaults_false(self):
+        from zipsa.core.models import SkillMount
+        m = SkillMount(source="requires.vault", container="/v", mode="ro")
+        assert m.preserve_host_path is False
+
+    def test_preserve_host_path_with_container_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="preserve_host_path.*cannot be combined"):
+            SkillMount(source="requires.x", preserve_host_path=True, container="/x")
+
+    def test_preserve_host_path_with_container_prefix_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="preserve_host_path.*cannot be combined"):
+            SkillMount(source="requires.x", preserve_host_path=True, container_prefix="/x/")
+
+    def test_preserve_host_path_without_source_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="preserve_host_path requires.*source"):
+            SkillMount(host="~/x", preserve_host_path=True)
+
+    def test_preserve_host_path_alone_without_container_passes(self):
+        """source + preserve_host_path is a complete dynamic mount form
+        (no container or container_prefix needed)."""
+        from zipsa.core.models import SkillMount
+        m = SkillMount(source="requires.x", preserve_host_path=True)
+        assert m.preserve_host_path is True
+
 
 class TestRequiresMountIntegration:
     def test_source_referencing_existing_key_passes(self):
