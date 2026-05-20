@@ -314,3 +314,77 @@ the server is ready → connection refused.
 locally and on a CI matrix. Must pass every iteration before closing.
 
 ---
+
+## Standalone runtime: own the system prompt, plug in any model backend (2026-05-20)
+
+**Vision.** Today zipsa is a thin layer over Claude Code: invokes
+`claude --print` with `--append-system-prompt` carrying the runtime
+contract + SKILL.md. The agent's identity stays "Claude Code with
+appended instructions" and Anthropic's default system prompt (guard
+rails, tone, tool-use conventions) still runs in front of ours.
+
+The architectural endpoint: zipsa **fully owns the system prompt** and
+**doesn't depend on Claude Code as the runtime layer**. Possible
+backends:
+
+- Anthropic API directly (no `claude` CLI in the loop)
+- Codex CLI (OpenAI)
+- Gemini CLI (Google)
+- **`pi-mono`** — open-source agent runtime that OpenClaw uses;
+  attractive because zipsa would no longer be tied to a particular
+  vendor's CLI lifecycle
+
+**What this unlocks.**
+
+- "zipsa" becomes a first-class product identity to users (not just a
+  CLI wrapping someone else's CLI). System prompt 100% reflects the
+  zipsa runtime contract — every behavior is explainable from one
+  document the project owns.
+- Skill portability across backends: same `manifest.yaml` + `SKILL.md`
+  runs on Anthropic / OpenAI / open-source agents.
+- Cost arbitrage: cheap backend for low-stakes skills, frontier model
+  for hard ones — declared per skill or per phase.
+
+**What we lose / have to rebuild.**
+
+- Anthropic's guard rails (security refusal policy, etc.) — would need
+  to re-encode in the zipsa contract or accept the gap.
+- Claude Code's session/auth/permission UX — replace with zipsa-native
+  equivalents (OAuth flows we already have most of).
+- PreToolUse hook integration — runtime-specific; needs an abstraction.
+- Stream-json output parsing — different on every backend; the
+  `runtimes/<name>.py` plugins already abstract this but real coverage
+  for non-Claude is untested.
+
+**Sketch of phases.**
+
+1. **Drop `--append-`, switch to `--system-prompt`** on Claude Code
+   (override instead of append). Smaller leap: still uses Claude Code
+   CLI but zipsa's prompt is now the whole prompt. Verify nothing
+   important breaks (probably some MCP/hooks integration assumes the
+   Anthropic prefix). Likely needs zipsa-side replacement of some
+   default behaviors.
+2. **Anthropic API direct call**, bypassing `claude` CLI entirely. Now
+   zipsa controls the full request: system prompt, tools, model. Most
+   of `runtimes/claude.py` becomes a thin HTTP wrapper. PreToolUse hook
+   becomes zipsa-side enforcement (already mostly the case since we
+   own the hook script — just wire it without going through Claude
+   Code's hook infrastructure).
+3. **Codex + Gemini runtime plugins** activated. The `runtimes/` ABC
+   already accommodates them; we just haven't exercised them end-to-end.
+4. **`pi-mono` integration** as a fully open-source backend option.
+
+**Why this is in BACKLOG, not active.** Each step above is large.
+Today (PR #37–#48 morning automation) shows that zipsa+Claude Code IS
+useful and works. The override → API → other backends progression is
+about positioning, not about a current bug. Defer until either (a)
+zipsa wants public branding distinct from Claude Code, (b) a real
+multi-backend use case appears, or (c) Claude Code does something
+that gets in the way.
+
+**First concrete next step (when we get there).** Investigate whether
+`claude` CLI has a `--system-prompt` override flag (vs only
+`--append-system-prompt`). If not, the path is straight to step 2
+(Anthropic API direct).
+
+---
