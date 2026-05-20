@@ -42,9 +42,10 @@ Three groups of user-specific values:
    `error.code="x_credentials_missing"`, and put the script's error
    message into `user_facing_summary` so the user sees exactly which
    var(s) are missing.
-2. Ask the user once for their X voice (1–2 sentences describing how
-   they want their tweets to sound). Remember the answer. On
-   subsequent runs the cached answer is used.
+2. Call `mcp__zipsa__ask_once` with key=`voice` (EXACTLY that — not
+   `x_voice`, `tweet_voice`, or any other variant). Prompt: "1–2
+   sentences describing how you want your tweets to sound."
+   The cached answer is reused on subsequent runs.
 3. Resolve target date from the user query. Default: today in the
    user's local timezone (see runtime contract on `tz_iana`).
 
