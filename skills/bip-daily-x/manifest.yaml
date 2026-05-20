@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.1.0
+  version: 0.2.0
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet
@@ -17,13 +17,32 @@ spec:
 
   instructions: ./SKILL.md
 
+  # Sonnet 4.6 handles tweet drafting + feedback refinement well;
+  # mechanical phases (precheck, report, post) override to Haiku below.
   model:
-    name: claude-opus-4-7
+    name: claude-sonnet-4-6
 
-  # Bind-mount Claude session logs so agenthud picks them up.
+  # Per-user host-side values the launcher resolves before container start.
+  requires:
+    project_roots:
+      type: list[directory]
+      prompt: |
+        Which directories contain your git projects?
+        These get mounted read-only so agenthud --with-git can resolve
+        the .git directory referenced by each Claude session's `cwd` —
+        the tweet draft benefits from knowing what was committed.
+        One path per line, ~ is expanded; empty line to finish.
+
   mounts:
+    # Bind-mount Claude session logs so agenthud picks them up.
     - host: ~/.claude/projects
       container: /home/agent/.claude/projects
+      mode: ro
+
+    # Mount each project root at its own host path inside the container
+    # so agenthud --with-git resolves the session's cwd to a real .git.
+    - source: requires.project_roots
+      preserve_host_path: true
       mode: ro
 
   # X creds (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
@@ -37,6 +56,7 @@ spec:
     default_target_date: today
     max_review_iterations: 5
     max_tweet_chars: 280
+    agenthud_version: "0.9.2"        # pinned for reproducibility
 
   state_schema: {}
 
@@ -45,6 +65,10 @@ spec:
       goal: |
         Verify the 4 X credentials are present, ensure voice is
         remembered, resolve target date.
+      # Mechanical: env-var check via script + ask_once for voice.
+      # Haiku is ~10x cheaper than Sonnet on this kind of work.
+      model:
+        name: claude-haiku-4-5-20251001
       allowed_tools:
         - Bash(python3:*)
       limits:
@@ -56,17 +80,27 @@ spec:
       goal: |
         Run agenthud for the target date and produce a structured
         per-project activity summary.
+      # Also mechanical: bash npx + jq slicing + a small JSON dump.
+      model:
+        name: claude-haiku-4-5-20251001
       allowed_tools:
         - Bash(npx:*)
+        - Bash(echo:*)        # harmless; lets agent log status
+        - Bash(jq:*)          # primary slicing tool for large reports
+        - Bash(wc:*)          # let agent check file size
+        - Read                # fallback for small files / inspecting jq output
       limits:
-        max_turns: 5
-        max_cost_usd: 0.10
-        timeout_seconds: 120
+        max_turns: 12
+        max_cost_usd: 0.20
+        timeout_seconds: 240
 
     - id: draft
       goal: |
         Write a single tweet (<= max_tweet_chars) in the user's voice
         from the report.
+      # Sonnet 4.6 (inherited from spec.model) — creative tweet writing
+      # is where the better model actually shows up, but Opus is overkill
+      # for 280 chars.
       allowed_tools: []
       limits:
         max_turns: 3
@@ -77,6 +111,8 @@ spec:
       goal: |
         Show the draft, accept feedback, regenerate up to 5 times,
         then confirm before posting.
+      # Sonnet (inherited) — iterating on user feedback while keeping
+      # voice consistent.
       allowed_tools: []
       limits:
         max_turns: 10
@@ -87,6 +123,9 @@ spec:
       goal: |
         Run /skill/scripts/post.py with the approved draft; surface
         the tweet URL and id.
+      # Mechanical: invoke a script with prepared input.
+      model:
+        name: claude-haiku-4-5-20251001
       allowed_tools:
         - Bash(python3:*)
       limits:
@@ -94,7 +133,8 @@ spec:
         max_cost_usd: 0.05
         timeout_seconds: 60
 
+  # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 26
-    max_cost_usd: 0.45
-    timeout_seconds: 2100
+    max_turns: 33    # 4 + 12 + 3 + 10 + 4
+    max_cost_usd: 0.55
+    timeout_seconds: 2220
