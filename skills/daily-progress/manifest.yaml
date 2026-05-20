@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.2
+  version: 0.5.3
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -17,8 +17,12 @@ spec:
 
   instructions: ./SKILL.md
 
+  # Default model for all phases (precheck overrides to haiku).
+  # Sonnet 4.6 handles per-project summarization (2-4 sentences) and
+  # Notion page assembly very well — Opus is overkill for daily logs and
+  # 5x more expensive on cache_creation tokens.
   model:
-    name: claude-opus-4-7
+    name: claude-sonnet-4-6
 
   # Per-user host-side values the launcher needs before container start.
   # `project_roots` is asked once on first run (or via `zipsa configure`),
