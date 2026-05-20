@@ -82,42 +82,47 @@ Steps:
    - `--detail-limit 200` caps activity body length so file size stays
      manageable on busy days.
 
-2. Check for empty sessions: if the file's `.sessions` is empty,
-   short-circuit. Use a small jq query:
+2. Run ONE jq query that produces the slim per-project summary you
+   need for the draft phase, written to a file. Do NOT iterate
+   exploratorily — a single query is enough.
 
    ```bash
-   jq '.sessions | length' /tmp/agenthud-report.json
+   jq '[.sessions[] | {
+     project: .project,
+     activity_count: (.activities | length),
+     commits: ([.activities[] | select(.type == "commit") | .label] | unique),
+     sample_responses: ([.activities[] | select(.type == "Response") | .text] | .[:3]),
+     sample_edits: ([.activities[] | select(.type == "Edit") | .label] | .[:3]),
+     sample_bash: ([.activities[] | select(.type == "Bash") | .label] | .[:3])
+   }] | group_by(.project) | map({
+     project: .[0].project,
+     activity_count: (map(.activity_count) | add),
+     commits: (map(.commits[]) | unique),
+     sample_responses: (map(.sample_responses[]) | .[:4]),
+     sample_edits: (map(.sample_edits[]) | unique | .[:5]),
+     sample_bash: (map(.sample_bash[]) | unique | .[:5])
+   })' /tmp/agenthud-report.json > /tmp/projects.json
    ```
 
-   If `0`: stop the skill with `status=ok` and `user_facing_summary`
-   "No Claude Code activity today — skipping post." No draft, no
-   prompts, no post.
+   **Important shell-quoting notes:**
+   - The whole jq filter is wrapped in single quotes; nothing inside
+     needs escaping.
+   - Use **explicit `{key: .key}` form** throughout — do NOT use jq's
+     `{key1, key2}` shorthand. Some agent/shell wrappers strip braces
+     or comma in the shorthand and jq then complains
+     `"expecting ':'"`.
 
-3. Slice the file with jq — DO NOT try to Read the whole thing.
-   Reading paged through with Read inflates context as cache_read
-   accumulates. Use jq to extract only what you need:
+   The query groups by project (merging multiple sessions for the
+   same project), takes ≤3-5 samples per category, and dedupes
+   commits/edits/bash labels.
 
-   **Project list:**
-   ```bash
-   jq '[.sessions[].project] | unique' /tmp/agenthud-report.json
-   ```
+3. Read `/tmp/projects.json` (small, ~5-10KB). If the parsed array
+   is empty (`[]`) — meaning agenthud found 0 sessions — stop the
+   skill with `status=ok` and `user_facing_summary` "No Claude Code
+   activity today — skipping post." No draft, no prompts, no post.
 
-   **Per-project slim summary** (for the draft phase):
-   ```bash
-   jq --arg p "launcher" '
-     [.sessions[] | select(.project == $p) | {
-       session_id, start, end,
-       activity_count: (.activities | length),
-       commits: [.activities[] | select(.type == "commit") | .label],
-       sample_activities: ([.activities[] | {type, label, text}] | .[:8])
-     }]
-   ' /tmp/agenthud-report.json
-   ```
-
-   For a tweet draft you really only need ~3-5 sample activities per
-   project plus the commits. Trim the slice further if needed.
-
-4. Build `next_phase_input` for draft phase:
+4. Build `next_phase_input` for the draft phase, picking the 1-3
+   most share-worthy items across all projects:
 
    ```json
    {
@@ -127,16 +132,17 @@ Steps:
      "projects": [
        {
          "name": "launcher",
-         "highlights": ["...activity 1...", "...activity 2..."],
+         "highlights": ["...the 1-3 things worth tweeting..."],
          "commits": ["fix: ...", "feat: ..."]
        }
      ]
    }
    ```
 
-   Pick the 1-3 most share-worthy items across all projects. Tweet
-   draft uses these — it's not "all activities," it's "the things
-   worth tweeting about."
+   "Share-worthy" means: a finished feature, a clear bug fix with a
+   measurable result, a refactor that ships, a notable insight. Not:
+   exploration without conclusion, tooling minor edits, work in
+   progress without a milestone.
 
 ### draft
 
