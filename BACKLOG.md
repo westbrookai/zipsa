@@ -388,3 +388,57 @@ that gets in the way.
 (Anthropic API direct).
 
 ---
+
+## `zipsa memory` CLI for managing skill memory values (2026-05-20)
+
+**Symptom.** `mcp__zipsa__ask_once` stores answers durably (key →
+value) in `~/.zipsa/memory/<skill>/skill-mem.json`. Once a value is
+set, there's no first-class way for the user to change or clear it
+short of editing the JSON file by hand.
+
+Concrete pain: in a real bip-daily-x run, voice was answered as
+"영어로 작성하고, 전문적이 스타일, 20년차 개발자 경험여서, BIP가 확실히
+느껴지도록" — that's locked in. If the user wants the next tweets to
+sound different (less self-promoting, more compact, different
+language), they have to:
+
+```bash
+cat ~/.zipsa/memory/bip-daily-x/skill-mem.json   # see what's stored
+# Manually edit voice value (jq -e or text editor)
+# Or wipe + let next run re-prompt
+```
+
+That's friction. The skill-author-and-user-are-the-same situation
+hides it (the user remembers the file path); for any future "skill
+shared with non-author user", this becomes a real wall.
+
+**Fix sketch.** Add a `zipsa memory` subcommand group:
+
+```
+zipsa memory list <skill>          # show all keys + values
+zipsa memory show <skill> <key>    # show one key
+zipsa memory edit <skill> <key>    # interactive: show current, prompt new
+zipsa memory edit <skill> <key> "<value>"   # non-interactive set
+zipsa memory clear <skill> <key>   # delete key (next ask_once re-prompts)
+zipsa memory clear <skill>         # delete entire skill memory file
+```
+
+Atomic writes (tmp + rename, same pattern as `save_requires` in
+`core/requires.py`). Confirmation prompt for `clear` of whole file.
+
+**Why this is in BACKLOG, not active.** Not blocking — manual JSON
+edit is annoying but works for power users. Wait until either (a) a
+real user can't figure out the manual path, or (b) a skill ships with
+multiple ask_once values that change semantics over time (e.g.
+preferences that legitimately evolve).
+
+**Test plan.** Unit tests on the memory-file mutation primitives
+(reuse `MemoryStore` from `core/memory_store.py`). Integration tests
+on the CLI commands with `--yes` flag for non-interactive paths.
+
+**Related.** This is the memory-side analog of `zipsa configure
+<skill>` (which already exists for `spec.requires`). Could be
+implemented in parallel since memory_store + paths.skill_memory_file
+already do the heavy lifting.
+
+---
