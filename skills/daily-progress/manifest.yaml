@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.5
+  version: 0.5.6
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -113,7 +113,7 @@ spec:
         Run agenthud to fetch a structured per-project activity report for
         the target date, then group/summarize for Notion.
       allowed_tools:
-        - Bash(npx:*)
+        - Bash(/skill/scripts/agenthud:*)   # tight: only this wrapper, no arbitrary npx
         - Bash(echo:*)        # harmless; lets agent log status if it chains commands
         - Bash(jq:*)          # primary slicing tool for large reports
         - Bash(wc:*)          # let agent check file size before deciding strategy
