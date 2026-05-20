@@ -27,6 +27,17 @@ _HITL_TOOL_NAMES = frozenset(
     f"mcp__zipsa__{t}" for t in ("ask", "confirm", "choose", "ask_once")
 )
 
+# Hook denials are deterministic (the launcher decided "no"). The agent
+# is instructed by runtime-contract.md to stop after a denial, but as
+# defense in depth the launcher force-terminates the phase once denials
+# in a single phase reach this cap. 3 = one typo retry + one config-issue
+# attempt + safety margin.
+MAX_HOOK_DENIALS_PER_PHASE = 3
+
+# All hook denial reasons carry this prefix. The launcher detects denials
+# in tool_result content by looking for this marker.
+_HOOK_DENIAL_PREFIX = "[HOOK_DENIAL]"
+
 
 @dataclass
 class LimitsState:
@@ -38,6 +49,7 @@ class LimitsState:
     # Counts
     phase_turns: int = 0
     phase_cost_usd: float = 0.0
+    phase_hook_denials: int = 0       # reset per phase; defense-in-depth cap
     run_turns: int = 0
     run_cost_usd: float = 0.0
 
@@ -98,6 +110,7 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
         state.phase_compute_started_at = now
         state.phase_turns = 0
         state.phase_cost_usd = 0.0
+        state.phase_hook_denials = 0
         state._phase_hitl_paused = 0.0
         state._counted_message_ids = set()
         # _hitl_open_at intentionally NOT cleared — a HITL ask could (in theory)
@@ -147,13 +160,29 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
             state._phase_hitl_paused += paused
             state._run_hitl_paused += paused
             state._hitl_open_at = None
+        # Hook-denial detection: any tool_result whose content starts with
+        # [HOOK_DENIAL] is the launcher hook's denial response. Counter is
+        # checked in check_limits → LimitBreach(kind="hook_denials").
+        for block in content:
+            if block.get("type") != "tool_result":
+                continue
+            body = block.get("content")
+            # content can be a string or a list of blocks (per Anthropic API).
+            if isinstance(body, str) and body.startswith(_HOOK_DENIAL_PREFIX):
+                state.phase_hook_denials += 1
+            elif isinstance(body, list):
+                for sub in body:
+                    text = sub.get("text") if isinstance(sub, dict) else None
+                    if isinstance(text, str) and text.startswith(_HOOK_DENIAL_PREFIX):
+                        state.phase_hook_denials += 1
+                        break
         return
 
 
 @dataclass(frozen=True)
 class LimitBreach:
     scope: Literal["phase", "aggregate"]
-    kind: Literal["turns", "cost", "time"]
+    kind: Literal["turns", "cost", "time", "hook_denials"]
     value: float
     limit: float
     phase: str
@@ -170,6 +199,17 @@ def check_limits(
     intent for the running phase). Within a scope, turns / cost / time
     are checked in declaration order.
     """
+    # Hook-denial cap is unconditional (not user-configurable per skill).
+    # Checked first because it's the cheapest signal — short-circuit
+    # before any manifest-driven limits.
+    if state.phase_hook_denials >= MAX_HOOK_DENIALS_PER_PHASE:
+        return LimitBreach(
+            scope="phase",
+            kind="hook_denials",
+            value=float(state.phase_hook_denials),
+            limit=float(MAX_HOOK_DENIALS_PER_PHASE),
+            phase=state.phase_id,
+        )
     # Phase scope
     if phase_limits is not None:
         b = _check_one(state, phase_limits, "phase")
