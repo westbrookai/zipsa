@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.2.3
+  version: 0.2.4
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet

@@ -56,13 +56,20 @@ extract per-project slices for the draft phase.
 
 Steps:
 
-1. Invoke agenthud via Bash, redirecting stdout to a file. Do NOT
-   capture stdout into the Bash tool result — high-activity days
-   produce 50-200KB+ of JSON, past Claude Code's ~30k-char Bash
-   output truncation.
+1. Warm the npm/npx cache, THEN capture agenthud output. First-time
+   npx invocations print "Need to install..." / progress messages to
+   stdout which would corrupt our JSON capture (jq then fails with
+   "Invalid literal at line 1, column 4"). A throwaway warmup call
+   guarantees the real call's stdout is clean JSON.
 
    ```bash
-   npx agenthud@0.9.2 report \
+   # Warmup — discard output, just populate npx cache.
+   npx -y agenthud@0.9.2 --version > /dev/null 2>&1
+
+   # Real call. Stdout is now guaranteed to be clean JSON; we redirect
+   # to a file because Claude Code's Bash tool truncates stdout at
+   # ~30k chars and high-activity days produce 50-200KB+ of JSON.
+   npx -y agenthud@0.9.2 report \
      --date <target_date> \
      --format json \
      --include response,bash,edit \

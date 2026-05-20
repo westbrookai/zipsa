@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.5
+  version: 0.5.6
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects

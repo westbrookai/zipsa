@@ -315,6 +315,43 @@ locally and on a CI matrix. Must pass every iteration before closing.
 
 ---
 
+## Pre-install agenthud (and other common tools) in the runtime image (2026-05-20)
+
+**Symptom.** First `npx agenthud@X.Y.Z` invocation in a fresh runtime
+container prints "Need to install..." / progress messages to stdout
+BEFORE the actual command output. Skills that capture stdout to a
+file (`npx ... > /tmp/report.json`) end up with non-JSON noise at
+line 1, breaking downstream jq parsing.
+
+Workaround currently in `daily-progress` and `bip-daily-x` SKILL.md:
+warm the npx cache via a throwaway `--version` call before the real
+capture call. Costs an extra Bash turn + an extra npm download for
+the warmup.
+
+**Real fix.** Pre-install `agenthud@<latest>` in
+`runtime/Dockerfile` so the package is already in the image's npm
+cache (or globally). Skills' `npx agenthud@<version>` would then use
+the cached copy when the requested version matches, and only hit the
+download path on a version mismatch.
+
+**Caveat.** Pinning a single agenthud version in the runtime image
+means skill version bumps that don't match still hit the cold-cache
+issue. Mitigation: install latest agenthud at runtime image build
+time + advise skills to track that latest. The runtime image's
+`AGENTHUD_VERSION` ENV (mirror of `CLAUDE_CODE_VERSION` etc. from
+PR #33) would surface the baked version so skills can detect mismatch.
+
+**Test plan.** After install: `docker run --rm <image> npx -y
+agenthud@<baked-version> --version` should print version instantly
+(no download). With a mismatched version, see the cold-cache
+behavior preserved.
+
+**Out of scope for this entry.** Doing the same for any other
+recurring npx-pinned package (e.g. future skills using `markdownlint`,
+`prettier`, etc.). Capture as separate items if/when they bite.
+
+---
+
 ## Standalone runtime: own the system prompt, plug in any model backend (2026-05-20)
 
 **Vision.** Today zipsa is a thin layer over Claude Code: invokes
