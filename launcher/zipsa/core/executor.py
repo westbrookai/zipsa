@@ -1210,19 +1210,28 @@ class DockerExecutor:
             if isinstance(value, str):
                 # Single directory
                 host_path = Path(value).expanduser().resolve()
-                if m.container in seen_container_paths:
+                container_path = str(host_path) if m.preserve_host_path else m.container
+                if container_path in seen_container_paths:
                     raise MountCollisionError(
-                        f"container path {m.container} already used by another mount"
+                        f"container path {container_path} already used by another mount"
                     )
-                cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
-                seen_container_paths.add(m.container)
+                cmd.extend(["-v", f"{host_path}:{container_path}:{m.mode}"])
+                seen_container_paths.add(container_path)
 
             elif isinstance(value, list):
-                # list[directory] expanded with container_prefix + basename(item)
+                # list[directory]: container path is either prefix+basename
+                # (default) or the host path verbatim (preserve_host_path).
                 for item in value:
                     host_path = Path(item).expanduser().resolve()
-                    container_path = m.container_prefix + host_path.name
+                    if m.preserve_host_path:
+                        container_path = str(host_path)
+                    else:
+                        container_path = m.container_prefix + host_path.name
                     if container_path in seen_container_paths:
+                        if m.preserve_host_path:
+                            raise MountCollisionError(
+                                f"duplicate path in requires.{key}: {container_path}"
+                            )
                         raise MountCollisionError(
                             f"basename collision in requires.{key}: "
                             f"multiple paths resolve to {container_path}"

@@ -133,6 +133,11 @@ spec:
 
 **Types (v1):** `string`, `directory`, `list[directory]`.
 
+**Dynamic mount forms:**
+- `source: requires.X` + `container: /path` — single directory at fixed container path
+- `source: requires.X` + `container_prefix: /prefix/` — list expanded as `prefix/basename` per item
+- `source: requires.X` + `preserve_host_path: true` — each value mounts at its own absolute host path inside the container. Use when downstream tools embed host paths (e.g. Claude session JSONL `cwd` for `agenthud --with-git`).
+
 **Flow:** On first `zipsa run`, the launcher prompts the user inline,
 validates each value, and saves to
 `~/.zipsa/<skill>@<version>/requires.yaml`. Subsequent runs read the

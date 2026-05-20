@@ -334,13 +334,27 @@ spec:
         (one path per line, ~ is expanded)
 ```
 
-Reference the value from `spec.mounts`:
+Reference the value from `spec.mounts`. Three forms:
 
 ```yaml
 spec:
   mounts:
+    # 1) basename mount: list expanded as /projects/<basename>
     - source: requires.project_roots
-      container_prefix: /projects/   # one mount per item
+      container_prefix: /projects/
+      mode: ro
+
+    # 2) single directory at a fixed container path
+    - source: requires.vault
+      container: /vault
+      mode: ro
+
+    # 3) host-path-preserving: each value mounts at its own absolute
+    # host path inside the container. Use when downstream tools embed
+    # host paths (e.g. agenthud --with-git resolves git via session
+    # JSONL cwd, which is a host path).
+    - source: requires.project_roots
+      preserve_host_path: true
       mode: ro
 ```
 

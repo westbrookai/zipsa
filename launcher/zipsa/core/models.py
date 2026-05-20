@@ -59,15 +59,21 @@ class SkillMount(BaseModel):
 
     Two forms:
       - Static: set `host` + `container`. host expanded at run time.
-      - Dynamic: set `source` (e.g. 'requires.project_roots') + either
-        `container` (single directory) or `container_prefix`
-        (list[directory] expanded to one mount per item).
+      - Dynamic: set `source` (e.g. 'requires.project_roots') + ONE of:
+          - `container` (single directory)
+          - `container_prefix` (list[directory] expanded to one mount per
+            item; container path = prefix + basename)
+          - `preserve_host_path: true` (each value mounted at the SAME
+            absolute path inside the container as on the host — useful
+            when downstream tools embed host paths, e.g. Claude session
+            JSONL `cwd` fields for git resolution by agenthud --with-git)
     """
 
     host: Optional[str] = None
     source: Optional[str] = None
     container: Optional[str] = None
     container_prefix: Optional[str] = None
+    preserve_host_path: bool = False
     mode: Literal["ro", "rw"] = "ro"
 
     @field_validator("container")
@@ -111,11 +117,27 @@ class SkillMount(BaseModel):
         if self.host is None and self.source is None:
             raise ValueError("must set either 'host' (static) or 'source' (dynamic)")
 
-        # container XOR container_prefix
-        if self.container is not None and self.container_prefix is not None:
-            raise ValueError("container and container_prefix are mutually exclusive")
-        if self.container is None and self.container_prefix is None:
-            raise ValueError("must set either 'container' or 'container_prefix'")
+        # preserve_host_path requires source (only applies to dynamic mounts)
+        if self.preserve_host_path and self.source is None:
+            raise ValueError(
+                "preserve_host_path requires 'source' (only valid on dynamic mounts)"
+            )
+
+        # preserve_host_path cannot be combined with container/container_prefix
+        if self.preserve_host_path and (
+            self.container is not None or self.container_prefix is not None
+        ):
+            raise ValueError(
+                "preserve_host_path cannot be combined with 'container' or "
+                "'container_prefix' (the container path IS the host path)"
+            )
+
+        # container XOR container_prefix (when not using preserve_host_path)
+        if not self.preserve_host_path:
+            if self.container is not None and self.container_prefix is not None:
+                raise ValueError("container and container_prefix are mutually exclusive")
+            if self.container is None and self.container_prefix is None:
+                raise ValueError("must set either 'container' or 'container_prefix'")
 
         # Static mounts can't use container_prefix
         if self.host is not None and self.container_prefix is not None:

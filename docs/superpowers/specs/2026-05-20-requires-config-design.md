@@ -123,6 +123,13 @@ spec:
     - source: requires.project_roots
       container_prefix: /projects/
       mode: ro
+
+    # Host-path-preserving (each value mounts at its own absolute host
+    # path inside the container). Use when downstream tools embed host
+    # paths — e.g. Claude session JSONL `cwd` for agenthud --with-git.
+    - source: requires.project_roots
+      preserve_host_path: true
+      mode: ro
 ```
 
 **Naming rules:**
@@ -150,6 +157,8 @@ Pydantic validators on `MountSpec` and `RequiresSpec`:
 | `requires.X.type = directory` + `container_prefix:` used | `use 'container' for single directory` |
 | `requires.X.type = list[directory]` + `container:` used | `use 'container_prefix' for list` |
 | `container_prefix:` does not end with `/` | `must end with '/'` |
+| `preserve_host_path: true` without `source:` | `preserve_host_path requires 'source'` |
+| `preserve_host_path: true` combined with `container:` or `container_prefix:` | `preserve_host_path cannot be combined with ...` |
 
 Invalid manifests fail at `zipsa run` startup. No container spawned.
 
