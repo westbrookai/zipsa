@@ -176,23 +176,50 @@ Steps:
      Activities for each session now include `◆` commit entries when
      git resolution succeeded.
 
-2. Read the file with the Read tool. For large reports, page through
-   using `offset` / `limit` (Read returns up to 2000 lines per call by
-   default and tells you the file's total line count).
+2. Slice the file with `jq` — DO NOT try to Read the whole thing.
+   Paging the full file via Read tool inflates context as cache_read
+   accumulates and easily breaks the phase cost budget. Use jq to
+   extract only what you need, in this order:
 
+   **Step 2a: Get the project list (small, always safe).**
+   ```bash
+   jq '[.sessions[].project] | unique' /tmp/agenthud-report.json
    ```
-   Read("/tmp/agenthud-report.json")   # first call: full file or first 2000 lines
-   # if truncated, continue with:
-   Read("/tmp/agenthud-report.json", offset=2000, limit=2000)
+   Output is a tiny JSON array like `["launcher", "runtime"]`. If
+   it's `[]`, treat as "no activity on that date" — skip to step 3
+   and emit `projects: []` to the next phase.
+
+   **Step 2b: For each project, get its slim per-session summary.**
+   Use a single jq query per project that returns just the fields
+   the summary needs (no full activity bodies in this slice):
+   ```bash
+   jq --arg p "launcher" '
+     [.sessions[] | select(.project == $p) | {
+       session_id, start, end,
+       activity_count: (.activities | length),
+       tools_used: [.activities[].label] | map(select(. != null)) | unique,
+       commits: [.activities[] | select(.type == "commit") | .label],
+       sample_activities: ([.activities[] | {type, label, text}] | .[:8])
+     }]
+   ' /tmp/agenthud-report.json
    ```
+   `sample_activities` caps at 8 per session — enough for a 2-4
+   sentence summary. If `sample_activities` looks insufficient for a
+   particular project, increase the slice (`.[:20]`) on a follow-up
+   call.
 
-   If the file is small (a few KB), one Read call is enough. Do not
-   try to `cat /tmp/agenthud-report.json` via Bash — that re-introduces
-   the truncation problem this rewrite fixes.
+   **When Read tool is OK:** if `wc -c /tmp/agenthud-report.json`
+   shows under ~80KB AND `jq '.sessions | length'` is small (1-2
+   sessions total), one Read call may be simpler than multiple jq
+   queries. Otherwise prefer jq.
 
-3. If no sessions match the date, agenthud emits a document with
-   `sessions: []`. Treat that as "no activity on that date" and pass
-   `projects: []` to the next phase.
+   **Never** try `cat /tmp/agenthud-report.json` via Bash — that
+   pipes the whole file through Claude Code's Bash tool which
+   truncates at ~30k chars (the original problem this rewrite fixes).
+
+3. If no sessions match the date, the project list (step 2a) is `[]`.
+   Treat that as "no activity on that date" and pass `projects: []`
+   to the next phase.
 
 4. For each project in the report, build a summary tuple:
    - `name`: the `project` field
