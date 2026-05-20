@@ -47,6 +47,8 @@ class DockerExecutor:
         # _build_docker_command is invoked.
         self._hitl_port: Optional[int] = None
         self._hitl_token: Optional[str] = None
+        # Resolved requires values — set by run() from the kwarg.
+        self._requires_values: dict[str, object] = {}
         # Image env-var cache (filled on first _get_image_env call). Same
         # tag → same env, so once per process is enough.
         self._image_env_cache: dict[str, dict[str, str]] = {}
@@ -74,6 +76,7 @@ class DockerExecutor:
         shell: bool = False,
         mcp_debug: bool = False,
         extra_docker_opts: Optional[list[str]] = None,
+        requires_values: Optional[dict[str, object]] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -91,6 +94,7 @@ class DockerExecutor:
             RuntimeError: If Docker execution fails
         """
         env = env or {}
+        self._requires_values = requires_values or {}
 
         # Auto-extract environment variables from MCP servers
         for server in skill.manifest.spec.mcp:
@@ -144,6 +148,7 @@ class DockerExecutor:
                     skill, user_input, claude_json_path, env, shell=shell,
                     mcp_debug_host=mcp_debug_host,
                     extra_docker_opts=extra_docker_opts,
+                    requires_values=self._requires_values,
                 )
 
                 if dry_run:
@@ -306,6 +311,7 @@ class DockerExecutor:
                 skill, user_input, claude_json_path, env,
                 mcp_debug_host=mcp_debug_host,
                 extra_docker_opts=extra_docker_opts,
+                requires_values=self._requires_values,
             )
             # Shared limits state for the single phase — needed for summary cost/turns.
             single_limits_state = new_state("main")
@@ -859,6 +865,7 @@ class DockerExecutor:
                         extra_docker_opts=extra_docker_opts,
                         phase_id=phase.id,
                         npm_volume=npm_volume,
+                        requires_values=self._requires_values,
                     )
 
                     # Stream events, capture last assistant text.

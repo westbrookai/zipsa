@@ -196,6 +196,93 @@ def carry_over_from_previous(
     return prev_version, filtered
 
 
+class RequiresUnsetError(Exception):
+    """No values saved and no TTY to prompt."""
+
+
+class RequiresStaleError(Exception):
+    """Saved values reference paths that no longer exist; no TTY to re-prompt."""
+
+
+def resolve_requires(
+    skill_name: str,
+    skill_version: str,
+    spec: dict[str, "RequiresEntry"],  # type: ignore[name-defined]
+    stream_in,
+    stream_out,
+    is_interactive: bool,
+) -> dict[str, Any]:
+    """End-to-end resolution: load + classify + (prompt OR error) + save + return.
+
+    Raises:
+        RequiresUnsetError when values are missing and no TTY.
+        RequiresStaleError when saved values went stale and no TTY.
+    """
+    from zipsa.paths import skill_requires_file
+
+    req_file = skill_requires_file(skill_name, skill_version)
+    saved = load_requires(req_file) if req_file.exists() else {}
+    ok, needs_prompt, needs_revalidation = classify_state(spec, saved)
+
+    if not needs_prompt and not needs_revalidation:
+        return ok
+
+    if not is_interactive:
+        if needs_prompt:
+            raise RequiresUnsetError(
+                f"{skill_name} requires configuration for: {', '.join(needs_prompt)}. "
+                f"Run: zipsa configure {skill_name}"
+            )
+        if needs_revalidation:
+            raise RequiresStaleError(
+                f"{skill_name} has stale paths in requires: {', '.join(needs_revalidation)}. "
+                f"Run: zipsa configure {skill_name}"
+            )
+
+    # Interactive: handle carry-over for first-time missing, then prompt
+    if needs_prompt and not saved:
+        carry = carry_over_from_previous(skill_name, skill_version, spec)
+        if carry is not None:
+            prev_ver, prev_values = carry
+            stream_out.write(f"\n[zipsa] Found previous install: {skill_name}@{prev_ver}\n")
+            for k, v in prev_values.items():
+                if isinstance(v, list):
+                    stream_out.write(f"  {k}: {len(v)} item(s)\n")
+                else:
+                    stream_out.write(f"  {k}: {v!r}\n")
+            stream_out.write("Carry over? [Y/n]: ")
+            stream_out.flush()
+            line = stream_in.readline().strip().lower()
+            if line in ("", "y", "yes"):
+                # Apply prev values, then re-classify to see what still needs prompting
+                merged = dict(prev_values)
+                ok2, np2, nr2 = classify_state(spec, merged)
+                ok.update(ok2)
+                needs_prompt = np2
+                needs_revalidation = nr2
+                saved = merged
+
+    # Prompt for anything still missing or stale
+    to_prompt = [(k, "needs_prompt") for k in needs_prompt] + \
+                [(k, "needs_revalidation") for k in needs_revalidation]
+    for key, reason in to_prompt:
+        entry = spec[key]
+        stream_out.write(f"\n{key} — {entry.prompt}\n")
+        current = saved.get(key) if reason == "needs_revalidation" else None
+        try:
+            value = prompt_for_value(entry, stream_in, stream_out, current=current)
+        except EOFError:
+            raise RequiresUnsetError(
+                f"input ended before {key} could be set"
+            )
+        ok[key] = value
+        saved[key] = value
+
+    # Persist
+    save_requires(req_file, {**saved, **ok})
+    return ok
+
+
 def prompt_for_value(
     entry: "RequiresEntry",
     stream_in,  # readable, with .readline()

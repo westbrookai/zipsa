@@ -238,6 +238,28 @@ def run(
         if skill.manifest.spec.children:
             _validate_children(skill)
 
+        # Resolve spec.requires values (or fail with a clear message).
+        from zipsa.core.requires import (
+            resolve_requires, RequiresUnsetError, RequiresStaleError,
+        )
+        requires_values: dict = {}
+        if skill.manifest.spec.requires:
+            try:
+                requires_values = resolve_requires(
+                    skill.name,
+                    skill.manifest.metadata.version,
+                    skill.manifest.spec.requires,
+                    sys.stdin,
+                    sys.stdout,
+                    is_interactive=sys.stdin.isatty(),
+                )
+            except RequiresUnsetError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(4)
+            except RequiresStaleError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(4)
+
         # Create executor
         executor = DockerExecutor(
             runtime=runtime,
@@ -246,7 +268,7 @@ def run(
 
         # Execute skill or start shell. user_input is always a string here
         # (substituted above) — no `or ""` guard needed.
-        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values)
 
         if output is None:
             # Dry run or shell mode — no exit code translation, no summary copy.
