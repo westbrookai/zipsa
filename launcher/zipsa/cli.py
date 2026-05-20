@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Annotated, Generator, Iterator, Optional
 
@@ -14,9 +15,20 @@ from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
+from .core.requires import (
+    RequiresError,
+    RequiresStaleError,
+    RequiresUnsetError,
+    carry_over_from_previous,
+    classify_state,
+    load_requires,
+    prompt_for_value,
+    resolve_requires,
+    save_requires,
+)
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
-from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
 from .runtimes import list_runtimes
 
 
@@ -230,6 +242,22 @@ def run(
         if skill.manifest.spec.children:
             _validate_children(skill)
 
+        # Resolve spec.requires values (or fail with a clear message).
+        requires_values: dict[str, object] = {}
+        if skill.manifest.spec.requires:
+            try:
+                requires_values = resolve_requires(
+                    skill.name,
+                    skill.manifest.metadata.version,
+                    skill.manifest.spec.requires,
+                    sys.stdin,
+                    sys.stdout,
+                    is_interactive=sys.stdin.isatty(),
+                )
+            except RequiresError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(4)
+
         # Create executor
         executor = DockerExecutor(
             runtime=runtime,
@@ -238,7 +266,7 @@ def run(
 
         # Execute skill or start shell. user_input is always a string here
         # (substituted above) — no `or ""` guard needed.
-        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt)
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values)
 
         if output is None:
             # Dry run or shell mode — no exit code translation, no summary copy.
@@ -468,6 +496,7 @@ def list_installed():
             "successful_runs": successful_runs,
             "is_link": item.is_symlink(),
             "item": item,
+            "health": health,  # NEW
         })
 
     total_count = len(installed) + len(broken)
@@ -480,6 +509,7 @@ def list_installed():
     for entry in installed:
         skill = entry["skill"]
         meta = entry["meta"]
+        health = entry["health"]
 
         name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
         version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
@@ -487,7 +517,17 @@ def list_installed():
             label = typer.style(" (linked)", fg=typer.colors.YELLOW)
         else:
             label = ""
-        typer.echo(f"  {name}{version}{label}")
+
+        if health.requires_total > 0 and health.requires_set < health.requires_total:
+            warn = typer.style(
+                f"  ⚠ needs configure ({health.requires_total} required, "
+                f"{health.requires_set} set)",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            warn = ""
+
+        typer.echo(f"  {name}{version}{label}{warn}")
 
         if entry["total_runs"] == 0:
             typer.echo(typer.style("    never run", fg=typer.colors.BRIGHT_BLACK))
@@ -572,6 +612,61 @@ def discover(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def configure(
+    name: Annotated[str, typer.Argument(help="Installed skill name")],
+):
+    """Set host-side values that the skill needs to run (spec.requires)."""
+    try:
+        skill = Skill.load(_resolve_skill_path(name))
+    except SkillNotInstalledError:
+        typer.echo(f"Error: skill '{name}' is not installed. Try: zipsa install <source>", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Error loading {name!r}: {e}", err=True)
+        raise typer.Exit(1)
+
+    spec = skill.manifest.spec.requires
+    if not spec:
+        typer.echo(f"{name} has no required configuration.")
+        raise typer.Exit(0)
+
+    typer.echo(f"\n[zipsa] {name}@{skill.manifest.metadata.version}\n")
+
+    req_file = skill_requires_file(name, skill.manifest.metadata.version)
+    saved = load_requires(req_file) if req_file.exists() else {}
+
+    # Use sys.stdin/stdout lazily at call site so CliRunner can patch them.
+    stream_in = sys.stdin
+    stream_out = sys.stdout
+
+    new_values: dict[str, object] = dict(saved)  # start from existing
+    try:
+        for key, entry in spec.items():
+            typer.echo(f"{key} — {entry.prompt}")
+            current = saved.get(key)
+            try:
+                value = prompt_for_value(entry, stream_in, stream_out, current=current)
+            except EOFError:
+                typer.echo("Error: configure requires an interactive terminal.", err=True)
+                raise typer.Exit(4)
+            except ValueError as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(1)
+            new_values[key] = value
+            if isinstance(value, list):
+                typer.echo(f"  ✓ saved {len(value)} item(s)")
+            else:
+                typer.echo(f"  ✓ saved")
+            typer.echo()
+    except KeyboardInterrupt:
+        typer.echo("\nCancelled. No changes saved.")
+        raise typer.Exit(130)
+
+    save_requires(req_file, new_values)
+    typer.echo(f"Saved to {req_file}")
 
 
 @app.command()

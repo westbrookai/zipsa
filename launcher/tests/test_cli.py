@@ -28,6 +28,7 @@ class TestRunCommand:
         mock_skill_cls.load.return_value = mock_skill
 
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_executor = Mock()
         mock_executor.run.return_value = iter([
             {"type": "text", "content": "Hello"},
@@ -42,7 +43,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None
+            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -52,6 +53,7 @@ class TestRunCommand:
         """Run with custom runtime."""
         mock_skill = Mock()
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
         mock_executor_cls.return_value.run.return_value = iter([
             {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
@@ -74,6 +76,7 @@ class TestRunCommand:
         """Run with environment variables."""
         mock_skill = Mock()
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
         mock_executor.run.return_value = iter([
@@ -106,6 +109,7 @@ class TestRunCommand:
         """Dry run should not execute."""
         mock_skill = Mock()
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
         mock_executor.run.return_value = None
@@ -115,7 +119,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None
+            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -126,6 +130,7 @@ class TestRunCommand:
         mock_skill = Mock()
         mock_skill.name = "test-skill"
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
         mock_executor = Mock()
         mock_executor.run.return_value = iter([
@@ -137,7 +142,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None
+            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None, requires_values={}
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -477,6 +482,7 @@ class TestRunOutputMode:
         mock_skill = Mock()
         mock_skill.name = "test-skill"
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
 
         events = [
@@ -501,6 +507,7 @@ class TestRunOutputMode:
         mock_skill = Mock()
         mock_skill.name = "test-skill"
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
 
         events = [
@@ -527,6 +534,7 @@ class TestRunOutputMode:
         mock_skill = Mock()
         mock_skill.name = "test-skill"
         mock_skill.manifest.spec.children = []
+        mock_skill.manifest.spec.requires = {}
         mock_skill_cls.load.return_value = mock_skill
 
         event = {"type": "result", "total_cost_usd": 0.01}
@@ -1544,3 +1552,165 @@ class TestChildrenValidation:
         # No Warning lines in stderr
         warning_lines = [l for l in result.stderr.splitlines() if "Warning" in l]
         assert not warning_lines, f"Unexpected warnings: {warning_lines}"
+
+
+class TestRunPreflightRequires:
+    """The run command must resolve spec.requires before invoking the executor."""
+
+    def _install_skill_with_requires(self, tmp_path):
+        src = tmp_path / "src" / "needs-cfg"
+        src.mkdir(parents=True)
+        (src / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: needs-cfg, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    project_roots:\n"
+            "      type: list[directory]\n"
+            "      prompt: 'where?'\n"
+            "  mounts:\n"
+            "    - {source: requires.project_roots, container_prefix: /projects/, mode: ro}\n"
+        )
+        (src / "SKILL.md").write_text("# x")
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "needs-cfg").symlink_to(src)
+        return src
+
+    def test_run_no_tty_no_saved_values_exits_4(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        self._install_skill_with_requires(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        result = runner.invoke(app, ["run", "needs-cfg", "hi", "--dry-run"])
+        assert result.exit_code == 4
+        assert "requires" in result.output.lower()
+
+    def test_run_dry_run_with_saved_values_proceeds(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        self._install_skill_with_requires(tmp_path)
+        code = tmp_path / "Code"; code.mkdir()
+        (tmp_path / "needs-cfg@0.1.0").mkdir(parents=True)
+        (tmp_path / "needs-cfg@0.1.0" / "requires.yaml").write_text(
+            f"project_roots:\n  - {code}\n"
+        )
+        result = runner.invoke(app, ["run", "needs-cfg", "hi", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        # Dry-run prints the docker command — should contain our mount
+        assert f"{code}:/projects/Code:ro" in result.output
+
+    def test_run_stale_path_no_tty_exits_4(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        self._install_skill_with_requires(tmp_path)
+        (tmp_path / "needs-cfg@0.1.0").mkdir(parents=True)
+        (tmp_path / "needs-cfg@0.1.0" / "requires.yaml").write_text(
+            "project_roots:\n  - /no/such/dir\n"
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        result = runner.invoke(app, ["run", "needs-cfg", "hi", "--dry-run"])
+        assert result.exit_code == 4
+        assert "stale" in result.output.lower() or "no longer" in result.output.lower()
+
+    def test_run_skill_without_requires_unchanged(self, tmp_path, monkeypatch):
+        """Regression: existing skills (no spec.requires) skip the pre-flight entirely."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        src = tmp_path / "src" / "plain"
+        src.mkdir(parents=True)
+        (src / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: plain, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        (src / "SKILL.md").write_text("# x")
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "plain").symlink_to(src)
+        # No requires.yaml, no TTY — must still succeed in dry-run
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        result = runner.invoke(app, ["run", "plain", "hi", "--dry-run"])
+        assert result.exit_code == 0, result.output
+
+    def test_run_carry_over_no_tty_exits_4(self, tmp_path, monkeypatch):
+        """Carry-over needs user confirmation; no TTY → exit 4."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        # Install at 0.1.0; pre-populate 0.0.9
+        self._install_skill_with_requires(tmp_path)
+        code = tmp_path / "Code"; code.mkdir()
+        (tmp_path / "needs-cfg@0.0.9").mkdir(parents=True)
+        (tmp_path / "needs-cfg@0.0.9" / "requires.yaml").write_text(
+            f"project_roots:\n  - {code}\n"
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        result = runner.invoke(app, ["run", "needs-cfg", "hi", "--dry-run"])
+        assert result.exit_code == 4
+
+
+class TestListRequiresIndicator:
+    def test_list_shows_needs_configure_when_unset(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "needs"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: needs, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+            "    b: {type: string, prompt: 'b?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" in result.output
+        assert "2 required" in result.output
+        assert "0 set" in result.output
+
+    def test_list_no_indicator_when_all_set(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "done"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: done, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        (tmp_path / "done@0.1.0").mkdir()
+        (tmp_path / "done@0.1.0" / "requires.yaml").write_text("a: hello\n")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" not in result.output
+
+    def test_list_no_indicator_for_skills_without_requires(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from zipsa.cli import app
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "plain"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: plain, version: 0.1.0}\n"
+            "spec: {purpose: x, instructions: ./SKILL.md}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        result = CliRunner().invoke(app, ["list"])
+        assert result.exit_code == 0
+        assert "needs configure" not in result.output

@@ -107,6 +107,45 @@ except Exception as e:
 
 ---
 
+## `spec.requires:` — per-user host-side config
+
+When a skill needs host-side values that vary per user (project
+directory paths, vault locations, etc.) AND the launcher needs them
+*before the container starts* (e.g. to set mount flags), declare them
+in `spec.requires:`.
+
+**Manifest:**
+
+```yaml
+spec:
+  requires:
+    project_roots:
+      type: "list[directory]"
+      prompt: |
+        Which directories contain your git projects?
+        (one path per line, ~ is expanded)
+
+  mounts:
+    - source: requires.project_roots
+      container_prefix: /projects/
+      mode: ro
+```
+
+**Types (v1):** `string`, `directory`, `list[directory]`.
+
+**Flow:** On first `zipsa run`, the launcher prompts the user inline,
+validates each value, and saves to
+`~/.zipsa/<skill>@<version>/requires.yaml`. Subsequent runs read the
+saved file. Use `zipsa configure <skill>` to update values later.
+
+**Use `spec.requires` for:** mount paths, env-file paths, anything the
+launcher reads pre-container. NOT for values the agent uses at run
+time (those still belong in skill memory via `ask_once`).
+
+See spec for full details: `docs/superpowers/specs/2026-05-20-requires-config-design.md`.
+
+---
+
 ## Testing Strategy
 
 ### Running Tests

@@ -443,3 +443,185 @@ class TestChildren:
         for bad in ["../escape", "skill/with-slash", "..", "skill\\..\\other"]:
             with pytest.raises(ValidationError):
                 self._spec(children=[bad])
+
+
+class TestRequiresEntry:
+    def test_directory_type_loads(self):
+        from zipsa.core.models import RequiresEntry
+        e = RequiresEntry(type="directory", prompt="Where?")
+        assert e.type == "directory"
+        assert e.prompt == "Where?"
+
+    def test_list_directory_type_loads(self):
+        from zipsa.core.models import RequiresEntry
+        e = RequiresEntry(type="list[directory]", prompt="List them")
+        assert e.type == "list[directory]"
+
+    def test_string_type_loads(self):
+        from zipsa.core.models import RequiresEntry
+        e = RequiresEntry(type="string", prompt="Tell me")
+        assert e.type == "string"
+
+    def test_unsupported_type_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import RequiresEntry
+        with pytest.raises(ValidationError):
+            RequiresEntry(type="int", prompt="How many?")
+
+    def test_empty_prompt_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import RequiresEntry
+        with pytest.raises(ValidationError):
+            RequiresEntry(type="directory", prompt="")
+
+    def test_requires_block_in_spec_loads(self):
+        from zipsa.core.models import SkillSpec
+        spec = SkillSpec(
+            purpose="test",
+            instructions="./SKILL.md",
+            requires={
+                "project_roots": {"type": "list[directory]", "prompt": "Where?"},
+            },
+        )
+        assert "project_roots" in spec.requires
+        assert spec.requires["project_roots"].type == "list[directory]"
+
+    def test_requires_key_must_be_lowercase_underscore(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError, match="lowercase"):
+            SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                requires={"BadKey": {"type": "string", "prompt": "?"}},
+            )
+
+    def test_requires_key_must_not_have_dot(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError):
+            SkillSpec(
+                purpose="test",
+                instructions="./SKILL.md",
+                requires={"a.b": {"type": "string", "prompt": "?"}},
+            )
+
+    def test_requires_empty_dict_is_default(self):
+        from zipsa.core.models import SkillSpec
+        spec = SkillSpec(purpose="test", instructions="./SKILL.md")
+        assert spec.requires == {}
+
+
+class TestDynamicMount:
+    def test_static_mount_still_works(self):
+        from zipsa.core.models import SkillMount
+        m = SkillMount(host="~/x", container="/y", mode="ro")
+        assert m.host == "~/x"
+        assert m.source is None
+        assert m.container_prefix is None
+
+    def test_source_with_container_loads(self):
+        from zipsa.core.models import SkillMount
+        m = SkillMount(source="requires.obsidian_vault", container="/vault", mode="ro")
+        assert m.source == "requires.obsidian_vault"
+        assert m.container == "/vault"
+        assert m.host is None
+
+    def test_source_with_container_prefix_loads(self):
+        from zipsa.core.models import SkillMount
+        m = SkillMount(source="requires.project_roots", container_prefix="/projects/", mode="ro")
+        assert m.source == "requires.project_roots"
+        assert m.container_prefix == "/projects/"
+
+    def test_host_and_source_together_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            SkillMount(host="~/x", source="requires.y", container="/z")
+
+    def test_container_and_container_prefix_together_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="container and container_prefix"):
+            SkillMount(source="requires.y", container="/z", container_prefix="/zz/")
+
+    def test_container_prefix_must_end_with_slash(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="end with '/'"):
+            SkillMount(source="requires.y", container_prefix="/projects")
+
+    def test_source_without_container_or_prefix_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="must set"):
+            SkillMount(source="requires.y")
+
+    def test_neither_host_nor_source_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="must set"):
+            SkillMount(container="/y")
+
+    def test_source_must_start_with_requires_dot(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="requires\\."):
+            SkillMount(source="config.x", container="/y")
+
+    def test_host_with_container_prefix_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillMount
+        with pytest.raises(ValidationError, match="static mounts.*cannot use container_prefix"):
+            SkillMount(host="~/x", container_prefix="/y/")
+
+
+class TestRequiresMountIntegration:
+    def test_source_referencing_existing_key_passes(self):
+        from zipsa.core.models import SkillSpec
+        spec = SkillSpec(
+            purpose="t", instructions="./SKILL.md",
+            requires={"project_roots": {"type": "list[directory]", "prompt": "?"}},
+            mounts=[{"source": "requires.project_roots", "container_prefix": "/projects/"}],
+        )
+        assert spec.mounts[0].source == "requires.project_roots"
+
+    def test_source_referencing_unknown_key_rejected(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError, match="unknown requires key"):
+            SkillSpec(
+                purpose="t", instructions="./SKILL.md",
+                requires={"project_roots": {"type": "list[directory]", "prompt": "?"}},
+                mounts=[{"source": "requires.nonexistent", "container": "/x"}],
+            )
+
+    def test_directory_type_must_use_container(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError, match="container.*for single directory"):
+            SkillSpec(
+                purpose="t", instructions="./SKILL.md",
+                requires={"obsidian_vault": {"type": "directory", "prompt": "?"}},
+                mounts=[{"source": "requires.obsidian_vault", "container_prefix": "/v/"}],
+            )
+
+    def test_list_directory_type_must_use_container_prefix(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError, match="container_prefix.*for list"):
+            SkillSpec(
+                purpose="t", instructions="./SKILL.md",
+                requires={"project_roots": {"type": "list[directory]", "prompt": "?"}},
+                mounts=[{"source": "requires.project_roots", "container": "/x"}],
+            )
+
+    def test_string_type_cannot_be_mount_source(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError, match="cannot be used as a mount source"):
+            SkillSpec(
+                purpose="t", instructions="./SKILL.md",
+                requires={"voice": {"type": "string", "prompt": "?"}},
+                mounts=[{"source": "requires.voice", "container": "/x"}],
+            )

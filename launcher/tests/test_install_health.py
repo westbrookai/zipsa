@@ -108,3 +108,65 @@ class TestBrokenDetection:
         # The absolute resolved path should appear, not the bare relative one
         expected_resolved = (tmp_path / ".." / "gone-relative").resolve()
         assert str(expected_resolved) in h.reason
+
+
+class TestRequiresStatus:
+    def test_skill_without_requires_reports_zero(self, tmp_path):
+        from zipsa.core.install_health import check_install
+        d = tmp_path / "s"
+        d.mkdir()
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 1.0.0}\n"
+            "spec: {purpose: x, instructions: ./SKILL.md}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        h = check_install(d)
+        assert h.requires_total == 0
+        assert h.requires_set == 0
+
+    def test_skill_with_requires_no_values(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "s"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 1.0.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+            "    b: {type: string, prompt: 'b?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        from zipsa.core.install_health import check_install
+        h = check_install(d)
+        assert h.requires_total == 2
+        assert h.requires_set == 0
+
+    def test_skill_with_requires_some_values_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        d = tmp_path / "skills" / "s"
+        d.mkdir(parents=True)
+        (d / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: s, version: 1.0.0}\n"
+            "spec:\n"
+            "  purpose: x\n"
+            "  instructions: ./SKILL.md\n"
+            "  requires:\n"
+            "    a: {type: string, prompt: 'a?'}\n"
+            "    b: {type: string, prompt: 'b?'}\n"
+        )
+        (d / "SKILL.md").write_text("# x")
+        # Save only a
+        (tmp_path / "s@1.0.0").mkdir()
+        (tmp_path / "s@1.0.0" / "requires.yaml").write_text("a: hello\n")
+        from zipsa.core.install_health import check_install
+        h = check_install(d)
+        assert h.requires_total == 2
+        assert h.requires_set == 1

@@ -24,6 +24,10 @@ def skill_env_file(name: str, version: str) -> Path:
     return skill_data_dir(name, version) / ".env"
 
 
+def skill_requires_file(name: str, version: str) -> Path:
+    return skill_data_dir(name, version) / "requires.yaml"
+
+
 def global_env_file() -> Path:
     return zipsa_home() / ".env"
 

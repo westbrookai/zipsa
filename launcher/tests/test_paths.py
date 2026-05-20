@@ -77,3 +77,11 @@ class TestInstalledSkillPaths:
         with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
             with pytest.raises(SkillNotInstalledError, match="daily-progress"):
                 resolve_skill("daily-progress")
+
+
+class TestSkillRequiresFile:
+    def test_returns_path_inside_skill_data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.paths import skill_requires_file
+        p = skill_requires_file("daily-progress", "0.4.0")
+        assert p == tmp_path / "daily-progress@0.4.0" / "requires.yaml"

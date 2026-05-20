@@ -1,0 +1,35 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: requires-demo
+  version: 0.1.0
+  author: zipsa
+  description: |
+    Demo skill exercising spec.requires + dynamic mount.
+
+spec:
+  purpose: |
+    Verify that a skill declaring spec.requires resolves values
+    from the launcher and exposes them inside the container.
+
+  instructions: ./SKILL.md
+
+  requires:
+    project_roots:
+      type: "list[directory]"
+      prompt: |
+        Which directories contain your projects? (one per line, ~ expanded)
+
+  mounts:
+    - source: requires.project_roots
+      container_prefix: /projects/
+      mode: ro
+
+  tools:
+    builtin:
+      - Read
+
+  limits:
+    max_turns: 2
+    max_cost_usd: 0.05
+    timeout_seconds: 15

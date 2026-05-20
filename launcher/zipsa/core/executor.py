@@ -22,6 +22,10 @@ from .. import paths as zipsa_paths
 CONTAINER_WORKSPACE = "/home/agent/workspace"
 
 
+class MountCollisionError(ValueError):
+    """Raised when two dynamic mount entries resolve to the same container path."""
+
+
 class DockerExecutor:
     """Orchestrates Docker container execution for skills."""
 
@@ -43,6 +47,8 @@ class DockerExecutor:
         # _build_docker_command is invoked.
         self._hitl_port: Optional[int] = None
         self._hitl_token: Optional[str] = None
+        # Resolved requires values — set by run() from the kwarg.
+        self._requires_values: dict[str, object] = {}
         # Image env-var cache (filled on first _get_image_env call). Same
         # tag → same env, so once per process is enough.
         self._image_env_cache: dict[str, dict[str, str]] = {}
@@ -70,6 +76,7 @@ class DockerExecutor:
         shell: bool = False,
         mcp_debug: bool = False,
         extra_docker_opts: Optional[list[str]] = None,
+        requires_values: Optional[dict[str, object]] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -87,6 +94,7 @@ class DockerExecutor:
             RuntimeError: If Docker execution fails
         """
         env = env or {}
+        self._requires_values = requires_values or {}
 
         # Auto-extract environment variables from MCP servers
         for server in skill.manifest.spec.mcp:
@@ -140,6 +148,7 @@ class DockerExecutor:
                     skill, user_input, claude_json_path, env, shell=shell,
                     mcp_debug_host=mcp_debug_host,
                     extra_docker_opts=extra_docker_opts,
+                    requires_values=self._requires_values,
                 )
 
                 if dry_run:
@@ -302,6 +311,7 @@ class DockerExecutor:
                 skill, user_input, claude_json_path, env,
                 mcp_debug_host=mcp_debug_host,
                 extra_docker_opts=extra_docker_opts,
+                requires_values=self._requires_values,
             )
             # Shared limits state for the single phase — needed for summary cost/turns.
             single_limits_state = new_state("main")
@@ -855,6 +865,7 @@ class DockerExecutor:
                         extra_docker_opts=extra_docker_opts,
                         phase_id=phase.id,
                         npm_volume=npm_volume,
+                        requires_values=self._requires_values,
                     )
 
                     # Stream events, capture last assistant text.
@@ -1089,6 +1100,7 @@ class DockerExecutor:
         allowed_tools_override: Optional[str] = None,
         phase_id: Optional[str] = None,
         npm_volume: Optional[str] = None,
+        requires_values: Optional[dict[str, object]] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -1098,10 +1110,12 @@ class DockerExecutor:
             claude_json_path: Path to .claude.json file (on host)
             env: Environment variables
             shell: If True, build command for interactive shell
+            requires_values: Resolved requires values keyed by requires key name
 
         Returns:
             Command array for subprocess
         """
+        requires_values = requires_values or {}
         cmd = [
             "docker",
             "run",
@@ -1164,10 +1178,61 @@ class DockerExecutor:
                 mode = server.mount.mode
                 cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
-        # Generic spec.mounts entries — explicit container path, independent of MCP
+        # spec.mounts: both static (host) and dynamic (source -> requires.X)
+        # Seed collision tracker with zipsa-internal container paths so a
+        # manifest that declares e.g. `container: /skill` errors cleanly
+        # instead of silently double-mounting (undefined Docker behavior).
+        seen_container_paths: set[str] = {
+            "/.zipsa", "/skill", "/zipsa-hooks/pretooluse.py",
+        }
         for m in skill.manifest.spec.mounts:
-            host_path = Path(m.host).expanduser().resolve()
-            cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+            if m.host is not None:
+                # Static mount
+                if m.container in seen_container_paths:
+                    raise MountCollisionError(
+                        f"container path {m.container} already used "
+                        "(by a zipsa-internal mount or earlier spec.mounts entry)"
+                    )
+                host_path = Path(m.host).expanduser().resolve()
+                cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+                seen_container_paths.add(m.container)
+                continue
+
+            # Dynamic mount (m.source is "requires.<key>")
+            key = m.source.removeprefix("requires.")
+            value = requires_values.get(key)
+            if value is None:
+                # Should have been caught in pre-flight; defensive
+                raise ValueError(
+                    f"mount source 'requires.{key}' has no value at run time"
+                )
+
+            if isinstance(value, str):
+                # Single directory
+                host_path = Path(value).expanduser().resolve()
+                if m.container in seen_container_paths:
+                    raise MountCollisionError(
+                        f"container path {m.container} already used by another mount"
+                    )
+                cmd.extend(["-v", f"{host_path}:{m.container}:{m.mode}"])
+                seen_container_paths.add(m.container)
+
+            elif isinstance(value, list):
+                # list[directory] expanded with container_prefix + basename(item)
+                for item in value:
+                    host_path = Path(item).expanduser().resolve()
+                    container_path = m.container_prefix + host_path.name
+                    if container_path in seen_container_paths:
+                        raise MountCollisionError(
+                            f"basename collision in requires.{key}: "
+                            f"multiple paths resolve to {container_path}"
+                        )
+                    cmd.extend(["-v", f"{host_path}:{container_path}:{m.mode}"])
+                    seen_container_paths.add(container_path)
+            else:
+                raise ValueError(
+                    f"requires.{key} has unexpected type {type(value).__name__}"
+                )
 
         # Auto-mount the skill's own source directory so skills can bundle
         # helper scripts (e.g. scripts/post.py) and reach them at /skill.
