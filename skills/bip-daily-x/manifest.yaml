@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.2.0
+  version: 0.2.1
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet
@@ -16,6 +16,14 @@ spec:
     explicit approval. Refuse anything not in this scope.
 
   instructions: ./SKILL.md
+
+  # bip-daily-x is meant to be run daily with no args (`zipsa run bip-daily-x`).
+  # Without a default_query the launcher leaves user_query empty, which
+  # triggers the runtime contract's empty-query 집사 intro path — the
+  # agent then burns budget on contract-reading instead of doing precheck
+  # work. "today" is the sensible default; users can override by passing
+  # "yesterday" or an ISO date.
+  default_query: today
 
   # Sonnet 4.6 handles tweet drafting + feedback refinement well;
   # mechanical phases (precheck, report, post) override to Haiku below.
@@ -66,15 +74,17 @@ spec:
         Verify the 4 X credentials are present, ensure voice is
         remembered, resolve target date.
       # Mechanical: env-var check via script + ask_once for voice.
-      # Haiku is ~10x cheaper than Sonnet on this kind of work.
+      # Haiku is ~10x cheaper than Sonnet on this kind of work, but
+      # Haiku is also verbose in its thinking — give it a bit more
+      # room than the absolute minimum.
       model:
         name: claude-haiku-4-5-20251001
       allowed_tools:
         - Bash(python3:*)
       limits:
-        max_turns: 4
-        max_cost_usd: 0.05
-        timeout_seconds: 60
+        max_turns: 6
+        max_cost_usd: 0.10
+        timeout_seconds: 90
 
     - id: report
       goal: |
@@ -135,6 +145,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 33    # 4 + 12 + 3 + 10 + 4
-    max_cost_usd: 0.55
-    timeout_seconds: 2220
+    max_turns: 35    # 6 + 12 + 3 + 10 + 4
+    max_cost_usd: 0.60
+    timeout_seconds: 2250
