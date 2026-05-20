@@ -196,11 +196,16 @@ def carry_over_from_previous(
     return prev_version, filtered
 
 
-class RequiresUnsetError(Exception):
+class RequiresError(Exception):
+    """Base for requires-resolution failures (allows callers to catch either
+    unset or stale with a single `except RequiresError` block)."""
+
+
+class RequiresUnsetError(RequiresError):
     """No values saved and no TTY to prompt."""
 
 
-class RequiresStaleError(Exception):
+class RequiresStaleError(RequiresError):
     """Saved values reference paths that no longer exist; no TTY to re-prompt."""
 
 
@@ -252,6 +257,10 @@ def resolve_requires(
                     stream_out.write(f"  {k}: {v!r}\n")
             stream_out.write("Carry over? [Y/n]: ")
             stream_out.flush()
+            # Intentional: EOF here (readline() == "") and bare-enter both
+            # collapse to "" after strip(), which matches the Y default below.
+            # That's the desired UX — the prompt advertises Y as default, so
+            # input-unavailable should accept the default rather than abort.
             line = stream_in.readline().strip().lower()
             if line in ("", "y", "yes"):
                 # Apply prev values, then re-classify to see what still needs prompting

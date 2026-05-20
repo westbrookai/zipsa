@@ -16,11 +16,15 @@ from .core.executor import DockerExecutor
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
 from .core.requires import (
-    load_requires,
-    save_requires,
-    prompt_for_value,
-    classify_state,
+    RequiresError,
+    RequiresStaleError,
+    RequiresUnsetError,
     carry_over_from_previous,
+    classify_state,
+    load_requires,
+    prompt_for_value,
+    resolve_requires,
+    save_requires,
 )
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
@@ -239,10 +243,7 @@ def run(
             _validate_children(skill)
 
         # Resolve spec.requires values (or fail with a clear message).
-        from zipsa.core.requires import (
-            resolve_requires, RequiresUnsetError, RequiresStaleError,
-        )
-        requires_values: dict = {}
+        requires_values: dict[str, object] = {}
         if skill.manifest.spec.requires:
             try:
                 requires_values = resolve_requires(
@@ -253,10 +254,7 @@ def run(
                     sys.stdout,
                     is_interactive=sys.stdin.isatty(),
                 )
-            except RequiresUnsetError as e:
-                typer.echo(f"Error: {e}", err=True)
-                raise typer.Exit(4)
-            except RequiresStaleError as e:
+            except RequiresError as e:
                 typer.echo(f"Error: {e}", err=True)
                 raise typer.Exit(4)
 
