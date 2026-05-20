@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-progress
-  version: 0.5.4
+  version: 0.5.5
   author: westbrookai
   description: |
     Summarize Claude Code sessions for a single day across all projects
@@ -115,7 +115,9 @@ spec:
       allowed_tools:
         - Bash(npx:*)
         - Bash(echo:*)        # harmless; lets agent log status if it chains commands
-        - Read                # page through /tmp/agenthud-report.json
+        - Bash(jq:*)          # primary slicing tool for large reports
+        - Bash(wc:*)          # let agent check file size before deciding strategy
+        - Read                # fallback for small files / inspecting jq output
       limits:
         # Reading large reports needs paging — bump turns vs the original 6.
         # Cost bumped accordingly (Sonnet cache_read accumulates across reads).
