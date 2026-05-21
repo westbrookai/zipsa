@@ -312,3 +312,179 @@ class TestAskOnceWired:
             assert "Westbrook HQ" in text2
         finally:
             server.stop()
+
+
+class TestGetArtifactMCP:
+    """End-to-end: get_artifact MCP tool reads artifacts from disk."""
+
+    def _mcp_session(self, server):
+        """Return (url, session_headers) after completing MCP initialize handshake."""
+        import httpx
+        url = f"http://127.0.0.1:{server.port}/mcp"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {server.token}",
+        }
+        init = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"},
+            },
+        }
+        r = httpx.post(url, json=init, headers=headers, timeout=5.0)
+        assert r.status_code == 200
+        session_id = r.headers["mcp-session-id"]
+        session_headers = {**headers, "mcp-session-id": session_id}
+        httpx.post(url, json={
+            "jsonrpc": "2.0", "method": "notifications/initialized",
+        }, headers=session_headers, timeout=5.0)
+        return url, session_headers
+
+    def _parse_mcp_response(self, r):
+        import json
+        body = r.text
+        if "data:" in body:
+            for line in body.splitlines():
+                if line.startswith("data:"):
+                    return json.loads(line[5:].strip())
+        return r.json()
+
+    def test_get_artifact_returns_text_content(self, tmp_path, monkeypatch):
+        """get_artifact reads a text artifact from disk and returns it via MCP."""
+        import io as _io
+        import httpx
+        import json
+
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        # Create a fake artifact on disk
+        artifacts_dir = (
+            tmp_path / "my-skill@0.1.0" / "runs" / "2026-05-21_120000_000" / "artifacts"
+        )
+        artifacts_dir.mkdir(parents=True)
+        (artifacts_dir / "summary.txt").write_text("hello artifact")
+
+        io_ = HitlIO(
+            stdin=_io.StringIO(""),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        server = HitlServer(io_)
+        server.start()
+        try:
+            url, session_headers = self._mcp_session(server)
+            call = {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "get_artifact",
+                    "arguments": {
+                        "skill": "my-skill",
+                        "version": "0.1.0",
+                        "run_id": "2026-05-21_120000_000",
+                        "name": "summary.txt",
+                    },
+                },
+            }
+            r = httpx.post(url, json=call, headers=session_headers, timeout=5.0)
+            assert r.status_code == 200
+            data = self._parse_mcp_response(r)
+            # MCP text/event-stream wraps the return dict in content[0].text as JSON
+            text = data["result"]["content"][0]["text"]
+            outer = json.loads(text)
+            assert outer["name"] == "summary.txt"
+            assert outer["content"] == "hello artifact"
+        finally:
+            server.stop()
+
+    def test_get_artifact_returns_json_content(self, tmp_path, monkeypatch):
+        """get_artifact parses .json artifacts and returns the object via MCP."""
+        import io as _io
+        import httpx
+        import json
+
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        artifacts_dir = (
+            tmp_path / "report-skill@0.2.0" / "runs" / "2026-05-21_090000_000" / "artifacts"
+        )
+        artifacts_dir.mkdir(parents=True)
+        payload = {"score": 42, "items": ["a", "b"]}
+        (artifacts_dir / "result.json").write_text(json.dumps(payload))
+
+        io_ = HitlIO(
+            stdin=_io.StringIO(""),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        server = HitlServer(io_)
+        server.start()
+        try:
+            url, session_headers = self._mcp_session(server)
+            call = {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "get_artifact",
+                    "arguments": {
+                        "skill": "report-skill",
+                        "version": "0.2.0",
+                        "run_id": "2026-05-21_090000_000",
+                        "name": "result.json",
+                    },
+                },
+            }
+            r = httpx.post(url, json=call, headers=session_headers, timeout=5.0)
+            assert r.status_code == 200
+            data = self._parse_mcp_response(r)
+            text = data["result"]["content"][0]["text"]
+            # The MCP layer serialises the returned dict as JSON text
+            outer = json.loads(text)
+            assert outer["name"] == "result.json"
+            assert outer["content"] == payload
+        finally:
+            server.stop()
+
+    def test_get_artifact_not_found_returns_error(self, tmp_path, monkeypatch):
+        """get_artifact raises an MCP tool error when the artifact is missing."""
+        import io as _io
+        import httpx
+
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        io_ = HitlIO(
+            stdin=_io.StringIO(""),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        server = HitlServer(io_)
+        server.start()
+        try:
+            url, session_headers = self._mcp_session(server)
+            call = {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "get_artifact",
+                    "arguments": {
+                        "skill": "no-skill",
+                        "version": "9.9.9",
+                        "run_id": "2026-05-21_000000_000",
+                        "name": "missing.txt",
+                    },
+                },
+            }
+            r = httpx.post(url, json=call, headers=session_headers, timeout=5.0)
+            assert r.status_code == 200
+            data = self._parse_mcp_response(r)
+            # MCP tool errors surface as isError=true in the result
+            result = data.get("result", data)
+            assert result.get("isError") is True
+            # Error text should mention ARTIFACT_NOT_FOUND
+            error_text = str(result.get("content", ""))
+            assert "ARTIFACT_NOT_FOUND" in error_text
+        finally:
+            server.stop()

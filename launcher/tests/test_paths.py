@@ -87,6 +87,23 @@ class TestSkillRequiresFile:
         assert p == tmp_path / "daily-progress@0.4.0" / "requires.yaml"
 
 
+class TestSkillRunArtifactsDir:
+    def test_returns_path_inside_run_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.paths import skill_run_artifacts_dir
+        p = skill_run_artifacts_dir("daily-progress", "0.5.6", "2026-05-21_120000_000")
+        assert p == (
+            tmp_path / "daily-progress@0.5.6" / "runs"
+            / "2026-05-21_120000_000" / "artifacts"
+        )
+
+    def test_signature_takes_three_args(self):
+        from zipsa.paths import skill_run_artifacts_dir
+        import inspect
+        sig = inspect.signature(skill_run_artifacts_dir)
+        assert list(sig.parameters.keys()) == ["name", "version", "run_id"]
+
+
 class TestSkillMemoryFile:
     def test_returns_path_under_memory_dir_no_version(self, tmp_path, monkeypatch):
         """Per-skill memory lives at ~/.zipsa/memory/<skill>/skill-mem.json —

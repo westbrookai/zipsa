@@ -126,6 +126,7 @@ class DockerExecutor:
             timestamp = started_at.strftime("%Y-%m-%d_%H%M%S_%f")[:23]
             run_dir = skill_data_dir / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_run_artifacts_dir(run_dir)
 
         # Generate .claude.json in centralized directory
         claude_json_path = skill.build_claude_json(
@@ -314,6 +315,7 @@ class DockerExecutor:
                 mcp_debug_host=mcp_debug_host,
                 extra_docker_opts=extra_docker_opts,
                 requires_values=self._requires_values,
+                run_dir=run_dir,
             )
             # Shared limits state for the single phase — needed for summary cost/turns.
             single_limits_state = new_state("main")
@@ -516,6 +518,19 @@ class DockerExecutor:
             pass  # best-effort; empty dict is acceptable
         self._image_env_cache[image] = env
         return env
+
+    @staticmethod
+    def _ensure_run_artifacts_dir(run_dir: Path) -> Path:
+        """Create the artifacts/ subdir if missing. Returns the path.
+
+        Artifacts are files a skill writes for cross-process consumption
+        (orchestrators reading them via MCP get_artifact). Created at the
+        same time as the run_dir so the mount point exists when the
+        container starts.
+        """
+        artifacts = run_dir / "artifacts"
+        artifacts.mkdir(exist_ok=True)
+        return artifacts
 
     def _execute_skill(
         self,
@@ -858,6 +873,7 @@ class DockerExecutor:
                     user_message = self._build_user_message(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input,
+                        run_id=run_dir.name if run_dir else "unknown",
                     )
 
                     # Per-phase artifact directory
@@ -879,6 +895,7 @@ class DockerExecutor:
                         npm_volume=npm_volume,
                         requires_values=self._requires_values,
                         model=phase_model,
+                        run_dir=run_dir,
                     )
 
                     # Stream events, capture last assistant text.
@@ -1061,6 +1078,7 @@ class DockerExecutor:
             "mcp__zipsa__recall", "mcp__zipsa__remember",
             "mcp__zipsa__forget", "mcp__zipsa__list_memory",
             "mcp__zipsa__ask_once",
+            "mcp__zipsa__get_artifact",
             "ToolSearch",
         ]
         path = output_dir / "phase-allow.json"
@@ -1116,6 +1134,7 @@ class DockerExecutor:
         npm_volume: Optional[str] = None,
         requires_values: Optional[dict[str, object]] = None,
         model: Optional[str] = None,
+        run_dir: Optional[Path] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -1200,6 +1219,15 @@ class DockerExecutor:
         seen_container_paths: set[str] = {
             "/.zipsa", "/skill", "/zipsa-hooks/pretooluse.py",
         }
+
+        # Mount the run_dir read-write into the container so the skill
+        # can write artifacts/<name> for cross-process consumption.
+        # Skipped when run_dir is None (dry-run, shell mode).
+        if run_dir is not None:
+            container_path = "/home/agent/runs/current"
+            cmd.extend(["-v", f"{run_dir}:{container_path}:rw"])
+            seen_container_paths.add(container_path)
+
         for m in skill.manifest.spec.mounts:
             if m.host is not None:
                 # Static mount
@@ -1376,6 +1404,7 @@ class DockerExecutor:
         previous_phase_output: str | None,
         skill_state: dict,
         user_query: str,
+        run_id: str = "unknown",
     ) -> str:
         from tzlocal import get_localzone
 
@@ -1396,6 +1425,7 @@ class DockerExecutor:
             time=now.strftime("%H:%M:%S"),
             timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
             tz_iana=tz_iana,
+            run_id=run_id,
             phase_id=phase_id,
             phase_goal=phase_goal,
             allowed_tools=phase_allowed_tools,

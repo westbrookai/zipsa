@@ -25,11 +25,18 @@ the system prompt. It contains:
   `Australia/Sydney`). Use this whenever the skill needs the user's
   local timezone for date math — e.g. `zoneinfo.ZoneInfo(tz_iana)` in
   Python. Don't ask the user for their timezone; this is already it.
+- `run_id`: timestamp identifier for this run (e.g.
+  `2026-05-21_120000_000`). Pair with skill name+version when calling
+  `mcp__zipsa__get_artifact` to read artifacts written by a prior
+  phase of this same run.
 - `phase_id`: which phase you are executing now
 - `phase_goal`: what this phase must accomplish
+- `allowed_tools`: comma-separated list of tools you may call in this
+  phase. The PreToolUse hook denies anything not in this list.
 - `previous_phase_output`: data from the previous phase, or null
 - `skill_state`: current skill state snapshot
 - `user_query`: original user query (only relevant for the first phase)
+- `config`: skill-author defaults from `spec.config`
 
 ## Empty `user_query`
 
@@ -183,6 +190,7 @@ status codes asking the launcher to prompt.
 | "pick one of" / "choose from" | `mcp__zipsa__choose({prompt, options})` |
 | "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
 | Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
+| Read a file artifact another phase or skill wrote | `mcp__zipsa__get_artifact({skill, version, run_id, name})` → see "Artifacts" |
 
 For `ask_once` and the memory primitives, the default scope is
 `"skill"` (visible only to this skill). Use `scope: "global"` for
@@ -201,6 +209,60 @@ not `c1`, `ws1`). Memory values must be JSON-serializable.
 - If a tool errors with a message starting `HITL_UNATTENDED`, the
   run is non-interactive (cron, redirected stdin). End the phase
   with `status=failed` and `error.code="hitl_unattended"`.
+
+## Artifacts
+
+Use artifacts to pass file-shaped output to another phase or another
+skill. Artifacts are distinct from `next_phase_input` (JSON, in-memory)
+and `state_updates` (key-value memory): use them for blobs, reports, or
+structured files that exceed what fits cleanly in JSON fields.
+
+### Writing artifacts
+
+Write to `/home/agent/runs/current/artifacts/<name>` inside the
+container. The directory exists before the phase starts — do not create
+it. Use flat filenames only (no slashes, no `..`).
+
+On the host the file becomes:
+
+    ~/.zipsa/<skill>@<version>/runs/<timestamp>/artifacts/<name>
+
+### Reading artifacts: `mcp__zipsa__get_artifact`
+
+Always available — no manifest opt-in required.
+
+```
+mcp__zipsa__get_artifact(skill, version, run_id, name)
+→ {name, size, content}
+```
+
+- `content` is a parsed JSON object for `*.json` files; utf-8 text
+  otherwise.
+- `name` must be a flat filename (no `..`, no slashes, no absolute
+  paths).
+- 10 MiB cap per file.
+- Error codes: `ARTIFACT_NOT_FOUND`, `ARTIFACT_BAD_NAME`,
+  `ARTIFACT_TOO_LARGE`, `ARTIFACT_BAD_JSON`.
+
+### Orchestrator pattern (preview)
+
+A phase (or a parent skill) writes an artifact, then a later phase reads
+it:
+
+```
+# phase 1: write
+write /home/agent/runs/current/artifacts/report.json
+
+# phase 2: read the artifact this run wrote earlier
+mcp__zipsa__get_artifact(skill="my-skill", version="1.0.0",
+                          run_id="<execution_context.run_id>",
+                          name="report.json")
+```
+
+The current run's ID is in `execution_context.run_id`. For artifacts
+written by another skill (or a past run of this one), pass the relevant
+ID through `next_phase_input` so the reading phase knows which run
+produced the artifact.
 
 ## State management
 

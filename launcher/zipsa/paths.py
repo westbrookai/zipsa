@@ -28,6 +28,16 @@ def skill_requires_file(name: str, version: str) -> Path:
     return skill_data_dir(name, version) / "requires.yaml"
 
 
+def skill_run_artifacts_dir(name: str, version: str, run_id: str) -> Path:
+    """Per-run artifacts directory.
+
+    Where a skill writes structured artifacts that other processes
+    (orchestrators, future tools) can read via MCP `get_artifact`.
+    Located inside the run_dir so artifacts share lifecycle with logs.
+    """
+    return skill_runs_dir(name, version) / run_id / "artifacts"
+
+
 def skill_memory_file(name: str) -> Path:
     """Per-skill memory store, cross-version by design.
 
