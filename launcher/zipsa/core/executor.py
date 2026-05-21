@@ -413,7 +413,23 @@ class DockerExecutor:
                 yield event
 
             # Determine final status from skill's contract JSON output
-            phase_out = self._extract_skill_output(last_assistant_text) or {}
+            phase_out = self._extract_skill_output(last_assistant_text)
+            if phase_out is None:
+                # Parse failed — preserve the real cause + raw text.
+                phase_out = {
+                    "status": "failed",
+                    "phase": "main",
+                    "result": None,
+                    "state_updates": None,
+                    "next_phase_input": None,
+                    "user_facing_summary": (
+                        "Skill output could not be parsed."
+                    ),
+                    "error": {
+                        "code": "invalid_output_format",
+                        "raw_output": (last_assistant_text or "")[:2000],
+                    },
+                }
             status = phase_out.get("status", "failed")
 
             # Map HITL-related error codes to user_declined (exit 4)
@@ -1062,11 +1078,12 @@ class DockerExecutor:
                         return
 
                     # Extract and validate skill output
-                    phase_out = self._extract_skill_output(last_assistant_text) or {}
+                    phase_out = self._extract_skill_output(last_assistant_text)
 
-                    # Phase field validation
-                    reported_phase = phase_out.get("phase")
-                    if reported_phase and reported_phase != phase.id:
+                    if phase_out is None:
+                        # Parse failed — record the real cause (the agent
+                        # didn't emit a valid envelope). Preserve the raw
+                        # text so the user can see what the agent produced.
                         phase_out = {
                             "status": "failed",
                             "phase": phase.id,
@@ -1074,10 +1091,33 @@ class DockerExecutor:
                             "state_updates": None,
                             "next_phase_input": None,
                             "user_facing_summary": (
-                                f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
+                                "Skill output could not be parsed."
                             ),
-                            "error": {"code": "phase_id_mismatch"},
+                            "error": {
+                                "code": "invalid_output_format",
+                                "raw_output": (last_assistant_text or "")[:2000],
+                            },
                         }
+                    else:
+                        # Phase field validation — only runs when parse
+                        # succeeded. (Pre-fix, _extract_skill_output
+                        # returned a synthetic envelope with
+                        # phase="unknown" which then tripped this check
+                        # and clobbered the real invalid_output_format
+                        # error code.)
+                        reported_phase = phase_out.get("phase")
+                        if reported_phase and reported_phase != phase.id:
+                            phase_out = {
+                                "status": "failed",
+                                "phase": phase.id,
+                                "result": None,
+                                "state_updates": None,
+                                "next_phase_input": None,
+                                "user_facing_summary": (
+                                    f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
+                                ),
+                                "error": {"code": "phase_id_mismatch"},
+                            }
 
                     status = phase_out.get("status", "failed")
 
@@ -1564,11 +1604,19 @@ class DockerExecutor:
     def _extract_skill_output(text: str | None) -> dict | None:
         """Extract skill contract JSON from final assistant text.
 
-        Tries four strategies in order:
+        Tries three strategies in order:
         1. Direct json.loads on stripped text
         2. Extract last ```json ... ``` fenced block
         3. Find last {...} object containing a "status" key
-        4. Fail with error.code=invalid_output_format
+
+        Returns the parsed dict on success, or None if no envelope
+        could be extracted. Callers are responsible for handling None
+        — they should record a failed phase with
+        `error.code = "invalid_output_format"` and preserve the raw
+        agent text so the user can debug. (Earlier versions returned
+        a synthetic envelope here with `phase="unknown"`, which then
+        tripped the downstream phase_id_mismatch check and clobbered
+        the real error code.)
         """
         import re
         if not text:
@@ -1620,20 +1668,8 @@ class DockerExecutor:
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        # Strategy 4: failed to extract
-        return {
-            "status": "failed",
-            "phase": "unknown",
-            "result": None,
-            "state_updates": None,
-            "next_phase_input": None,
-            "user_facing_summary": "Skill output could not be parsed.",
-            "needs_input": None,
-            "error": {
-                "code": "invalid_output_format",
-                "raw_output": (text or "")[:2000],
-            },
-        }
+        # No envelope found. Caller handles None.
+        return None
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
