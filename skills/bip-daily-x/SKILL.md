@@ -285,10 +285,22 @@ so the field is unused.
 
 ### report
 
-Fetch a structured per-project activity report from agenthud, then
-extract per-project slices for the draft phase.
+Conditional phase. If `use_agenthud=false` from the previous phase,
+return immediately with no activity data. Otherwise, fetch a
+structured per-project activity report from agenthud and slice it
+for the draft phase.
 
 Steps:
+
+0. Read `use_agenthud` from `previous_phase_input`. If `false`:
+   - Set `next_phase_input = {...previous fields..., "report": null}`.
+   - `user_facing_summary` (Korean): `"agenthud 건너뜀"`
+   - End phase with `status=ok`. Do not invoke any Bash tool.
+
+   This short-circuit uses 1 turn and ~$0.001. If `true`, proceed
+   to step 1 below using `target_date` from `previous_phase_input`
+   (or `target_date_default` if `target_date` is absent — see
+   ask_agenthud's Precedence note).
 
 1. Invoke the skill-vendored agenthud wrapper, redirecting stdout to
    a file. Do NOT capture stdout into the Bash tool result —
@@ -361,25 +373,31 @@ Steps:
    commits/edits/bash labels.
 
 3. Read `/tmp/projects.json` (small, ~5-10KB). If the parsed array
-   is empty (`[]`) — meaning agenthud found 0 sessions — stop the
-   skill with `status=ok` and `user_facing_summary` "No Claude Code
-   activity today — skipping post." No draft, no prompts, no post.
+   is empty (`[]`) — meaning agenthud found 0 sessions — do NOT
+   stop the skill. Continue with
+   `report = {"target_date": "<resolved>", "projects": []}`. The
+   draft phase will fall back to the web-sourced inputs.
+   `user_facing_summary` (Korean):
+   `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`.
 
 4. Build `next_phase_input` for the draft phase, picking the 1-3
    most share-worthy items across all projects:
 
    ```json
    {
-     "target_date": "2026-05-20",
-     "voice": "<from memory>",
+     ...previous fields including insights, interests_summary,
+        interests_used, voice...,
      "max_tweet_chars": 280,
-     "projects": [
-       {
-         "name": "launcher",
-         "highlights": ["...the 1-3 things worth tweeting..."],
-         "commits": ["fix: ...", "feat: ..."]
-       }
-     ]
+     "report": {
+       "target_date": "2026-05-20",
+       "projects": [
+         {
+           "name": "launcher",
+           "highlights": ["...the 1-3 things worth tweeting..."],
+           "commits": ["fix: ...", "feat: ..."]
+         }
+       ]
+     }
    }
    ```
 
@@ -387,6 +405,9 @@ Steps:
    measurable result, a refactor that ships, a notable insight. Not:
    exploration without conclusion, tooling minor edits, work in
    progress without a milestone.
+
+   `user_facing_summary` (Korean): `"오늘 활동 요약 완료 — {N} 프로젝트"`
+   (substitute `{N}` with the number of projects).
 
 ### draft
 
