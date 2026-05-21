@@ -211,6 +211,61 @@ WebSearch and summarize current chatter on those topics.
    `"관심사 검색 요약 완료 — {N} 주제"` (substitute `{N}` with
    `len(interests_used)`).
 
+### ask_agenthud
+
+Decide whether to enrich the draft with today's Claude Code activity.
+
+1. Ask the user (Korean):
+
+   ```
+   오늘 작업한 Claude Code 내용도 트윗에 반영할까요? (y/N)
+   ```
+
+2. Parse the reply. Treat as **yes** any of: `y`, `Y`, `yes`, `네`,
+   `예`. Treat everything else (including empty input) as **no**.
+
+3. If **no**, emit:
+   ```json
+   next_phase_input = {
+     ...previous fields...,
+     "use_agenthud": false
+   }
+   ```
+   `user_facing_summary` (Korean): `"agenthud 미사용 — 웹 데이터로만 작성"`
+   Then end the phase. Do NOT proceed to step 4.
+
+4. If **yes**, ask the user (Korean):
+
+   ```
+   어떤 기간을 볼까요?
+   1) today (오늘)
+   2) yesterday (어제)
+   3) 직접 입력 (YYYY-MM-DD)
+   ```
+
+5. Parse the period reply:
+   - `1` or `today` → `target_date = "today"`
+   - `2` or `yesterday` → `target_date = "yesterday"`
+   - `3` → reprompt once with: `"YYYY-MM-DD 형식으로 입력해주세요."`
+     Parse the second reply as ISO date (must match regex
+     `^\d{4}-\d{2}-\d{2}$`).
+   - Any direct `YYYY-MM-DD` input on the first prompt is also accepted.
+   - On any parse failure → reprompt once. On second failure, default
+     to `target_date = "today"` and mention the fallback in
+     `user_facing_summary`.
+
+6. Emit:
+   ```json
+   next_phase_input = {
+     ...previous fields...,
+     "use_agenthud": true,
+     "target_date": "<resolved>"
+   }
+   ```
+   `user_facing_summary` (Korean):
+   `"agenthud 사용: {target_date}"` (substitute `{target_date}` with
+   the resolved value).
+
 ### report
 
 Fetch a structured per-project activity report from agenthud, then
