@@ -3,6 +3,17 @@
 Generate one tweet about the user's daily Claude Code work, refine
 via user feedback, and post to X after explicit approval.
 
+## Language Policy
+
+- Agent reasoning, phase goals, field names: **English**.
+- All user-facing strings (prompts shown to the user, error messages
+  surfaced to the user, `user_facing_summary` per phase): **Korean**.
+- The final tweet text: **English** (it is the deliverable).
+
+This document uses English for clarity. The example user-facing
+strings quoted in each phase below are the exact Korean strings the
+agent must produce.
+
 ## Per-user setup
 
 Three groups of user-specific values:
@@ -29,6 +40,10 @@ Three groups of user-specific values:
 
 - `voice` — 1–2 sentences describing the user's preferred tweet tone.
   Asked once on first run, then reused.
+- `interests` — comma-separated list of 3-5 topics the user wants
+  the `interests` phase to web-search every day. Asked once on first
+  run. `config.default_interests` is shown as an example in the prompt
+  but the stored value is whatever the user types.
 
 ## Phases
 
@@ -40,14 +55,34 @@ Three groups of user-specific values:
    `{"status":"failed","error":"missing env var(s): [...]"}`. On
    `failed`, stop the phase with `status=failed`,
    `error.code="x_credentials_missing"`, and put the script's error
-   message into `user_facing_summary` so the user sees exactly which
-   var(s) are missing.
+   message into `user_facing_summary` (Korean: "X 환경변수 누락: ...")
+   so the user sees exactly which var(s) are missing.
+
 2. Call `mcp__zipsa__ask_once` with key=`voice` (EXACTLY that — not
-   `x_voice`, `tweet_voice`, or any other variant). Prompt: "1–2
-   sentences describing how you want your tweets to sound."
+   `x_voice`, `tweet_voice`, or any other variant).
+   Prompt (Korean):
+   "1–2 문장으로 트윗 톤을 알려주세요."
    The cached answer is reused on subsequent runs.
-3. Resolve target date from the user query. Default: today in the
-   user's local timezone (see runtime contract on `tz_iana`).
+
+3. Call `mcp__zipsa__ask_once` with key=`interests`.
+   Prompt (Korean) — use `config.default_interests` as the example list:
+   "관심 주제 3-5개를 쉼표로 입력해주세요. 예: AI agents, MCP, build-in-public"
+   Parse the response into a list of trimmed strings.
+   The cached answer is reused on subsequent runs.
+
+4. Resolve target_date_default from the user query. Default: today in
+   the user's local timezone (see runtime contract on `tz_iana`). This
+   is only an initial value — `ask_agenthud` may override it later.
+
+5. Set `next_phase_input`:
+   ```json
+   {
+     "voice": "<from ask_once>",
+     "interests": ["...", "...", "..."],
+     "target_date_default": "YYYY-MM-DD"
+   }
+   ```
+   `user_facing_summary` (Korean): "프리체크 완료 — voice/interests 로드"
 
 ### report
 
