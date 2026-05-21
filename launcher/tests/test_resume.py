@@ -187,3 +187,105 @@ class TestFindResumableRun:
             current_args="today", current_phase_count=2,
         )
         assert c.run_id == "2026-05-21_100000_000000"
+
+
+from zipsa.core.resume import format_resume_prompt, prompt_user_to_resume
+import io
+from datetime import datetime
+
+
+class TestFormatResumePrompt:
+    """Pure string formatter — no I/O. Verifies the spec's prompt UX."""
+
+    def _candidate(self, **overrides) -> ResumeCandidate:
+        defaults = dict(
+            skill="bip-daily-x", version="0.3.0",
+            run_id="2026-05-21_100000_000000",
+            run_dir=Path("/tmp/fake"),
+            original_args="today",
+            failed_phase_index=4,
+            failed_phase_id="post",
+            failed_phase_status="limits_exceeded",
+            failed_phase_error_code="phase_cost_exceeded",
+            failed_phase_error_message="phase cost $0.13 > limit $0.10",
+            last_successful_phase_index=3,
+            last_successful_phase_id="review",
+            next_phase_input={"tweet_text": "Just shipped Phase 2..."},
+            user_facing_summary="트윗 draft 확정. post로 진행.",
+            started_at="2026-05-21T10:00:00+10:00",
+        )
+        defaults.update(overrides)
+        return ResumeCandidate(**defaults)
+
+    def test_includes_all_required_fields(self):
+        c = self._candidate()
+        now = datetime.fromisoformat("2026-05-21T10:47:00+10:00")
+        out = format_resume_prompt(c, now=now)
+        assert "2026-05-21_100000_000000" in out
+        assert "47 minutes ago" in out
+        assert 'args: "today"' in out
+        assert "limits_exceeded" in out
+        assert "phase 'post'" in out
+        assert "review" in out
+        assert "트윗 draft 확정" in out
+        assert "tweet_text" in out
+
+    def test_long_next_phase_input_value_truncated(self):
+        c = self._candidate(next_phase_input={"tweet_text": "x" * 200})
+        now = datetime.fromisoformat("2026-05-21T10:01:00+10:00")
+        out = format_resume_prompt(c, now=now)
+        assert "x" * 200 not in out
+
+    def test_relative_age_under_a_minute(self):
+        c = self._candidate()
+        now = datetime.fromisoformat("2026-05-21T10:00:30+10:00")
+        out = format_resume_prompt(c, now=now)
+        assert "30 seconds ago" in out
+
+    def test_relative_age_hours(self):
+        c = self._candidate()
+        now = datetime.fromisoformat("2026-05-21T13:30:00+10:00")
+        out = format_resume_prompt(c, now=now)
+        assert "3 hours ago" in out
+
+    def test_relative_age_yesterday(self):
+        c = self._candidate()
+        now = datetime.fromisoformat("2026-05-22T09:00:00+10:00")
+        out = format_resume_prompt(c, now=now)
+        assert "ago" in out  # exact wording not asserted; just sanity
+
+
+class TestPromptUserToResume:
+    """Reads from a provided stdin stream; default Y on empty input."""
+
+    def test_empty_input_returns_true(self):
+        c = TestFormatResumePrompt()._candidate()
+        out = io.StringIO()
+        result = prompt_user_to_resume(c, stdin=io.StringIO("\n"), stdout=out)
+        assert result is True
+
+    def test_y_returns_true(self):
+        c = TestFormatResumePrompt()._candidate()
+        result = prompt_user_to_resume(c, stdin=io.StringIO("y\n"),
+                                        stdout=io.StringIO())
+        assert result is True
+
+    def test_n_returns_false(self):
+        c = TestFormatResumePrompt()._candidate()
+        result = prompt_user_to_resume(c, stdin=io.StringIO("n\n"),
+                                        stdout=io.StringIO())
+        assert result is False
+
+    def test_uppercase_N_returns_false(self):
+        c = TestFormatResumePrompt()._candidate()
+        result = prompt_user_to_resume(c, stdin=io.StringIO("N\n"),
+                                        stdout=io.StringIO())
+        assert result is False
+
+    def test_prompt_is_written_to_stdout(self):
+        c = TestFormatResumePrompt()._candidate()
+        out = io.StringIO()
+        prompt_user_to_resume(c, stdin=io.StringIO("\n"), stdout=out)
+        text = out.getvalue()
+        assert "2026-05-21_100000_000000" in text
+        assert "Resume from 'post'?" in text
