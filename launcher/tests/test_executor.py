@@ -2220,3 +2220,43 @@ class TestPhaseSpecModel:
         skill = Skill.load(skill_dir)
         assert skill.manifest.spec.phases[0].model == {"name": "claude-haiku-4-5-20251001"}
         assert skill.manifest.spec.phases[1].model is None  # falls back to spec.model
+
+
+class TestArtifactsDirCreation:
+    def test_run_creates_artifacts_subdir(self, tmp_path, monkeypatch):
+        """When run_dir is created (real execution path), artifacts/
+        subdir must exist so the skill can write into it from inside
+        the container."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        # Set up a minimal skill fixture
+        skill_dir = tmp_path / "src" / "afct"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: afct, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        from zipsa.core.skill import Skill
+        from zipsa.core.executor import DockerExecutor
+
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+        from zipsa.paths import skill_data_dir
+        sd = skill_data_dir("afct", "0.1.0")
+        sd.mkdir(parents=True, exist_ok=True)
+        runs_dir = sd / "runs"
+        runs_dir.mkdir(exist_ok=True)
+        run_id = "2026-05-21_120000_000"
+        run_dir = runs_dir / run_id
+        run_dir.mkdir()
+
+        # Helper under test: a new internal method ex._ensure_run_artifacts_dir(run_dir)
+        ex._ensure_run_artifacts_dir(run_dir)
+        assert (run_dir / "artifacts").exists()
+        assert (run_dir / "artifacts").is_dir()

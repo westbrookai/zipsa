@@ -126,6 +126,7 @@ class DockerExecutor:
             timestamp = started_at.strftime("%Y-%m-%d_%H%M%S_%f")[:23]
             run_dir = skill_data_dir / "runs" / timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_run_artifacts_dir(run_dir)
 
         # Generate .claude.json in centralized directory
         claude_json_path = skill.build_claude_json(
@@ -516,6 +517,19 @@ class DockerExecutor:
             pass  # best-effort; empty dict is acceptable
         self._image_env_cache[image] = env
         return env
+
+    @staticmethod
+    def _ensure_run_artifacts_dir(run_dir: Path) -> Path:
+        """Create the artifacts/ subdir if missing. Returns the path.
+
+        Artifacts are files a skill writes for cross-process consumption
+        (orchestrators reading them via MCP get_artifact). Created at the
+        same time as the run_dir so the mount point exists when the
+        container starts.
+        """
+        artifacts = run_dir / "artifacts"
+        artifacts.mkdir(exist_ok=True)
+        return artifacts
 
     def _execute_skill(
         self,
