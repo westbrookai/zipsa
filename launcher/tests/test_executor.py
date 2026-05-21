@@ -876,6 +876,7 @@ class TestWritePhaseAllowFile:
                 "mcp__zipsa__forget", "mcp__zipsa__list_memory",
                 "mcp__zipsa__ask_once",
                 "mcp__zipsa__get_artifact",
+                "mcp__zipsa__run_skill",
                 "ToolSearch",
             ],
         }
@@ -1176,6 +1177,17 @@ class TestMemoryIntegration:
         executor._write_default_phase_allow_file(tmp_path, skill)
         data = json.loads((tmp_path / "phase-allow.json").read_text())
         assert "mcp__zipsa__get_artifact" in data["allowed_tools"]
+
+    def test_default_allow_list_contains_run_skill(self, tmp_path):
+        """run_skill is always-on — handler-side spec.children check gates
+        which child skills are actually permitted."""
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor._write_default_phase_allow_file(tmp_path, skill)
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        assert "mcp__zipsa__run_skill" in data["allowed_tools"]
 
 
 class TestSkillDirMount:
@@ -2414,3 +2426,93 @@ class TestArtifactsDirCreation:
                 skill, "hi", tmp_path / "claude.json", {},
                 run_dir=run_dir,
             )
+
+
+class TestParentMCPDelegation:
+    """When ZIPSA_PARENT_MCP_URL is set, the executor must NOT start
+    its own HitlServer; the child container's .claude.json points at
+    the parent's URL with the parent-supplied token."""
+
+    def test_build_claude_json_uses_url_override(self, tmp_path):
+        """build_claude_json should accept mcp_url_override and
+        mcp_token_override and use them instead of generating a
+        localhost URL + new token."""
+        import json
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        claude_json_path = skill.build_claude_json(
+            output_dir=tmp_path,
+            mcp_url_override="http://host.docker.internal:7777/mcp",
+            mcp_token_override="parent-tok-abc",
+        )
+        cfg = json.loads(claude_json_path.read_text())
+        zipsa_mcp = cfg["projects"]["/home/agent/workspace"]["mcpServers"]["zipsa"]
+        assert zipsa_mcp["url"] == "http://host.docker.internal:7777/mcp"
+        # Header carrying the token
+        assert any(
+            "parent-tok-abc" in str(v)
+            for v in (zipsa_mcp.get("headers") or {}).values()
+        ) or "parent-tok-abc" in zipsa_mcp.get("headersHelper", "")
+
+    def test_build_claude_json_no_override_uses_generated(self, tmp_path):
+        """Without overrides, build_claude_json keeps current behavior:
+        uses hitl_port to generate a localhost URL."""
+        import json
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        # No overrides — uses existing hitl_port path
+        claude_json_path = skill.build_claude_json(
+            output_dir=tmp_path,
+            hitl_port=54321,
+        )
+        cfg = json.loads(claude_json_path.read_text())
+        zipsa_mcp = cfg["projects"]["/home/agent/workspace"]["mcpServers"]["zipsa"]
+        # URL should use the supplied port, NOT the override value
+        assert "7777" not in zipsa_mcp["url"]
+        assert "54321" in zipsa_mcp["url"]
+
+    def test_build_claude_json_raises_when_only_url_override(self, tmp_path):
+        """Passing only one of the two overrides is a misconfiguration."""
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with pytest.raises(ValueError, match="mcp_url_override"):
+            skill.build_claude_json(
+                output_dir=tmp_path,
+                mcp_url_override="http://host.docker.internal:7777/mcp",
+                # mcp_token_override intentionally omitted
+            )
+
+    def test_build_claude_json_raises_when_only_token_override(self, tmp_path):
+        """Passing only one of the two overrides is a misconfiguration."""
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        with pytest.raises(ValueError, match="mcp_token_override"):
+            skill.build_claude_json(
+                output_dir=tmp_path,
+                mcp_token_override="parent-tok-abc",
+                # mcp_url_override intentionally omitted
+            )
+
+    def test_detect_parent_mcp_returns_env_values(self, monkeypatch):
+        """_detect_parent_mcp() returns (url, token) from env vars when set."""
+        monkeypatch.setenv("ZIPSA_PARENT_MCP_URL", "http://host.docker.internal:9999/mcp")
+        monkeypatch.setenv("ZIPSA_PARENT_MCP_TOKEN", "child-tok-xyz")
+
+        url, token = DockerExecutor._detect_parent_mcp()
+        assert url == "http://host.docker.internal:9999/mcp"
+        assert token == "child-tok-xyz"
+
+    def test_detect_parent_mcp_returns_none_when_absent(self, monkeypatch):
+        """_detect_parent_mcp() returns (None, None) when env vars are absent."""
+        monkeypatch.delenv("ZIPSA_PARENT_MCP_URL", raising=False)
+        monkeypatch.delenv("ZIPSA_PARENT_MCP_TOKEN", raising=False)
+
+        url, token = DockerExecutor._detect_parent_mcp()
+        assert url is None
+        assert token is None

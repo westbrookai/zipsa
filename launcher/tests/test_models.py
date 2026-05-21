@@ -445,6 +445,32 @@ class TestChildren:
                 self._spec(children=[bad])
 
 
+class TestChildrenField:
+    def test_children_default_empty(self):
+        from zipsa.core.models import SkillSpec
+        spec = SkillSpec.model_validate({
+            "purpose": "x", "instructions": "./SKILL.md",
+        })
+        assert spec.children == []
+
+    def test_children_accepts_list(self):
+        from zipsa.core.models import SkillSpec
+        spec = SkillSpec.model_validate({
+            "purpose": "x", "instructions": "./SKILL.md",
+            "children": ["agenthud-report", "x-post"],
+        })
+        assert spec.children == ["agenthud-report", "x-post"]
+
+    def test_children_rejects_non_string(self):
+        from pydantic import ValidationError
+        from zipsa.core.models import SkillSpec
+        with pytest.raises(ValidationError):
+            SkillSpec.model_validate({
+                "purpose": "x", "instructions": "./SKILL.md",
+                "children": [123],
+            })
+
+
 class TestRequiresEntry:
     def test_directory_type_loads(self):
         from zipsa.core.models import RequiresEntry

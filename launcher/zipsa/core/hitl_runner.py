@@ -13,8 +13,6 @@ from typing import Optional
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
 
 
 # When the server binds to 127.0.0.1, FastMCP auto-enables DNS-rebinding
@@ -27,18 +25,7 @@ _ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "host.docker.internal:*"]
 
 from .hitl_mcp import HitlIO
 from .memory_store import MemoryStore  # noqa: F401  (for type hints)
-
-
-class _BearerAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, expected_token: str) -> None:
-        super().__init__(app)
-        self._expected = expected_token
-
-    async def dispatch(self, request, call_next):
-        auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {self._expected}":
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return await call_next(request)
+from .caller_context import CallerInfo, CallerContextMiddleware  # noqa: F401
 
 
 def _pick_free_port() -> int:
@@ -50,25 +37,64 @@ def _pick_free_port() -> int:
 
 
 class HitlServer:
-    """HTTP MCP server (FastMCP) bound to 127.0.0.1:<random-port>."""
+    """HTTP MCP server (FastMCP) bound to 127.0.0.1:<random-port>.
+
+    Supports multiple concurrent callers: each caller is identified by a
+    unique Bearer token that maps to a CallerInfo (skill name + version).
+    Memory tools are routed to the appropriate per-skill MemoryStore based
+    on the caller resolved from the incoming request's Bearer token.
+
+    Usage — single-skill (backward-compat):
+        server = HitlServer(io_, skill_store=ms, global_store=gms,
+                            primary_caller=CallerInfo("my-skill", "1.0.0"))
+
+    Usage — multi-skill (Phase 2):
+        server = HitlServer(io_, global_store=gms,
+                            primary_caller=CallerInfo("parent", "1.0.0"))
+        server.start()
+        server.register_caller(child_token, CallerInfo("child", "2.0.0"))
+    """
 
     def __init__(
         self,
         io_: HitlIO,
         skill_store: "MemoryStore | None" = None,
         global_store: "MemoryStore | None" = None,
+        primary_caller: "CallerInfo | None" = None,
     ) -> None:
         self._io = io_
-        self._skill_store = skill_store
+        self._skill_store = skill_store  # legacy — pre-populated for primary's store
         self._global_store = global_store
+        self._primary_caller = primary_caller
         self.port: int = 0
         self.token: str = ""
         self._thread: Optional[threading.Thread] = None
         self._uvicorn_server: Optional[uvicorn.Server] = None
+        self._token_map: dict[str, CallerInfo] = {}
+        self._skill_stores_by_caller: dict[str, MemoryStore] = {}
+        # Pre-populate primary's store so existing tests / single-skill
+        # top-level runs keep working without rebuilding their store.
+        if primary_caller is not None and skill_store is not None:
+            self._skill_stores_by_caller[primary_caller.skill] = skill_store
+
+    def register_caller(self, token: str, caller: CallerInfo) -> None:
+        """Authorize `token` as belonging to a specific skill+version.
+
+        Called by RunSkillHandler when spawning a child, and by start()
+        itself when registering the primary caller. Idempotent: re-
+        registering a token updates the CallerInfo (used by RunSkillHandler
+        when the child's actual version becomes known from summary.json).
+        """
+        self._token_map[token] = caller
 
     def start(self) -> None:
         self.port = _pick_free_port()
         self.token = secrets.token_urlsafe(32)
+
+        # Register the primary caller (if set) so that requests bearing
+        # the auto-generated launcher token resolve to a known CallerInfo.
+        if self._primary_caller is not None:
+            self.register_caller(self.token, self._primary_caller)
 
         mcp = FastMCP(
             "zipsa",
@@ -82,6 +108,9 @@ class HitlServer:
         )
 
         from .hitl_mcp import AskHandler, ConfirmHandler, ChooseHandler, HitlUnattended
+        from .caller_context import current_caller
+        from . import memory_store as _ms_module
+        from zipsa import paths
 
         ask_h = AskHandler(self._io)
         confirm_h = ConfirmHandler(self._io)
@@ -111,73 +140,91 @@ class HitlServer:
             except HitlUnattended as e:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
-        from .hitl_mcp import (
-            RecallHandler, RememberHandler, ForgetHandler, ListMemoryHandler,
-        )
+        def _store_for_scope(scope: str) -> MemoryStore:
+            """Look up the appropriate MemoryStore for the current request.
 
-        if self._skill_store is not None and self._global_store is not None:
-            recall_h = RecallHandler(self._skill_store, self._global_store)
-            remember_h = RememberHandler(self._skill_store, self._global_store)
-            forget_h = ForgetHandler(self._skill_store, self._global_store)
-            list_h = ListMemoryHandler(self._skill_store, self._global_store)
+            For scope="global", returns the shared global_store (if configured).
+            For scope="skill" (the default), looks up the per-skill store
+            keyed by the caller's skill name, lazy-creating it if needed.
+            """
+            if scope == "global":
+                if self._global_store is None:
+                    raise RuntimeError("global_store_not_configured")
+                return self._global_store
+            # scope == "skill" (or any other value — let the caller validate)
+            caller = current_caller.get()
+            if caller is None:
+                # Middleware should reject before reaching here, but be defensive.
+                raise RuntimeError("caller_unknown")
+            key = caller.skill
+            if key not in self._skill_stores_by_caller:
+                self._skill_stores_by_caller[key] = _ms_module.MemoryStore(
+                    paths.resolve_skill_memory_path(key)
+                )
+            return self._skill_stores_by_caller[key]
 
-            @mcp.tool()
-            def recall(key: str, scope: str = "skill") -> str | None:
-                """Read a value previously stored via remember.
+        @mcp.tool()
+        def recall(key: str, scope: str = "skill") -> str | None:
+            """Read a value previously stored via remember.
 
-                Returns null if the key is not set in the given scope.
-                Scope: "skill" (default, per-skill private) or "global"
-                (shared across all skills).
-                """
-                value = recall_h.run(key=key, scope=scope)
-                # Normalize non-string values to JSON for MCP text content
-                if value is None or isinstance(value, str):
-                    return value
-                import json as _json
-                return _json.dumps(value, ensure_ascii=False)
+            Returns null if the key is not set in the given scope.
+            Scope: "skill" (default, per-skill private) or "global"
+            (shared across all skills).
+            """
+            store = _store_for_scope(scope)
+            value = store.get(key)
+            if value is None or isinstance(value, str):
+                return value
+            import json as _json
+            return _json.dumps(value, ensure_ascii=False)
 
-            @mcp.tool()
-            def remember(key: str, value: str, scope: str = "skill") -> None:
-                """Store a value for future runs of this (or any) skill.
+        @mcp.tool()
+        def remember(key: str, value: str, scope: str = "skill") -> None:
+            """Store a value for future runs of this (or any) skill.
 
-                Scope: "skill" (default, per-skill private) or "global"
-                (shared across all skills).
-                """
-                remember_h.run(key=key, value=value, scope=scope)
+            Scope: "skill" (default, per-skill private) or "global"
+            (shared across all skills).
+            """
+            store = _store_for_scope(scope)
+            store.set(key, value)
 
-            @mcp.tool()
-            def forget(key: str, scope: str = "skill") -> bool:
-                """Delete a stored value. Returns true if removed, false if missing."""
-                return forget_h.run(key=key, scope=scope)
+        @mcp.tool()
+        def forget(key: str, scope: str = "skill") -> bool:
+            """Delete a stored value. Returns true if removed, false if missing."""
+            store = _store_for_scope(scope)
+            return store.delete(key)
 
-            @mcp.tool()
-            def list_memory(scope: str = "skill") -> list[str]:
-                """List keys in the chosen scope."""
-                return list_h.run(scope=scope)
+        @mcp.tool()
+        def list_memory(scope: str = "skill") -> list[str]:
+            """List keys in the chosen scope."""
+            store = _store_for_scope(scope)
+            return list(store.keys())
 
-            from .hitl_mcp import AskOnceHandler
-            ask_once_h = AskOnceHandler(ask_h, recall_h, remember_h)
+        @mcp.tool()
+        def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
+            """Ask the user a question and cache the answer permanently.
 
-            @mcp.tool()
-            def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
-                """Ask the user a question and cache the answer permanently.
+            If the key already has a value (in the chosen scope), returns
+            that value without prompting. Otherwise asks the user, stores
+            the answer, and returns it. The "cached config" pattern in one
+            call — no risk of forgetting to remember.
 
-                If the key already has a value (in the chosen scope), returns
-                that value without prompting. Otherwise asks the user, stores
-                the answer, and returns it. The "cached config" pattern in one
-                call — no risk of forgetting to remember.
+            Use this for values that, once given, should never be asked
+            again (workspace name, default city, preferred language).
 
-                Use this for values that, once given, should never be asked
-                again (workspace name, default city, preferred language).
-
-                For one-off questions whose answers should NOT be stored
-                (current date, "are you sure?"), use the bare `ask` tool.
-                """
-                try:
-                    return ask_once_h.run(key=key, prompt=prompt, scope=scope)
-                except HitlUnattended as e:
-                    raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
-
+            For one-off questions whose answers should NOT be stored
+            (current date, "are you sure?"), use the bare `ask` tool.
+            """
+            store = _store_for_scope(scope)
+            cached = store.get(key)
+            if cached is not None:
+                return cached if isinstance(cached, str) else str(cached)
+            try:
+                answer = ask_h.run(prompt=prompt)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+            store.set(key, answer)
+            return answer
 
         # Cross-skill data exchange — always registered, no store dependency.
         from .artifact_handler import ArtifactHandler
@@ -213,11 +260,41 @@ class HitlServer:
                 skill=skill, version=version, run_id=run_id, name=name,
             )
 
+        from .run_skill_handler import RunSkillHandler
+        run_skill_h = RunSkillHandler(server=self)
+
+        @mcp.tool()
+        async def run_skill(name: str, args: str = "") -> dict:
+            """Invoke a child skill declared in this skill's spec.children.
+
+            Returns {status, exit_code, skill, version, run_id, summary}.
+            Pair `skill`+`version`+`run_id` with `mcp__zipsa__get_artifact`
+            to read the child's outputs.
+
+            Args:
+              name: child skill name (must be in this skill's spec.children)
+              args: passed to child as user_query (string). For structured
+                    data, JSON-encode it yourself; the child SKILL.md
+                    decides whether to parse user_query as JSON.
+            """
+            # Run blocking handler in a thread so the event loop stays
+            # free to process other MCP requests (especially the child
+            # container's MCP calls back into this same server).
+            import asyncio
+            return await asyncio.to_thread(run_skill_h.run, name=name, args=args)
+
         app = mcp.streamable_http_app()
-        app.add_middleware(_BearerAuthMiddleware, expected_token=self.token)
+        app.add_middleware(CallerContextMiddleware, token_map=self._token_map)
         config = uvicorn.Config(
             app,
-            host="127.0.0.1",
+            # Bind to all interfaces so secondary containers (Phase 2
+            # children) can reach us via host.docker.internal. With
+            # 127.0.0.1 binding, Docker Desktop's gateway only forwarded
+            # the FIRST container's traffic; subsequent containers got
+            # connection timeout (observed on macOS Docker Desktop 4.x).
+            # Auth still enforced by CallerContextMiddleware (every
+            # request needs a registered Bearer token).
+            host="0.0.0.0",
             port=self.port,
             log_level="error",
             access_log=False,

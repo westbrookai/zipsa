@@ -131,6 +131,8 @@ class Skill:
         output_dir: Optional[Path] = None,
         container_workspace: str = "/home/agent/workspace",
         hitl_port: Optional[int] = None,
+        mcp_url_override: Optional[str] = None,
+        mcp_token_override: Optional[str] = None,
     ) -> Path:
         """Generate .claude.json file for skill.
 
@@ -145,10 +147,30 @@ class Skill:
                         agent in the container can reach the host-side server
                         via host.docker.internal. The Authorization header is
                         produced at runtime from the ZIPSA_HITL_TOKEN env var.
+            mcp_url_override: When running as a child skill, the parent's MCP
+                        URL to use instead of generating a localhost URL. Must
+                        be set together with mcp_token_override.
+            mcp_token_override: When running as a child skill, the parent-
+                        supplied token to embed directly in the headersHelper.
+                        Must be set together with mcp_url_override.
 
         Returns:
             Path to created .claude.json file
+
+        Raises:
+            ValueError: If only one of mcp_url_override / mcp_token_override
+                        is provided (both must be set together).
         """
+        # Validate override pair — both must be set or neither.
+        if (mcp_url_override is None) != (mcp_token_override is None):
+            if mcp_url_override is None:
+                raise ValueError(
+                    "mcp_url_override must be provided when mcp_token_override is set"
+                )
+            else:
+                raise ValueError(
+                    "mcp_token_override must be provided when mcp_url_override is set"
+                )
         if output_dir is None:
             from zipsa.paths import skill_data_dir as _skill_data_dir
             output_dir = _skill_data_dir(self.name, self.manifest.metadata.version)
@@ -181,7 +203,18 @@ class Skill:
                     server_config["headersHelper"] = headers_helper
                 mcp_servers[server.name] = server_config
 
-        if hitl_port is not None:
+        if mcp_url_override is not None:
+            # Child skill path: use the parent's URL and embed the token directly.
+            mcp_servers["zipsa"] = {
+                "type": "http",
+                "url": mcp_url_override,
+                "headersHelper": (
+                    f'echo \'{{"Authorization": "Bearer {mcp_token_override}"}}\''
+                ),
+            }
+        elif hitl_port is not None:
+            # Top-level run path: point at our own HitlServer; token is read
+            # from the ZIPSA_HITL_TOKEN env var at runtime.
             mcp_servers["zipsa"] = {
                 "type": "http",
                 "url": f"http://host.docker.internal:{hitl_port}/mcp",

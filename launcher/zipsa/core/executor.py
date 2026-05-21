@@ -67,6 +67,20 @@ class DockerExecutor:
                 file=sys.stderr,
             )
 
+    @staticmethod
+    def _detect_parent_mcp() -> tuple[Optional[str], Optional[str]]:
+        """Detect whether we are running as a child skill invoked by a parent.
+
+        Returns:
+            (parent_url, parent_token) if ZIPSA_PARENT_MCP_URL and
+            ZIPSA_PARENT_MCP_TOKEN are both set in the environment;
+            (None, None) otherwise (top-level run).
+        """
+        return (
+            os.environ.get("ZIPSA_PARENT_MCP_URL"),
+            os.environ.get("ZIPSA_PARENT_MCP_TOKEN"),
+        )
+
     def run(
         self,
         skill: Skill,
@@ -248,20 +262,41 @@ class DockerExecutor:
         global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global-mem.json"
         skill_store = MemoryStore(skill_memory_path)
         global_store = MemoryStore(global_memory_path)
-        hitl_server = HitlServer(
-            hitl_io,
-            skill_store=skill_store,
-            global_store=global_store,
-        )
-        hitl_server.start()
-        self._hitl_port = hitl_server.port
-        self._hitl_token = hitl_server.token
+
+        # Detect whether we are running as a child skill invoked by a parent.
+        # If so, skip spawning our own HitlServer and point the container at
+        # the parent's server using the env-supplied URL and token.
+        parent_url, parent_token = self._detect_parent_mcp()
+        if parent_url and parent_token:
+            hitl_server = None
+            self._hitl_port = None
+            self._hitl_token = None
+            mcp_url_override: Optional[str] = parent_url
+            mcp_token_override: Optional[str] = parent_token
+        else:
+            from .caller_context import CallerInfo
+            hitl_server = HitlServer(
+                hitl_io,
+                skill_store=skill_store,
+                global_store=global_store,
+                primary_caller=CallerInfo(skill.name, skill.manifest.metadata.version),
+            )
+            hitl_server.start()
+            self._hitl_port = hitl_server.port
+            self._hitl_token = hitl_server.token
+            mcp_url_override = None
+            mcp_token_override = None
+
         try:
             # Rebuild .claude.json so it includes the zipsa MCP entry.
+            # When running as a child skill, use the parent's URL + token
+            # directly; for top-level runs, use our own HitlServer's port.
             claude_json_path = skill.build_claude_json(
                 output_dir=skill_data_dir,
                 container_workspace=CONTAINER_WORKSPACE,
                 hitl_port=self._hitl_port,
+                mcp_url_override=mcp_url_override,
+                mcp_token_override=mcp_token_override,
             )
 
             if skill.manifest.spec.phases:
@@ -427,7 +462,8 @@ class DockerExecutor:
             final_error = {"code": "docker_failed", "message": "Docker exited with non-zero code"}
             raise
         finally:
-            hitl_server.stop()
+            if hitl_server is not None:
+                hitl_server.stop()
             self._hitl_port = None
             self._hitl_token = None
 
@@ -1058,6 +1094,30 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    @classmethod
+    def _merge_always_on_tools(cls, allowed_tools: str) -> str:
+        """Merge always-on tools into a comma-separated --allowedTools string.
+        Skips entries already present so the output stays unique."""
+        existing = [t.strip() for t in allowed_tools.split(",") if t.strip()]
+        for t in cls._ALWAYS_ON_TOOLS:
+            if t not in existing:
+                existing.append(t)
+        return ",".join(existing)
+
+    # Always-on tools shared between the PreToolUse hook (phase-allow.json)
+    # and Claude Code's --allowedTools flag. The hook gates execution;
+    # --allowedTools controls which tools Claude exposes to the model at all.
+    # Both must include these names for an always-on tool to actually work.
+    _ALWAYS_ON_TOOLS: list[str] = [
+        "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+        "mcp__zipsa__recall", "mcp__zipsa__remember",
+        "mcp__zipsa__forget", "mcp__zipsa__list_memory",
+        "mcp__zipsa__ask_once",
+        "mcp__zipsa__get_artifact",
+        "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
+        "ToolSearch",
+    ]
+
     def _write_phase_allow_file(
         self,
         output_dir: Path,
@@ -1070,17 +1130,7 @@ class DockerExecutor:
         /.zipsa read-only mount.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        # Always-on tools: HITL/memory (the agent may ask/remember at any time)
-        # plus Claude Code infra tools the agent falls back to when confused
-        # (ToolSearch — denying it makes the agent retry in a loop).
-        allowed_tools = list(allowed_tools) + [
-            "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
-            "mcp__zipsa__recall", "mcp__zipsa__remember",
-            "mcp__zipsa__forget", "mcp__zipsa__list_memory",
-            "mcp__zipsa__ask_once",
-            "mcp__zipsa__get_artifact",
-            "ToolSearch",
-        ]
+        allowed_tools = list(allowed_tools) + self._ALWAYS_ON_TOOLS
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
         return path
@@ -1326,6 +1376,10 @@ class DockerExecutor:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
             allowed_tools = allowed_tools_override if allowed_tools_override is not None else skill.get_allowed_tools()
+            # Augment with the always-on MCP tools so Claude exposes them
+            # to the model. Without this, the hook would allow them but
+            # Claude would never offer them — they'd be invisible.
+            allowed_tools = self._merge_always_on_tools(allowed_tools)
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # Collect container paths for all stdio MCP mounts so Claude Code
