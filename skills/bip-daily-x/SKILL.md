@@ -221,8 +221,10 @@ Decide whether to enrich the draft with today's Claude Code activity.
    오늘 작업한 Claude Code 내용도 트윗에 반영할까요? (y/N)
    ```
 
-2. Parse the reply. Treat as **yes** any of: `y`, `Y`, `yes`, `네`,
-   `예`. Treat everything else (including empty input) as **no**.
+2. Parse the reply. Treat as **yes** any of: `y`, `Y`, `yes`, `Yes`,
+   `YES`, `네`, `예`, `응`, `ㅇ`, `ㅇㅇ`. Treat everything else
+   (including empty input) as **no**. Defaulting unknown input to
+   **no** is intentional — agenthud is the expensive branch.
 
 3. If **no**, emit:
    ```json
@@ -244,15 +246,22 @@ Decide whether to enrich the draft with today's Claude Code activity.
    ```
 
 5. Parse the period reply:
-   - `1` or `today` → `target_date = "today"`
-   - `2` or `yesterday` → `target_date = "yesterday"`
+   - `1`, `today`, or `오늘` → `target_date = "today"`
+   - `2`, `yesterday`, or `어제` → `target_date = "yesterday"`
    - `3` → reprompt once with: `"YYYY-MM-DD 형식으로 입력해주세요."`
      Parse the second reply as ISO date (must match regex
      `^\d{4}-\d{2}-\d{2}$`).
    - Any direct `YYYY-MM-DD` input on the first prompt is also accepted.
-   - On any parse failure → reprompt once. On second failure, default
-     to `target_date = "today"` and mention the fallback in
-     `user_facing_summary`.
+
+   If the first reply matches none of the above forms (e.g.,
+   `tomorrow`, `next week`, garbage text): reprompt once with
+   `"1, 2, 3 중 선택하거나 YYYY-MM-DD 형식으로 입력해주세요."`. If
+   the second reply also fails to parse, default to
+   `target_date = "today"` and mention the fallback in
+   `user_facing_summary`. Semantic validation of the ISO date (e.g.,
+   "not in the future") is deferred — agenthud will simply return
+   zero sessions on absurd dates and `report` will short-circuit
+   gracefully.
 
 6. Emit:
    ```json
@@ -265,6 +274,14 @@ Decide whether to enrich the draft with today's Claude Code activity.
    `user_facing_summary` (Korean):
    `"agenthud 사용: {target_date}"` (substitute `{target_date}` with
    the resolved value).
+
+**Precedence note.** Both `target_date_default` (set by precheck) and
+`target_date` (set here on the `use_agenthud=true` branch) may exist
+in `next_phase_input`. Downstream phases MUST read `target_date` if
+present and fall back to `target_date_default` only if `target_date`
+is absent. On the `use_agenthud=false` branch this phase does not
+emit `target_date` at all, but `report` short-circuits in that case
+so the field is unused.
 
 ### report
 
