@@ -27,6 +27,21 @@ Single purpose: report current weather for a given location.
 
 5. Reply to the user in their language, in 1-2 sentences. Keep it natural and conversational.
 
+6. After replying, save the structured result as JSON to `/home/agent/runs/current/artifacts/weather.json` (use the Write tool). Shape:
+   ```json
+   {
+     "location": "Sydney",
+     "condition": "Light drizzle",
+     "temp_c": 19,
+     "humidity_pct": 83,
+     "wind": "↓5km/h",
+     "feels_like_c": 19,
+     "language": "en",
+     "fetched_at": "2026-05-21T12:00:00+10:00"
+   }
+   ```
+   This is what makes the skill composable — other skills can read it via `mcp__zipsa__get_artifact`.
+
 ## Output examples
 
 Korean:
@@ -50,5 +65,5 @@ Do not attempt to handle off-topic requests with other tools.
 ## Constraints
 
 - For missing user input, follow the runtime contract's guidance on interacting with the user. Never use `AskUserQuestion`, never emit a status code as a way to prompt.
-- Use ONLY WebFetch in addition to the runtime's built-in user-interaction tools. No Bash, no WebSearch, no other tools.
+- Use ONLY WebFetch and Write in addition to the runtime's built-in user-interaction tools. Write is for the artifact only — do not write anywhere else.
 - Be concise. No preamble like "Sure, let me check..." — just answer.

@@ -1,0 +1,30 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: artifact-echo
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    E2E test skill for Phase 1 artifacts. Reads a named artifact from a
+    past run of another skill via mcp__zipsa__get_artifact and echoes the
+    parsed content back.
+  tags: [test, artifact, e2e]
+
+spec:
+  purpose: |
+    Prove that one skill can consume another skill's artifact through MCP
+    — the read half of the log-mediated data sharing contract.
+    Refuse anything that isn't an artifact lookup.
+
+  instructions: ./SKILL.md
+
+  model:
+    name: claude-haiku-4-5-20251001
+
+  tools:
+    builtin: []
+
+  limits:
+    max_turns: 4
+    max_cost_usd: 0.05
+    timeout_seconds: 30

@@ -1,0 +1,49 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: artifact-roundtrip
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    E2E test skill for Phase 1 artifacts. Phase A writes an artifact;
+    phase B reads it back via mcp__zipsa__get_artifact using
+    execution_context.run_id. Proves the orchestrator pattern works
+    intra-skill across phases.
+  tags: [test, artifact, e2e, multi-phase]
+
+spec:
+  purpose: |
+    Roundtrip an artifact: write in phase A, read in phase B via MCP.
+    Verify content matches what was written.
+
+  instructions: ./SKILL.md
+
+  default_query: "roundtrip"
+
+  model:
+    name: claude-haiku-4-5-20251001
+
+  phases:
+    - id: write
+      goal: |
+        Write a deterministic JSON artifact to
+        /home/agent/runs/current/artifacts/roundtrip.json and emit the
+        written content in next_phase_input so the next phase can verify.
+      allowed_tools:
+        - Write
+      limits:
+        max_turns: 3
+        max_cost_usd: 0.03
+        timeout_seconds: 30
+
+    - id: read
+      goal: |
+        Call mcp__zipsa__get_artifact with
+        skill="artifact-roundtrip", version="0.1.0",
+        run_id=execution_context.run_id, name="roundtrip.json".
+        Verify the returned content matches previous_phase_output.
+      allowed_tools: []   # auto-allow injects mcp__zipsa__get_artifact
+      limits:
+        max_turns: 3
+        max_cost_usd: 0.03
+        timeout_seconds: 30
