@@ -1714,3 +1714,44 @@ class TestListRequiresIndicator:
         result = CliRunner().invoke(app, ["list"])
         assert result.exit_code == 0
         assert "needs configure" not in result.output
+
+
+class TestCallTraceCycleDetection:
+    """ZIPSA_CALL_TRACE and ZIPSA_CALL_DEPTH env vars are set by a
+    parent skill's RunSkillHandler when spawning a child. The child
+    launcher must reject runs that would cycle or exceed depth cap."""
+
+    def test_cycle_rejected(self, monkeypatch, capsys):
+        from zipsa.cli import _check_call_trace
+        monkeypatch.setenv("ZIPSA_CALL_TRACE", "morning-ritual,daily-bip-tweet")
+        with pytest.raises(SystemExit) as exc:
+            _check_call_trace(skill_name="daily-bip-tweet")
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "skill_cycle_detected" in err
+
+    def test_depth_cap_rejected(self, monkeypatch, capsys):
+        from zipsa.cli import _check_call_trace
+        monkeypatch.setenv("ZIPSA_CALL_DEPTH", "5")
+        with pytest.raises(SystemExit) as exc:
+            _check_call_trace(skill_name="any")
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "skill_depth_exceeded" in err
+
+    def test_depth_below_cap_passes(self, monkeypatch):
+        from zipsa.cli import _check_call_trace
+        monkeypatch.setenv("ZIPSA_CALL_DEPTH", "4")
+        _check_call_trace(skill_name="any")  # no raise
+
+    def test_no_env_vars_passes(self, monkeypatch):
+        from zipsa.cli import _check_call_trace
+        monkeypatch.delenv("ZIPSA_CALL_TRACE", raising=False)
+        monkeypatch.delenv("ZIPSA_CALL_DEPTH", raising=False)
+        _check_call_trace(skill_name="weather")  # no raise
+
+    def test_first_in_chain_passes(self, monkeypatch):
+        """Skill appearing for the first time (not in trace yet) passes."""
+        from zipsa.cli import _check_call_trace
+        monkeypatch.setenv("ZIPSA_CALL_TRACE", "parent")
+        _check_call_trace(skill_name="child")  # no raise — child not in trace

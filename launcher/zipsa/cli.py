@@ -1,6 +1,7 @@
 """CLI for zipsa launcher."""
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -43,6 +44,38 @@ def _resolve_skill_path(name: str) -> Path:
     Thin wrapper around resolve_skill so tests can patch a single symbol.
     """
     return resolve_skill(name)
+
+
+_MAX_CALL_DEPTH = 5
+
+
+def _check_call_trace(skill_name: str) -> None:
+    """Reject runs that would cycle or exceed depth cap.
+
+    A parent skill's RunSkillHandler passes its own call chain as
+    ZIPSA_CALL_TRACE (comma-separated skill names) and the current
+    depth as ZIPSA_CALL_DEPTH. The child launcher checks these at
+    startup so the rejection happens BEFORE any Docker resources are
+    spent.
+    """
+    trace = [s for s in os.environ.get("ZIPSA_CALL_TRACE", "").split(",") if s]
+    if skill_name in trace:
+        chain_str = " -> ".join(trace + [skill_name])
+        print(
+            f"Error: skill_cycle_detected -- '{skill_name}' is already "
+            f"in the call chain ({chain_str})",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    depth = int(os.environ.get("ZIPSA_CALL_DEPTH", "0"))
+    if depth >= _MAX_CALL_DEPTH:
+        chain_str = " -> ".join(trace)
+        print(
+            f"Error: skill_depth_exceeded -- call depth {depth} >= cap "
+            f"{_MAX_CALL_DEPTH} (chain: {chain_str})",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
 
 app = typer.Typer(
@@ -209,6 +242,8 @@ def run(
     ] = None,
 ):
     """Execute a skill with the specified runtime."""
+    # Reject cyclic invocations and depth-capped chains before any expensive work.
+    _check_call_trace(name)
     try:
         # Load skill
         skill = Skill.load(_resolve_skill_path(name))
