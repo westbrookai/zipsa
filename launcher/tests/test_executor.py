@@ -2256,7 +2256,6 @@ class TestArtifactsDirCreation:
         run_dir = runs_dir / run_id
         run_dir.mkdir()
 
-        # Helper under test: a new internal method ex._ensure_run_artifacts_dir(run_dir)
         ex._ensure_run_artifacts_dir(run_dir)
         assert (run_dir / "artifacts").exists()
         assert (run_dir / "artifacts").is_dir()
@@ -2284,7 +2283,8 @@ class TestArtifactsDirCreation:
         skill = Skill.load(skill_dir)
         ex = DockerExecutor(runtime="claude", image="x")
 
-        sd = tmp_path / "afct@0.1.0"
+        from zipsa.paths import skill_data_dir
+        sd = skill_data_dir("afct", "0.1.0")
         sd.mkdir(parents=True, exist_ok=True)
         run_dir = sd / "runs" / "2026-05-21_120000_000"
         run_dir.mkdir(parents=True)
@@ -2297,8 +2297,10 @@ class TestArtifactsDirCreation:
         joined = " ".join(cmd)
         assert f"{run_dir}:/home/agent/runs/current:rw" in joined
 
-    def test_build_docker_command_skips_mount_when_run_dir_none(self, tmp_path):
+    def test_build_docker_command_skips_mount_when_run_dir_none(self, tmp_path, monkeypatch):
         """Dry-run / shell mode pass run_dir=None — no run_dir mount."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
         from zipsa.core.skill import Skill
         from zipsa.core.executor import DockerExecutor
 
