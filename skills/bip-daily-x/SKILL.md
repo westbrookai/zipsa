@@ -15,7 +15,18 @@ strings quoted in each phase below are the **verbatim** Korean
 strings the agent must produce — do not paraphrase, do not translate.
 When referring to internal field names (`voice`, `interests`,
 `next_phase_input`, etc.) inside Korean prose, keep the field name
-in English.
+in English. Where a Korean example contains a brace-delimited token
+like `{N}` or `{example}`, that token is a substitution placeholder
+— replace it with the actual runtime value when emitting the string.
+
+## State Carryover
+
+Each phase reads `previous_phase_input` and emits `next_phase_input`.
+Unless a phase explicitly states otherwise, `next_phase_input` MUST
+include every field present in `previous_phase_input` plus any new
+fields this phase produces. The `...previous fields...` shorthand in
+the JSON examples below means "carry forward every field from
+previous_phase_input verbatim" — it is not a license to drop fields.
 
 ## Per-user setup
 
@@ -97,16 +108,20 @@ Three groups of user-specific values:
 Search public build-in-public tweets via the WebSearch built-in tool
 and extract tone/structure insights for the draft phase.
 
-1. Build the WebSearch query from `config.discover_query` (default:
-   `"#buildinpublic OR #buildinpublic AI"`).
+1. Read `config.discover_query` from the manifest at runtime (do not
+   hardcode the literal — the manifest is the source of truth). Use
+   it as the WebSearch query.
 
-2. Call `WebSearch` with that query. Aim for 5-10 results. Examples
-   of useful results: short personal updates with metrics, before/after
-   framing, question-style hooks.
+2. Call `WebSearch` with that query. WebSearch typically returns
+   5-10 results, which is sufficient. Examples of useful results:
+   short personal updates with metrics, before/after framing,
+   question-style hooks.
 
 3. From the result snippets, extract **3-5 short insights** about what
    format/tone is working today. Phrase them as actionable rules a
-   tweet writer could apply. Examples:
+   tweet writer could apply. The bullets below are illustrative shapes
+   only — do not reuse verbatim; your insights should reflect today's
+   actual search results:
 
    - "Lead with a concrete number in the first 50 chars"
    - "Before/after framing outperforms generic 'shipped X' posts"
@@ -115,8 +130,10 @@ and extract tone/structure insights for the draft phase.
    Do NOT copy other people's tweet text verbatim (avoidance of
    inadvertent plagiarism). Distill, don't paste.
 
-4. If WebSearch returns 0 results OR fails twice in a row, set
-   `insights=[]` and continue — the draft phase can still operate.
+4. If the first `WebSearch` call errors, retry **exactly once**. If
+   that retry also errors, OR if `WebSearch` returns 0 results on
+   either call, set `insights=[]` and continue — the draft phase can
+   still operate.
 
 5. Output `next_phase_input`:
    ```json
@@ -126,8 +143,9 @@ and extract tone/structure insights for the draft phase.
    }
    ```
    `user_facing_summary` (Korean):
-   "BIP 트렌드 분석 완료 — 인사이트 N개"
-   (where N is the count of insights; if 0, say "인사이트 추출 실패, 계속 진행").
+   - If `insights` is non-empty: `"BIP 트렌드 분석 완료 — 인사이트 {N}개"`
+     (substitute `{N}` with the count, e.g., `3`).
+   - If `insights` is empty: `"BIP 검색 결과 없음 — 웹 데이터 없이 계속"`.
 
 ### report
 
