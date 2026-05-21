@@ -1,0 +1,18 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: memory-peek
+  version: 0.1.0
+  description: E2E fixture — calls recall("color") and reports value (or None).
+spec:
+  purpose: Try to read a key from this skill's own memory and report it.
+  instructions: ./SKILL.md
+  default_query: "go"
+  model:
+    name: claude-haiku-4-5-20251001
+  tools:
+    builtin: []
+  limits:
+    max_turns: 3
+    max_cost_usd: 0.05
+    timeout_seconds: 60

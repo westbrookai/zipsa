@@ -1,0 +1,34 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: orchestrator-demo
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    E2E test for Phase 2 orchestrator pattern: calls weather via
+    run_skill, then chains to get_artifact using the returned routing
+    fields to read the weather.json artifact back.
+  tags: [test, orchestrator, e2e]
+
+spec:
+  purpose: |
+    Prove the run_skill -> get_artifact chain works end-to-end without
+    out-of-band coordination.
+
+  instructions: ./SKILL.md
+
+  default_query: "Sydney"
+
+  children:
+    - weather
+
+  model:
+    name: claude-haiku-4-5-20251001
+
+  tools:
+    builtin: []
+
+  limits:
+    max_turns: 5
+    max_cost_usd: 0.10
+    timeout_seconds: 120
