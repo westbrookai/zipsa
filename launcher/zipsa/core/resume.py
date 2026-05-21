@@ -62,8 +62,7 @@ def find_resumable_run(
     if current_phase_count < 2:
         return None  # single-shot skills not resumable
 
-    install_data_dir = zipsa_paths.skill_data_dir(skill, current_version)
-    runs_dir = install_data_dir / "runs"
+    runs_dir = zipsa_paths.skill_runs_dir(skill, current_version)
     if not runs_dir.exists():
         return None
 

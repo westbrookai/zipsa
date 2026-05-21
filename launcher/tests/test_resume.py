@@ -128,10 +128,13 @@ class TestFindResumableRun:
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
         _make_run(tmp_path, "myskill", "0.1.0", "2026-05-21_100000_000000",
                   status="failed", user_input="today",
-                  phases=[{"id": "p1", "status": "ok", "cost_usd": 0.01, "turns": 1}])
+                  phases=[
+                      {"id": "p1", "status": "ok", "cost_usd": 0.01, "turns": 1},
+                      {"id": "p2", "status": "ok", "cost_usd": 0.02, "turns": 1},
+                  ])
         assert find_resumable_run(
             skill="myskill", current_version="0.1.0",
-            current_args="today", current_phase_count=1,
+            current_args="today", current_phase_count=2,
         ) is None
 
     def test_missing_state_json_returns_none(self, tmp_path, monkeypatch):
