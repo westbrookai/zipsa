@@ -1077,6 +1077,7 @@ class DockerExecutor:
             "mcp__zipsa__recall", "mcp__zipsa__remember",
             "mcp__zipsa__forget", "mcp__zipsa__list_memory",
             "mcp__zipsa__ask_once",
+            "mcp__zipsa__get_artifact",
             "ToolSearch",
         ]
         path = output_dir / "phase-allow.json"

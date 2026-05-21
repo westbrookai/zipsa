@@ -835,6 +835,7 @@ class TestWritePhaseAllowFile:
                 "mcp__zipsa__recall", "mcp__zipsa__remember",
                 "mcp__zipsa__forget", "mcp__zipsa__list_memory",
                 "mcp__zipsa__ask_once",
+                "mcp__zipsa__get_artifact",
                 "ToolSearch",
             ],
         }
@@ -1123,6 +1124,18 @@ class TestMemoryIntegration:
         executor._write_default_phase_allow_file(tmp_path, skill)
         data = json.loads((tmp_path / "phase-allow.json").read_text())
         assert "mcp__zipsa__ask_once" in data["allowed_tools"]
+
+    def test_default_allow_list_contains_get_artifact(self, tmp_path):
+        """get_artifact is always-on (per runtime-contract.md) — every
+        skill, no manifest opt-in, can read artifacts written by past
+        runs."""
+        import json
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor._write_default_phase_allow_file(tmp_path, skill)
+        data = json.loads((tmp_path / "phase-allow.json").read_text())
+        assert "mcp__zipsa__get_artifact" in data["allowed_tools"]
 
 
 class TestSkillDirMount:
