@@ -411,22 +411,93 @@ Steps:
 
 ### draft
 
-Write ONE tweet, ≤ `config.max_tweet_chars` (280) characters, in the
-user's `voice`. The tweet should communicate the day's most
-share-worthy progress — pick one concrete thing rather than a list.
-Pass the text as `draft` to the next phase.
+Write ONE English tweet ≤ `config.max_tweet_chars` (280) characters
+in the user's `voice`, drawing on whichever inputs are available.
+
+Inputs (read from `previous_phase_input`):
+
+- `voice` (string) — user's tweet tone, from precheck/ask_once.
+- `insights` (list of strings) — tone/structure rules from discover.
+- `interests_summary` (string) — English prose summary from interests.
+- `interests_used` (list of strings) — topic labels.
+- `report` (object|null) — agenthud slice if user opted in; null otherwise.
+
+Rules:
+
+- The tweet **must be English**. Even when the user types Korean in
+  the review phase, the tweet text stays English.
+- Stay in `voice`. Apply 1-2 of the `insights` if natural — do not
+  force them.
+- Prioritize content sources in this order:
+  1. If `report` is non-null and `report.projects` has a clear
+     share-worthy highlight, lead with that (specific shipped thing).
+  2. Otherwise lead with the most interesting thread from
+     `interests_summary`.
+- Use `insights` to shape the format (lead with a number, end with
+  a question, etc.).
+- Do NOT include hashtag chains. One hashtag at most, only if natural.
+- Do NOT include URLs unless they are essential.
+
+Output:
+
+```json
+next_phase_input = {
+  ...previous fields...,
+  "draft": "<English tweet, ≤ 280 chars>"
+}
+```
+
+`user_facing_summary` (Korean): `"초안 작성 완료"`
 
 ### review
 
-Show the draft to the user and ask whether to revise. If they give
-empty input, treat it as approval. If they give feedback, apply the
-feedback while staying in voice, then re-show. Cap at
-`config.max_review_iterations` rounds; after the cap, force a
-yes/no decision.
+Run a Korean-language review loop on the English draft.
 
-Before posting, confirm one final time ("Post this to X?").
-If the user says no, stop with `status=failed`,
-`error.code="user_declined"`.
+**Language constraint:**
+- All conversation with the user in this phase is **Korean**.
+- The draft text itself is **English** and must NOT be translated
+  when shown back to the user.
+
+Steps:
+
+1. Show the draft (English) with its character count. Then ask
+   (Korean):
+   ```
+   이대로 갈까요? 수정 요청? (엔터=확정)
+   ```
+
+2. If the user gives empty input → treat as approval, jump to step 4.
+
+3. If the user gives feedback (in Korean or English) → apply the
+   feedback to the draft while keeping it in **English** and in
+   `voice`. Verify ≤ `config.max_tweet_chars`. Go back to step 1.
+
+   Cap at `config.max_review_iterations` (5) iterations. After the
+   cap, force a binary decision with:
+   ```
+   추가 수정 한도(5회) 도달. 이대로 게시할까요? (y/N)
+   ```
+
+4. Final confirmation (Korean):
+   ```
+   X에 게시할까요? (y/N)
+   ```
+
+   - `y` / `yes` / `Yes` / `YES` / `네` / `예` / `응` / `ㅇ` / `ㅇㅇ`
+     → set `next_phase_input.approved_for_post = true` and proceed.
+   - Anything else (including empty) → stop with `status=failed`,
+     `error.code="user_declined"`,
+     `user_facing_summary` (Korean): `"사용자가 게시를 취소했습니다"`.
+
+Output (on approval):
+```json
+next_phase_input = {
+  ...previous fields...,
+  "draft": "<final English tweet>",
+  "approved_for_post": true
+}
+```
+`user_facing_summary` (Korean): `"최종 컨펌 완료 — 게시 진행"`
 
 ### post
 
@@ -438,11 +509,13 @@ python3 /skill/scripts/post.py "<approved draft>"
 
 Parse the single JSON line from stdout.
 
-- On `status="ok"`: set the phase `result` to the parsed JSON. Write
-  `user_facing_summary` like "게시 완료: <url>" (or English).
+- On `status="ok"`: set the phase `result` to the parsed JSON. Set
+  `user_facing_summary` (Korean): `"게시 완료: <url>"` (substitute
+  `<url>` with the actual URL from the script output).
 - On `status="failed"`: bubble up as `status=failed`,
-  `error.code="x_post_failed"`, with the script's `error` in
-  `user_facing_summary` (truncated to 200 chars).
+  `error.code="x_post_failed"`. Set `user_facing_summary` (Korean):
+  `"게시 실패: <error>"` (substitute `<error>` with the script's
+  error message; truncate to 200 chars).
 
 The `tweet_id` in `result` is the durable key for "what posted
 when" — future retrieval depends on it.
