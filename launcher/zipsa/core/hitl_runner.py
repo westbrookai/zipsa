@@ -38,11 +38,19 @@ def _logged(fn):
     name = fn.__name__
 
     def _format(kwargs: dict) -> str:
+        # Identify the caller via the contextvar set by
+        # CallerContextMiddleware (parent vs child via run_skill).
+        # MCP SDK's own 'Processing request' log doesn't include any
+        # session info, so this is how the user tells parent calls
+        # apart from child-into-parent-server calls.
+        from .caller_context import current_caller
+        caller = current_caller.get()
+        who = f"{caller.skill}@{caller.version}" if caller else "?"
         safe = {
             k: (v[:80] + "…" if isinstance(v, str) and len(v) > 80 else v)
             for k, v in kwargs.items()
         }
-        return f"call {name}({safe})"
+        return f"[{who}] call {name}({safe})"
 
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
