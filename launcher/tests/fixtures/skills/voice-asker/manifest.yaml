@@ -1,0 +1,29 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: voice-asker
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    E2E test fixture. Asks the user a single question via
+    mcp__zipsa__ask and echoes the answer back. Used to prove HITL
+    routes through parent's HitlServer when invoked as a child.
+  tags: [test, hitl]
+
+spec:
+  purpose: |
+    Ask the user one question and return their answer.
+
+  instructions: ./SKILL.md
+  default_query: "go"
+
+  model:
+    name: claude-haiku-4-5-20251001
+
+  tools:
+    builtin: []
+
+  limits:
+    max_turns: 4
+    max_cost_usd: 0.05
+    timeout_seconds: 120

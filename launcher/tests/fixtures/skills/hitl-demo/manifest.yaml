@@ -1,0 +1,32 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: hitl-demo
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    E2E test fixture. Parent skill that calls voice-asker via
+    run_skill. Proves HITL inside a child routes through parent's
+    HitlServer (parent's terminal) and the answer flows back.
+  tags: [test, hitl, orchestrator]
+
+spec:
+  purpose: |
+    Invoke voice-asker as a child and report the answer it collected.
+
+  instructions: ./SKILL.md
+  default_query: "go"
+
+  children:
+    - voice-asker
+
+  model:
+    name: claude-haiku-4-5-20251001
+
+  tools:
+    builtin: []
+
+  limits:
+    max_turns: 4
+    max_cost_usd: 0.10
+    timeout_seconds: 180
