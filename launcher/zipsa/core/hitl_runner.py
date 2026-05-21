@@ -178,6 +178,39 @@ class HitlServer:
                 except HitlUnattended as e:
                     raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
+        from .artifact_handler import ArtifactHandler
+        artifact_h = ArtifactHandler()
+
+        @mcp.tool()
+        def get_artifact(
+            skill: str, version: str, run_id: str, name: str
+        ) -> dict:
+            """Read an artifact written by a past (or in-progress) skill run.
+
+            Skills write structured output to their run's artifacts/ dir
+            (container path /home/agent/runs/current/artifacts/<name>).
+            Use this to consume that output from another skill or another
+            agent turn — log-mediated data sharing.
+
+            Args:
+              skill: skill name (e.g. "agenthud-report")
+              version: skill version (e.g. "0.1.0")
+              run_id: timestamp directory under runs/ (e.g.
+                "2026-05-21_120000_000")
+              name: flat filename — no slashes, no '..', no absolute paths
+
+            Returns:
+              {"name": str, "size": int, "content": object} — `content`
+              is parsed JSON for *.json files, utf-8 text otherwise.
+
+            Errors:
+              ARTIFACT_NOT_FOUND, ARTIFACT_BAD_NAME, ARTIFACT_TOO_LARGE,
+              ARTIFACT_BAD_JSON.
+            """
+            return artifact_h.run(
+                skill=skill, version=version, run_id=run_id, name=name,
+            )
+
         app = mcp.streamable_http_app()
         app.add_middleware(_BearerAuthMiddleware, expected_token=self.token)
         config = uvicorn.Config(
