@@ -568,6 +568,21 @@ class DockerExecutor:
         artifacts.mkdir(exist_ok=True)
         return artifacts
 
+    @staticmethod
+    def _write_phase_state(phase_dir: Optional[Path], envelope: dict) -> None:
+        """Persist the phase's full skill envelope to state.json.
+
+        Called after a phase completes with status="ok" so a future
+        `zipsa run` invocation can resume from the next phase using
+        the persisted `next_phase_input`. No-op when phase_dir is None
+        (dry-run, shell, or single-shot path where multi-phase
+        per-phase dirs aren't created).
+        """
+        if phase_dir is None:
+            return
+        path = phase_dir / "state.json"
+        path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2))
+
     def _execute_skill(
         self,
         docker_cmd: list[str],
@@ -1020,6 +1035,9 @@ class DockerExecutor:
                             cost_usd=shared_limits_state.phase_cost_usd,
                             turns=shared_limits_state.phase_turns,
                         ))
+                        # Persist the envelope so a future invocation
+                        # can resume from the next phase.
+                        self._write_phase_state(phase_dir, phase_out)
                         if phase_out.get("state_updates"):
                             self._apply_skill_state(skill, phase_out["state_updates"])
                             skill_state = self._load_skill_state(skill)

@@ -2516,3 +2516,39 @@ class TestParentMCPDelegation:
         url, token = DockerExecutor._detect_parent_mcp()
         assert url is None
         assert token is None
+
+
+class TestPhaseStateJsonWrite:
+    """Each phase that completes with status=ok writes its full skill
+    envelope to phases/<idx>-<id>/state.json. Failed/out_of_scope phases
+    write nothing — only ok phases produce a state.json."""
+
+    def test_ok_phase_writes_state_json(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.core.executor import DockerExecutor
+
+        run_dir = tmp_path / "skillname@0.1.0" / "runs" / "2026-05-21_000000_000"
+        phase_dir = run_dir / "phases" / "0-precheck"
+        phase_dir.mkdir(parents=True)
+
+        envelope = {
+            "status": "ok",
+            "phase": "precheck",
+            "result": {"db_id": "abc"},
+            "state_updates": {"db_id": "abc"},
+            "next_phase_input": {"db_id": "abc", "date": "today"},
+            "user_facing_summary": "DB resolved.",
+        }
+        DockerExecutor._write_phase_state(phase_dir, envelope)
+
+        path = phase_dir / "state.json"
+        assert path.exists()
+        import json
+        loaded = json.loads(path.read_text())
+        assert loaded == envelope
+
+    def test_write_phase_state_skips_when_phase_dir_none(self):
+        """Dry-run and shell paths pass phase_dir=None; helper must
+        no-op without raising."""
+        from zipsa.core.executor import DockerExecutor
+        DockerExecutor._write_phase_state(None, {"status": "ok"})  # no raise
