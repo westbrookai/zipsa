@@ -2552,3 +2552,40 @@ class TestPhaseStateJsonWrite:
         no-op without raising."""
         from zipsa.core.executor import DockerExecutor
         DockerExecutor._write_phase_state(None, {"status": "ok"})  # no raise
+
+
+class TestResumeFromSkipsPhases:
+    """When _execute_phases is called with resume_from=N, phases
+    0..N-1 are skipped; previous_output is loaded from
+    phases/<N-1>-*/state.json; the resumed phase's metering starts
+    from zero."""
+
+    def test_load_resume_state_returns_next_phase_input(self, tmp_path):
+        """The helper reads next_phase_input from the phase BEFORE
+        resume_from."""
+        from zipsa.core.executor import DockerExecutor
+
+        run_dir = tmp_path / "x@0.1.0" / "runs" / "2026-05-21_100000_000000"
+        phase_dir = run_dir / "phases" / "1-second"
+        phase_dir.mkdir(parents=True)
+        envelope = {
+            "status": "ok", "phase": "second",
+            "next_phase_input": {"answer": 42, "marker": "ok"},
+            "user_facing_summary": "phase 2 done",
+            "result": None, "state_updates": None,
+        }
+        import json as _j
+        (phase_dir / "state.json").write_text(_j.dumps(envelope))
+
+        loaded = DockerExecutor._load_resume_state(run_dir, resume_from=2)
+        assert loaded == {"answer": 42, "marker": "ok"}
+
+    def test_load_resume_state_missing_raises(self, tmp_path):
+        """If phase N-1's state.json is missing, executor cannot
+        proceed — raises with a clear message."""
+        import pytest
+        from zipsa.core.executor import DockerExecutor
+        run_dir = tmp_path / "x@0.1.0" / "runs" / "2026-05-21_100000_000000"
+        (run_dir / "phases").mkdir(parents=True)
+        with pytest.raises(FileNotFoundError, match="state.json"):
+            DockerExecutor._load_resume_state(run_dir, resume_from=2)

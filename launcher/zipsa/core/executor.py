@@ -91,6 +91,7 @@ class DockerExecutor:
         mcp_debug: bool = False,
         extra_docker_opts: Optional[list[str]] = None,
         requires_values: Optional[dict[str, object]] = None,
+        resume_from: Optional[int] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -194,6 +195,7 @@ class DockerExecutor:
             extra_docker_opts=extra_docker_opts,
             env_file=env_file,
             started_at=started_at,
+            resume_from=resume_from,
         )
 
     def _execute_with_hitl(
@@ -207,6 +209,7 @@ class DockerExecutor:
         extra_docker_opts: Optional[list[str]],
         env_file: Path,
         started_at: Optional[datetime] = None,
+        resume_from: Optional[int] = None,
     ) -> Iterator[dict]:
         """Wrap real execution with HitlServer lifecycle.
 
@@ -306,6 +309,7 @@ class DockerExecutor:
                     skill, user_input, env, run_dir, claude_json_path,
                     mcp_debug_host is not None, extra_docker_opts,
                     _limits_state_ref=_limits_state_ref,
+                    resume_from=resume_from,
                 ):
                     # Capture final status from the complete event or breach event
                     etype = event.get("type")
@@ -582,6 +586,32 @@ class DockerExecutor:
             return
         path = phase_dir / "state.json"
         path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2))
+
+    @staticmethod
+    def _load_resume_state(run_dir: Path, resume_from: int) -> object:
+        """Read the next_phase_input from the phase BEFORE resume_from.
+
+        Used by _execute_phases when resume_from is set: the previous
+        phase's state.json is the source of truth for what the resumed
+        phase should see as previous_output.
+
+        Phase dirs are named "<idx>-<phase_id>"; we scan the phases/
+        directory for the one starting with f"{resume_from-1}-".
+        """
+        prev_idx = resume_from - 1
+        phases_dir = run_dir / "phases"
+        if phases_dir.exists():
+            for d in sorted(phases_dir.iterdir()):
+                if d.name.startswith(f"{prev_idx}-"):
+                    state_path = d / "state.json"
+                    if state_path.exists():
+                        return json.loads(state_path.read_text()).get(
+                            "next_phase_input",
+                        )
+                    break
+        raise FileNotFoundError(
+            f"state.json for phase {prev_idx} not found under {phases_dir}"
+        )
 
     def _execute_skill(
         self,
@@ -862,6 +892,7 @@ class DockerExecutor:
         mcp_debug: bool,
         extra_docker_opts: Optional[list[str]],
         _limits_state_ref: Optional[list] = None,
+        resume_from: Optional[int] = None,
     ) -> Iterator[dict]:
         from .models import PhaseSpec
 
@@ -900,6 +931,26 @@ class DockerExecutor:
 
         # Per-phase rollup for summary.json
         phase_summaries: list[PhaseSummary] = []
+
+        # Resume support: when resume_from is set, skip phases
+        # 0..resume_from-1 and seed previous_output from the persisted
+        # state.json of phase resume_from-1.
+        start_phase_idx = 0
+        if resume_from is not None and resume_from > 0:
+            start_phase_idx = resume_from
+            previous_output = self._load_resume_state(
+                run_dir, resume_from=resume_from,
+            )
+            # Pre-populate phase_summaries with ok markers for the
+            # skipped phases so the new run's summary still records
+            # them as ran (cost/turns are 0 — actual cost is in the
+            # original run's summary).
+            for skipped_idx in range(resume_from):
+                skipped = phases[skipped_idx]
+                phase_summaries.append(PhaseSummary(
+                    id=skipped.id, status="ok",
+                    cost_usd=0.0, turns=0,
+                ))
         # Tracks final run status for the zipsa_run_complete event
         run_final_status = "infra_failed"
         run_final_exit_code = 5
@@ -908,6 +959,8 @@ class DockerExecutor:
 
         try:
             for phase_idx, phase in enumerate(phases):
+                if phase_idx < start_phase_idx:
+                    continue
                 yield {
                     "type": "zipsa_phase_start",
                     "phase": phase.id,
