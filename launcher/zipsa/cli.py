@@ -262,20 +262,35 @@ def run(
         # Load skill once. Reused for both the resume eligibility check
         # (when --no-resume is not set) and the main execution path.
         skill = Skill.load(_resolve_skill_path(name))
+        typer.echo(f"Loaded skill: {skill.name}", err=True)
+
+        # Resolve user_input: substitute default_query if available, else empty
+        # string. The hard-fail for missing input is intentionally removed —
+        # empty input is a valid signal that the agent should introduce itself
+        # and elicit the request via HITL (see runtime-contract.md "Empty
+        # user_query"). Note: default_query="" in the manifest is honored as an
+        # explicit opt-in to the intro flow (same behavior as no default at all
+        # but lets the author make the intent explicit).
+        if not user_input and not shell:
+            default = skill.manifest.spec.default_query
+            user_input = default if default is not None else ""
+        # In shell mode the substitution above is skipped; normalize None → "".
+        if user_input is None:
+            user_input = ""
 
         # Resume eligibility — auto-detect a recoverable prior run. See
         # docs/superpowers/specs/2026-05-21-resume-failed-run-design.md
-        # for the behavior matrix. Runs inside the try block so that
-        # SkillNotInstalledError is caught by the existing handler below.
+        # for the behavior matrix. Runs AFTER default_query substitution
+        # so current_args matches what the prior run recorded in
+        # summary.user_input (which is also the post-substitution value).
         if not no_resume:
             from .core.resume import find_resumable_run, prompt_user_to_resume
-            current_args = user_input or ""
             _phases = skill.manifest.spec.phases
             _phase_count = len(_phases) if isinstance(_phases, list) else 0
             candidate = find_resumable_run(
                 skill=name,
                 current_version=skill.manifest.metadata.version,
-                current_args=current_args,
+                current_args=user_input,
                 current_phase_count=_phase_count,
             )
             if candidate is not None:
@@ -292,22 +307,6 @@ def run(
                         err=True,
                     )
                     raise typer.Exit(code=2)
-
-        typer.echo(f"Loaded skill: {skill.name}", err=True)
-
-        # Resolve user_input: substitute default_query if available, else empty
-        # string. The hard-fail for missing input is intentionally removed —
-        # empty input is a valid signal that the agent should introduce itself
-        # and elicit the request via HITL (see runtime-contract.md "Empty
-        # user_query"). Note: default_query="" in the manifest is honored as an
-        # explicit opt-in to the intro flow (same behavior as no default at all
-        # but lets the author make the intent explicit).
-        if not user_input and not shell:
-            default = skill.manifest.spec.default_query
-            user_input = default if default is not None else ""
-        # In shell mode the substitution above is skipped; normalize None → "".
-        if user_input is None:
-            user_input = ""
 
         # Parse environment variables
         env_dict = {}

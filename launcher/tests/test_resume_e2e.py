@@ -70,9 +70,10 @@ def installed_fixture(e2e_home, monkeypatch):
     yield e2e_home
 
 
-_SKILL_QUERY = "go"  # matches default_query in manifest; pass explicitly so
-# user_input is stored as "go" in summary.json AND compared as "go" in the
-# resume check (the CLI uses user_input or "" before default_query expansion).
+_SKILL_QUERY = "go"  # matches default_query in manifest. Could now be
+# omitted (CLI substitutes default_query before the resume check) but
+# kept explicit for test readability and to make the args contract
+# visible at the call site.
 
 
 def _run_skill(home: Path, extra_args: list[str] | None = None,
