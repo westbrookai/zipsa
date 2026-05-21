@@ -178,6 +178,8 @@ class HitlServer:
                 except HitlUnattended as e:
                     raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
+
+        # Cross-skill data exchange — always registered, no store dependency.
         from .artifact_handler import ArtifactHandler
         artifact_h = ArtifactHandler()
 

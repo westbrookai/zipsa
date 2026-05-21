@@ -394,12 +394,9 @@ class TestGetArtifactMCP:
             data = self._parse_mcp_response(r)
             # MCP text/event-stream wraps the return dict in content[0].text as JSON
             text = data["result"]["content"][0]["text"]
-            parsed = json.loads(text) if text.startswith("{") else text
-            if isinstance(parsed, dict):
-                assert parsed["name"] == "summary.txt"
-                assert parsed["content"] == "hello artifact"
-            else:
-                assert "hello artifact" in text
+            outer = json.loads(text)
+            assert outer["name"] == "summary.txt"
+            assert outer["content"] == "hello artifact"
         finally:
             server.stop()
 
@@ -445,13 +442,9 @@ class TestGetArtifactMCP:
             data = self._parse_mcp_response(r)
             text = data["result"]["content"][0]["text"]
             # The MCP layer serialises the returned dict as JSON text
-            outer = json.loads(text) if isinstance(text, str) else text
-            # outer may be {"name": ..., "size": ..., "content": ...}
-            if isinstance(outer, dict) and "content" in outer:
-                assert outer["content"] == payload
-            else:
-                # Content embedded in text directly
-                assert "42" in text
+            outer = json.loads(text)
+            assert outer["name"] == "result.json"
+            assert outer["content"] == payload
         finally:
             server.stop()
 
