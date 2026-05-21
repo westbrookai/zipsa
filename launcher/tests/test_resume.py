@@ -4,12 +4,19 @@ All eligibility conditions from the spec are tested here. Construction
 of the prior run dir is done with raw filesystem writes; we don't go
 through the executor."""
 
+import io
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from zipsa.core.resume import ResumeCandidate, find_resumable_run
+from zipsa.core.resume import (
+    ResumeCandidate,
+    find_resumable_run,
+    format_resume_prompt,
+    prompt_user_to_resume,
+)
 
 
 def _make_run(
@@ -187,11 +194,6 @@ class TestFindResumableRun:
             current_args="today", current_phase_count=2,
         )
         assert c.run_id == "2026-05-21_100000_000000"
-
-
-from zipsa.core.resume import format_resume_prompt, prompt_user_to_resume
-import io
-from datetime import datetime
 
 
 class TestFormatResumePrompt:

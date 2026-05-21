@@ -10,7 +10,6 @@ Spec: docs/superpowers/specs/2026-05-21-resume-failed-run-design.md
 from __future__ import annotations
 
 import json
-import json as _json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,7 +172,7 @@ def _humanize_age(started_at_iso: str, now: datetime) -> str:
 def _preview(value: object, max_len: int = 80) -> str:
     """Render a next_phase_input value as a short string for the prompt.
     Long strings get truncated; non-strings get JSON-encoded then truncated."""
-    s = value if isinstance(value, str) else _json.dumps(
+    s = value if isinstance(value, str) else json.dumps(
         value, ensure_ascii=False,
     )
     if len(s) > max_len:
