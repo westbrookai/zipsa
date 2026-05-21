@@ -191,6 +191,7 @@ status codes asking the launcher to prompt.
 | "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
 | Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
 | Read a file artifact another phase or skill wrote | `mcp__zipsa__get_artifact({skill, version, run_id, name})` → see "Artifacts" |
+| Invoke a child skill declared in spec.children | `mcp__zipsa__run_skill({name, args})` → see "Invoking child skills" |
 
 For `ask_once` and the memory primitives, the default scope is
 `"skill"` (visible only to this skill). Use `scope: "global"` for
@@ -263,6 +264,67 @@ The current run's ID is in `execution_context.run_id`. For artifacts
 written by another skill (or a past run of this one), pass the relevant
 ID through `next_phase_input` so the reading phase knows which run
 produced the artifact.
+
+## Invoking child skills
+
+```
+mcp__zipsa__run_skill(name, args)
+→ {status, exit_code, skill, version, run_id, summary}
+```
+
+- `name`: the child skill's manifest `metadata.name`. **Must be declared
+  in this skill's `spec.children`** — the handler rejects the call with
+  `skill_not_in_children` otherwise.
+- `args`: a plain string passed as the child's `user_query`. For
+  structured data, JSON-encode it yourself before passing.
+- `status`: `"ok"` or `"failed"`.
+- `exit_code`: the child launcher's process exit code (0 = success).
+- `skill` / `version`: resolved name and version of the child skill.
+- `run_id`: the child's run ID — use it to fetch artifacts the child
+  wrote.
+- `summary`: the child's final JSON envelope (the same object the child
+  returned as its last message), or `null` if the child crashed before
+  producing one. Child failures surface via `summary.error`.
+
+### Chaining with get_artifact
+
+```python
+result = mcp__zipsa__run_skill(name="agenthud-report", args="2026-05-21")
+if result["status"] == "ok":
+    data = mcp__zipsa__get_artifact(
+        skill=result["skill"],
+        version=result["version"],
+        run_id=result["run_id"],
+        name="agenthud-report.json",
+    )
+```
+
+### Error codes
+
+| Code | Meaning |
+|---|---|
+| `skill_not_in_children` | Child not declared in `spec.children` |
+| `caller_unknown` | Launcher could not identify the calling skill |
+| `child_timeout` | Child exceeded its `limits.timeout_seconds` |
+| `summary_not_found` | Child exited cleanly but wrote no summary file |
+| `summary_unreadable` | Summary file exists but could not be parsed |
+
+Child-level failures (wrong output format, tool errors, etc.) do NOT
+produce these codes — they surface as `status="failed"` with details in
+`summary.error`.
+
+### Depth and cycle limits
+
+The runtime caps call depth at 5 and rejects cycles. Both are enforced
+by the child launcher via environment variables set by the parent —
+you do not need to track depth yourself.
+
+### HITL inside a child
+
+The child runs non-interactive. Its own server would fail to reach the
+user. However, because the child reuses the **parent's** HitlServer,
+`mcp__zipsa__ask`, `mcp__zipsa__confirm`, and `mcp__zipsa__choose` DO
+work from inside a child — prompts route through the parent's terminal.
 
 ## State management
 

@@ -1,0 +1,20 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: test-parent
+  version: 0.1.0
+  description: Integration fixture for Phase 2 run_skill.
+spec:
+  purpose: |
+    Test fixture that proves run_skill works end-to-end. Calls
+    hello-world via mcp__zipsa__run_skill and echoes the routing
+    fields back.
+  instructions: ./SKILL.md
+  children:
+    - hello-world
+  tools:
+    builtin: []
+  limits:
+    max_turns: 4
+    max_cost_usd: 0.05
+    timeout_seconds: 60
