@@ -157,8 +157,9 @@ WebSearch and summarize current chatter on those topics.
 
 2. Ask the user (Korean), inlining the current list as a brace
    substitution. The prompt is a template — substitute
-   `{interests_joined}` with the list joined by `, ` and wrapped in
-   `**bold**` markdown (e.g., `**AI agents, MCP, build-in-public**`):
+   `{interests_joined}` with the list joined by `, ` (plain text,
+   no markdown emphasis — the runtime surfaces this as terminal
+   output, where literal asterisks read worse than plain text):
 
    ```
    현재 저장된 관심사: {interests_joined}
@@ -171,26 +172,32 @@ WebSearch and summarize current chatter on those topics.
    - Non-empty → parse as comma-separated, trim each item, drop empties.
      `interests_used = parsed list`. Do NOT overwrite the stored
      `interests` ask_once value — this override is for this run only.
-   - On parse failure (no comma-splittable items) → reprompt once.
-     If second attempt also fails, fall back to the stored list and
-     mention in `user_facing_summary`.
+   - On post-trim empty list (e.g., user typed only commas/whitespace
+     that yielded no items) → reprompt once. If the second attempt also
+     yields an empty list, fall back to the stored list and mention in
+     `user_facing_summary`. Note: a single item without commas (`"foo"`)
+     is a valid one-item list — do NOT trigger reprompt for that.
 
 4. Call `WebSearch`. If `interests_used` has 1-2 items, do a single
-   query joining them with `OR`. If 3+ items, do up to 3 separate
-   queries (one per top-3 items) to keep tool budget reasonable.
+   query joining them with `OR`. If 3+ items, do **one query per item
+   in `interests_used` list order, capped at the first 3 items**, to
+   keep tool budget reasonable and behaviour deterministic.
 
 5. Synthesize the result snippets into **3-5 sentences of English
    prose** summarizing what's notable across these topics today.
    This text feeds the English draft phase directly.
 
-   Example:
-   > "Agent frameworks are seeing a wave of multi-agent orchestration
-   > posts this week, especially around handoff protocols. MCP
-   > adoption questions are dominant — people are asking what to
-   > standardize next."
+   Example shape only — your prose must reflect today's actual search
+   results, not these phrasings:
+   > "Topic A is seeing a wave of activity around <specific angle>
+   > this week. Topic B's conversation is dominated by <specific
+   > question>. Topic C is comparatively quiet, with the main thread
+   > being <specific concern>."
 
 6. On `WebSearch` 0-results or repeated failure, set
-   `interests_summary = "(검색 결과 없음)"` and continue.
+   `interests_summary = "(no search results)"` and continue.
+   (Plain English — this field is consumed by the English `draft`
+   phase; Korean status belongs in `user_facing_summary` only.)
 
 7. Output `next_phase_input`:
    ```json
