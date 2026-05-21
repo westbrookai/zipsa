@@ -2323,7 +2323,9 @@ class TestArtifactsDirCreation:
             skill, "hi", tmp_path / "claude.json", {},
         )
         joined = " ".join(cmd)
-        assert "/home/agent/runs/current" not in joined
+        # Mount flag is the only thing we care about — the path appears
+        # inside the embedded runtime-contract.md system prompt now too.
+        assert ":/home/agent/runs/current:rw" not in joined
 
     def test_user_manifest_cannot_shadow_run_current_path(self, tmp_path):
         """A user manifest declaring container: /home/agent/runs/current must

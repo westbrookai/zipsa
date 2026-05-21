@@ -40,6 +40,19 @@ class ArtifactHandler:
         artifacts_dir = zipsa_paths.skill_run_artifacts_dir(skill, version, run_id)
         path = artifacts_dir / name
 
+        # Defense-in-depth: regardless of how clever a `skill`, `version`,
+        # `run_id`, or `name` is, the final path must land somewhere under
+        # ZIPSA_HOME. _is_unsafe_name handles `name`; this catches the
+        # case where one of the other fields is also a traversal payload.
+        try:
+            resolved = path.resolve(strict=False)
+            home = zipsa_paths.zipsa_home().resolve()
+            resolved.relative_to(home)
+        except ValueError as e:
+            raise RuntimeError(
+                f"ARTIFACT_BAD_NAME: resolved path escapes ZIPSA_HOME"
+            ) from e
+
         if not path.is_file():
             raise RuntimeError(
                 f"ARTIFACT_NOT_FOUND: {skill}@{version}/runs/{run_id}/artifacts/{name}"
@@ -71,6 +84,8 @@ class ArtifactHandler:
         # Reject Windows separator explicitly — PurePosixPath treats it
         # as a literal char so "..\\foo" would otherwise look like one part.
         if "\\" in name:
+            return True
+        if "\x00" in name:
             return True
         p = PurePosixPath(name)
         if p.is_absolute():

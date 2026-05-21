@@ -99,3 +99,20 @@ class TestArtifactHandler:
             ArtifactHandler().run(
                 skill="broken", version="0.1.0", run_id="r1", name="bad.json",
             )
+
+    def test_null_byte_in_name_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        with pytest.raises(RuntimeError, match="ARTIFACT_BAD_NAME"):
+            ArtifactHandler().run(
+                skill="x", version="0.1.0", run_id="r1", name="a\x00b.json",
+            )
+
+    def test_skill_field_traversal_rejected(self, tmp_path, monkeypatch):
+        """`name` is sanitized but `skill`/`version`/`run_id` interpolate
+        directly into the path. A traversal payload in any of those must
+        be rejected by the containment guard."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        with pytest.raises(RuntimeError, match="ARTIFACT_BAD_NAME"):
+            ArtifactHandler().run(
+                skill="../../etc", version="0.1.0", run_id="r1", name="passwd",
+            )
