@@ -61,6 +61,9 @@ spec:
   # verifies their presence by inspecting execution_context.
 
   tools:
+    # Empty by design — per-phase `allowed_tools` is the source of truth.
+    # discover/interests allow WebSearch; precheck/post allow Bash(python3);
+    # report allows the agenthud wrapper + jq + Read. See each phase below.
     builtin: []
 
   config:
@@ -76,6 +79,10 @@ spec:
       - MCP
       - build-in-public
 
+  # Per-phase data flow contract. Uses the nested {type: ...} form to
+  # leave room for future v2 strict-validation fields (description,
+  # default, etc.). Today the launcher treats this as docs-only — see
+  # launcher/zipsa/core/models.py SkillSpec.state_schema.
   state_schema:
     insights:
       type: list[string]
