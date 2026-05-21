@@ -235,7 +235,13 @@ class Skill:
 
         config_text = json.dumps(claude_config, indent=2)
         claude_json_path = output_dir / ".claude.json"
-        claude_json_path.write_text(config_text)
+        # Use atomic write (temp + rename) so a concurrent Docker container
+        # that mounts this directory never sees a partially-written file.
+        # This is especially important on macOS/colima where bind-mount
+        # changes from the host may be visible to the VM mid-write.
+        _tmp = claude_json_path.with_suffix(".json.tmp")
+        _tmp.write_text(config_text)
+        _tmp.replace(claude_json_path)
         (output_dir / ".claude.json.org").write_text(config_text)
 
         # Hooks live in ~/.claude/settings.json, not .claude.json. The executor
