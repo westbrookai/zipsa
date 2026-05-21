@@ -67,6 +67,20 @@ class DockerExecutor:
                 file=sys.stderr,
             )
 
+    @staticmethod
+    def _detect_parent_mcp() -> tuple[Optional[str], Optional[str]]:
+        """Detect whether we are running as a child skill invoked by a parent.
+
+        Returns:
+            (parent_url, parent_token) if ZIPSA_PARENT_MCP_URL and
+            ZIPSA_PARENT_MCP_TOKEN are both set in the environment;
+            (None, None) otherwise (top-level run).
+        """
+        return (
+            os.environ.get("ZIPSA_PARENT_MCP_URL"),
+            os.environ.get("ZIPSA_PARENT_MCP_TOKEN"),
+        )
+
     def run(
         self,
         skill: Skill,
@@ -248,20 +262,39 @@ class DockerExecutor:
         global_memory_path = zipsa_paths.zipsa_home() / "memory" / "global-mem.json"
         skill_store = MemoryStore(skill_memory_path)
         global_store = MemoryStore(global_memory_path)
-        hitl_server = HitlServer(
-            hitl_io,
-            skill_store=skill_store,
-            global_store=global_store,
-        )
-        hitl_server.start()
-        self._hitl_port = hitl_server.port
-        self._hitl_token = hitl_server.token
+
+        # Detect whether we are running as a child skill invoked by a parent.
+        # If so, skip spawning our own HitlServer and point the container at
+        # the parent's server using the env-supplied URL and token.
+        parent_url, parent_token = self._detect_parent_mcp()
+        if parent_url and parent_token:
+            hitl_server = None
+            self._hitl_port = None
+            self._hitl_token = None
+            mcp_url_override: Optional[str] = parent_url
+            mcp_token_override: Optional[str] = parent_token
+        else:
+            hitl_server = HitlServer(
+                hitl_io,
+                skill_store=skill_store,
+                global_store=global_store,
+            )
+            hitl_server.start()
+            self._hitl_port = hitl_server.port
+            self._hitl_token = hitl_server.token
+            mcp_url_override = None
+            mcp_token_override = None
+
         try:
             # Rebuild .claude.json so it includes the zipsa MCP entry.
+            # When running as a child skill, use the parent's URL + token
+            # directly; for top-level runs, use our own HitlServer's port.
             claude_json_path = skill.build_claude_json(
                 output_dir=skill_data_dir,
                 container_workspace=CONTAINER_WORKSPACE,
                 hitl_port=self._hitl_port,
+                mcp_url_override=mcp_url_override,
+                mcp_token_override=mcp_token_override,
             )
 
             if skill.manifest.spec.phases:
@@ -427,7 +460,8 @@ class DockerExecutor:
             final_error = {"code": "docker_failed", "message": "Docker exited with non-zero code"}
             raise
         finally:
-            hitl_server.stop()
+            if hitl_server is not None:
+                hitl_server.stop()
             self._hitl_port = None
             self._hitl_token = None
 
