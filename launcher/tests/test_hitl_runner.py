@@ -71,6 +71,7 @@ class TestToolsCallable:
         import io as _io
         import httpx
         import json
+        from zipsa.core.caller_context import CallerInfo
 
         io_ = HitlIO(
             stdin=_io.StringIO("seoul\n"),
@@ -78,7 +79,7 @@ class TestToolsCallable:
             stdout_lock=threading.Lock(),
             is_interactive=True,
         )
-        server = HitlServer(io_)
+        server = HitlServer(io_, primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             # MCP initialize handshake (minimal). FastMCP default path is
@@ -180,6 +181,7 @@ class TestMemoryToolsWired:
         import httpx
         import json
         from zipsa.core.memory_store import MemoryStore
+        from zipsa.core.caller_context import CallerInfo
 
         io_ = HitlIO(
             stdin=_io.StringIO(""),
@@ -189,7 +191,8 @@ class TestMemoryToolsWired:
         )
         skill = MemoryStore(tmp_path / "skill.json")
         global_ = MemoryStore(tmp_path / "global.json")
-        server = HitlServer(io_, skill_store=skill, global_store=global_)
+        server = HitlServer(io_, skill_store=skill, global_store=global_,
+                            primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             url = f"http://127.0.0.1:{server.port}/mcp"
@@ -252,6 +255,7 @@ class TestAskOnceWired:
         import httpx
         import json
         from zipsa.core.memory_store import MemoryStore
+        from zipsa.core.caller_context import CallerInfo
 
         io_ = HitlIO(
             stdin=_io.StringIO("Westbrook HQ\n"),  # consumed on first ask
@@ -261,7 +265,8 @@ class TestAskOnceWired:
         )
         skill = MemoryStore(tmp_path / "skill.json")
         global_ = MemoryStore(tmp_path / "global.json")
-        server = HitlServer(io_, skill_store=skill, global_store=global_)
+        server = HitlServer(io_, skill_store=skill, global_store=global_,
+                            primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             url = f"http://127.0.0.1:{server.port}/mcp"
@@ -367,13 +372,14 @@ class TestGetArtifactMCP:
         artifacts_dir.mkdir(parents=True)
         (artifacts_dir / "summary.txt").write_text("hello artifact")
 
+        from zipsa.core.caller_context import CallerInfo
         io_ = HitlIO(
             stdin=_io.StringIO(""),
             stdout=_io.StringIO(),
             stdout_lock=threading.Lock(),
             is_interactive=True,
         )
-        server = HitlServer(io_)
+        server = HitlServer(io_, primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             url, session_headers = self._mcp_session(server)
@@ -415,13 +421,14 @@ class TestGetArtifactMCP:
         payload = {"score": 42, "items": ["a", "b"]}
         (artifacts_dir / "result.json").write_text(json.dumps(payload))
 
+        from zipsa.core.caller_context import CallerInfo
         io_ = HitlIO(
             stdin=_io.StringIO(""),
             stdout=_io.StringIO(),
             stdout_lock=threading.Lock(),
             is_interactive=True,
         )
-        server = HitlServer(io_)
+        server = HitlServer(io_, primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             url, session_headers = self._mcp_session(server)
@@ -455,13 +462,14 @@ class TestGetArtifactMCP:
 
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
 
+        from zipsa.core.caller_context import CallerInfo
         io_ = HitlIO(
             stdin=_io.StringIO(""),
             stdout=_io.StringIO(),
             stdout_lock=threading.Lock(),
             is_interactive=True,
         )
-        server = HitlServer(io_)
+        server = HitlServer(io_, primary_caller=CallerInfo("test", "0"))
         server.start()
         try:
             url, session_headers = self._mcp_session(server)
@@ -486,5 +494,107 @@ class TestGetArtifactMCP:
             # Error text should mention ARTIFACT_NOT_FOUND
             error_text = str(result.get("content", ""))
             assert "ARTIFACT_NOT_FOUND" in error_text
+        finally:
+            server.stop()
+
+
+class TestPerCallerMemoryRouting:
+    """When two registered callers (parent skill, child skill) invoke
+    memory tools on the same HitlServer, each must read/write its own
+    skill's memory file — never the other's."""
+
+    def test_recall_returns_caller_specific_store(self, tmp_path, monkeypatch):
+        """Alice's remember(key='color', value='red') must NOT be visible
+        to Bob's recall(key='color')."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        import io as _io2
+        import httpx
+        import json as _json
+        from zipsa.core.hitl_runner import HitlServer
+        from zipsa.core.hitl_mcp import HitlIO
+        from zipsa.core.caller_context import CallerInfo
+
+        io_ = HitlIO(
+            stdin=_io2.StringIO(""),
+            stdout=_io2.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=False,
+        )
+        server = HitlServer(io_, primary_caller=CallerInfo("alice", "1.0.0"))
+        server.start()
+        try:
+            # Register Bob as a second caller
+            bob_token = "tok-bob-xyz"
+            server.register_caller(bob_token, CallerInfo("bob", "2.0.0"))
+
+            url = f"http://127.0.0.1:{server.port}/mcp"
+
+            def mcp_session(token: str):
+                h = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "Authorization": f"Bearer {token}",
+                }
+                init = {
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "t", "version": "0"},
+                    },
+                }
+                r = httpx.post(url, json=init, headers=h, timeout=5.0)
+                sid = r.headers["mcp-session-id"]
+                sh = {**h, "mcp-session-id": sid}
+                httpx.post(
+                    url,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    headers=sh,
+                    timeout=5.0,
+                )
+                return sh
+
+            def call_tool(sh, name, args):
+                payload = {
+                    "jsonrpc": "2.0", "id": 99, "method": "tools/call",
+                    "params": {"name": name, "arguments": args},
+                }
+                r = httpx.post(url, json=payload, headers=sh, timeout=5.0)
+                body = r.text
+                if "data:" in body:
+                    for line in body.splitlines():
+                        if line.startswith("data:"):
+                            return _json.loads(line[5:].strip())
+                return r.json()
+
+            sh_alice = mcp_session(server.token)
+            sh_bob = mcp_session(bob_token)
+
+            # Alice: remember
+            call_tool(sh_alice, "remember", {"key": "color", "value": "red"})
+            # Alice: recall sees own value
+            r1 = call_tool(sh_alice, "recall", {"key": "color"})
+            text_a = r1["result"]["content"][0]["text"]
+            assert text_a == "red"
+
+            # Bob: recall sees nothing (his memory is empty)
+            r2 = call_tool(sh_bob, "recall", {"key": "color"})
+            # The recall handler returns None for missing keys.
+            # MCP serializes None as either empty content list, null, or empty string.
+            content_b = r2["result"]["content"]
+            if content_b:
+                text_b = content_b[0]["text"]
+                assert text_b in ("", "null", None)
+            # else: empty content list is also acceptable (MCP omits null values)
+
+            # Check the memory files themselves are separate
+            from zipsa import paths as zp
+            alice_mem = zp.resolve_skill_memory_path("alice")
+            bob_mem = zp.resolve_skill_memory_path("bob")
+            assert alice_mem.exists()
+            assert "red" in alice_mem.read_text()
+            # bob's memory file might not exist (no remember was called) or be empty
+            if bob_mem.exists():
+                assert "red" not in bob_mem.read_text()
         finally:
             server.stop()
