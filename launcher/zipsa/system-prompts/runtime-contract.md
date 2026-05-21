@@ -246,14 +246,16 @@ it:
 # phase 1: write
 write /home/agent/runs/current/artifacts/report.json
 
-# phase 2 or orchestrator skill: read
+# phase 2: read the artifact this run wrote earlier
 mcp__zipsa__get_artifact(skill="my-skill", version="1.0.0",
-                          run_id="<id from previous_phase_output>",
+                          run_id="<execution_context.run_id>",
                           name="report.json")
 ```
 
-Pass `run_id` through `next_phase_input` so the reading phase knows
-which run produced the artifact.
+The current run's ID is in `execution_context.run_id`. For artifacts
+written by another skill (or a past run of this one), pass the relevant
+ID through `next_phase_input` so the reading phase knows which run
+produced the artifact.
 
 ## State management
 

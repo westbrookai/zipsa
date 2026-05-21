@@ -873,6 +873,7 @@ class DockerExecutor:
                     user_message = self._build_user_message(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input,
+                        run_id=run_dir.name if run_dir else "unknown",
                     )
 
                     # Per-phase artifact directory
@@ -1403,6 +1404,7 @@ class DockerExecutor:
         previous_phase_output: str | None,
         skill_state: dict,
         user_query: str,
+        run_id: str = "unknown",
     ) -> str:
         from tzlocal import get_localzone
 
@@ -1423,6 +1425,7 @@ class DockerExecutor:
             time=now.strftime("%H:%M:%S"),
             timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
             tz_iana=tz_iana,
+            run_id=run_id,
             phase_id=phase_id,
             phase_goal=phase_goal,
             allowed_tools=phase_allowed_tools,

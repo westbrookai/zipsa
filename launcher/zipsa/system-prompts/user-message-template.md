@@ -4,6 +4,7 @@ time: {time}
 timezone: {timezone}
 tz_iana: {tz_iana}
 
+run_id: {run_id}
 phase_id: {phase_id}
 phase_goal: {phase_goal}
 allowed_tools: {allowed_tools}

@@ -695,6 +695,46 @@ class TestBuildUserMessage:
 
         assert "previous_phase_output: null" in msg
 
+    def test_user_message_contains_run_id(self):
+        """run_id is the current run's timestamp dir name. The agent needs
+        it to call mcp__zipsa__get_artifact for artifacts the current
+        run wrote in an earlier phase (orchestrator pattern)."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="goal",
+            phase_allowed_tools="",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log",
+            run_id="2026-05-21_120000_000",
+        )
+
+        assert "run_id: 2026-05-21_120000_000" in msg
+
+    def test_user_message_run_id_defaults_to_unknown(self):
+        """When run_dir isn't available (shell/dry-run callers), the
+        default keeps the template renderable rather than KeyError."""
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill,
+            phase_id="precheck",
+            phase_goal="goal",
+            phase_allowed_tools="",
+            previous_phase_output=None,
+            skill_state={},
+            user_query="log",
+        )
+
+        assert "run_id: unknown" in msg
+
     def test_user_message_contains_tz_iana(self):
         """tz_iana is the IANA identifier (e.g., 'Australia/Sydney') for the host's
         timezone, suitable for ZoneInfo() use in skill code. Distinct from the
