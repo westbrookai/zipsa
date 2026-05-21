@@ -274,10 +274,12 @@ class DockerExecutor:
             mcp_url_override: Optional[str] = parent_url
             mcp_token_override: Optional[str] = parent_token
         else:
+            from .caller_context import CallerInfo
             hitl_server = HitlServer(
                 hitl_io,
                 skill_store=skill_store,
                 global_store=global_store,
+                primary_caller=CallerInfo(skill.name, skill.manifest.metadata.version),
             )
             hitl_server.start()
             self._hitl_port = hitl_server.port
@@ -1092,6 +1094,30 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    @classmethod
+    def _merge_always_on_tools(cls, allowed_tools: str) -> str:
+        """Merge always-on tools into a comma-separated --allowedTools string.
+        Skips entries already present so the output stays unique."""
+        existing = [t.strip() for t in allowed_tools.split(",") if t.strip()]
+        for t in cls._ALWAYS_ON_TOOLS:
+            if t not in existing:
+                existing.append(t)
+        return ",".join(existing)
+
+    # Always-on tools shared between the PreToolUse hook (phase-allow.json)
+    # and Claude Code's --allowedTools flag. The hook gates execution;
+    # --allowedTools controls which tools Claude exposes to the model at all.
+    # Both must include these names for an always-on tool to actually work.
+    _ALWAYS_ON_TOOLS: list[str] = [
+        "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
+        "mcp__zipsa__recall", "mcp__zipsa__remember",
+        "mcp__zipsa__forget", "mcp__zipsa__list_memory",
+        "mcp__zipsa__ask_once",
+        "mcp__zipsa__get_artifact",
+        "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
+        "ToolSearch",
+    ]
+
     def _write_phase_allow_file(
         self,
         output_dir: Path,
@@ -1104,18 +1130,7 @@ class DockerExecutor:
         /.zipsa read-only mount.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        # Always-on tools: HITL/memory (the agent may ask/remember at any time)
-        # plus Claude Code infra tools the agent falls back to when confused
-        # (ToolSearch — denying it makes the agent retry in a loop).
-        allowed_tools = list(allowed_tools) + [
-            "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
-            "mcp__zipsa__recall", "mcp__zipsa__remember",
-            "mcp__zipsa__forget", "mcp__zipsa__list_memory",
-            "mcp__zipsa__ask_once",
-            "mcp__zipsa__get_artifact",
-            "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
-            "ToolSearch",
-        ]
+        allowed_tools = list(allowed_tools) + self._ALWAYS_ON_TOOLS
         path = output_dir / "phase-allow.json"
         path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
         return path
@@ -1361,6 +1376,10 @@ class DockerExecutor:
             # Runtime-specific command (from plugin)
             system_prompt = self._build_system_prompt(skill)
             allowed_tools = allowed_tools_override if allowed_tools_override is not None else skill.get_allowed_tools()
+            # Augment with the always-on MCP tools so Claude exposes them
+            # to the model. Without this, the hook would allow them but
+            # Claude would never offer them — they'd be invisible.
+            allowed_tools = self._merge_always_on_tools(allowed_tools)
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # Collect container paths for all stdio MCP mounts so Claude Code

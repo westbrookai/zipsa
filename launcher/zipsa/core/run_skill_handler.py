@@ -107,26 +107,16 @@ class RunSkillHandler:
     def _resolve_caller_children(self, caller: CallerInfo) -> list[str]:
         """Load caller's manifest, return spec.children.
 
-        Look up the installed skill by name. Versions are usually mapped
-        under ~/.zipsa/<name>@<version>/ — pick the version that matches
-        caller.version, falling back to any version if caller's version
-        isn't pinned in the registry.
+        Installed skills live under ~/.zipsa/skills/<name>/ (a symlink or
+        copy of the source dir containing manifest.yaml). The <name>@<ver>
+        sibling dirs hold run data + state, NOT manifests, so don't look
+        there.
         """
         from .skill import Skill
-        # Try the symlinked install location.
-        # Caller.version might be "*" for tokens that haven't been
-        # re-registered yet — fallback to first available version.
-        home = zipsa_paths.zipsa_home()
-        if caller.version != "*":
-            install = home / f"{caller.skill}@{caller.version}"
-            if install.exists():
-                skill = Skill.load(install)
-                return list(skill.manifest.spec.children)
-        # Fallback: any installed version for this skill name
-        matches = sorted(home.glob(f"{caller.skill}@*"))
-        if not matches:
+        install = zipsa_paths.installed_skill_dir(caller.skill)
+        if not install.exists():
             return []
-        skill = Skill.load(matches[-1])
+        skill = Skill.load(install)
         return list(skill.manifest.spec.children)
 
     def _find_latest_run_dir(self, name: str) -> Optional[Path]:

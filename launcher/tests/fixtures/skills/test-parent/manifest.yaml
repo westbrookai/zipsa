@@ -10,11 +10,12 @@ spec:
     hello-world via mcp__zipsa__run_skill and echoes the routing
     fields back.
   instructions: ./SKILL.md
+  default_query: "go"
   children:
     - hello-world
   tools:
     builtin: []
   limits:
     max_turns: 4
-    max_cost_usd: 0.05
-    timeout_seconds: 60
+    max_cost_usd: 0.15
+    timeout_seconds: 90
