@@ -14,8 +14,15 @@ from __future__ import annotations
 
 import json
 from pathlib import PurePosixPath
+from typing import TypedDict
 
 from .. import paths as zipsa_paths
+
+
+class ArtifactResult(TypedDict):
+    name: str
+    size: int
+    content: object  # parsed JSON object for .json, str otherwise
 
 
 _MAX_ARTIFACT_BYTES = 10 * 1024 * 1024  # 10 MiB cap; artifacts are summaries, not blobs
@@ -24,7 +31,7 @@ _MAX_ARTIFACT_BYTES = 10 * 1024 * 1024  # 10 MiB cap; artifacts are summaries, n
 class ArtifactHandler:
     """Read an artifact file written by a skill into its run_dir/artifacts/."""
 
-    def run(self, *, skill: str, version: str, run_id: str, name: str) -> dict:
+    def run(self, *, skill: str, version: str, run_id: str, name: str) -> ArtifactResult:
         if self._is_unsafe_name(name):
             raise RuntimeError(
                 f"ARTIFACT_BAD_NAME: name must be a flat filename, got {name!r}"
@@ -46,7 +53,7 @@ class ArtifactHandler:
 
         if name.endswith(".json"):
             try:
-                content: object = json.loads(path.read_text())
+                content = json.loads(path.read_text())
             except json.JSONDecodeError as e:
                 raise RuntimeError(f"ARTIFACT_BAD_JSON: {name}: {e}") from e
         else:
@@ -57,18 +64,19 @@ class ArtifactHandler:
     @staticmethod
     def _is_unsafe_name(name: str) -> bool:
         """A safe artifact name is a flat filename: no path separators,
-        no '..' parts, not absolute. We compare via PurePosixPath since
-        Docker / linux path semantics drive the container side."""
+        no '..' parts, not absolute. Compared via PurePosixPath since the
+        container side runs Linux."""
         if not name:
+            return True
+        # Reject Windows separator explicitly — PurePosixPath treats it
+        # as a literal char so "..\\foo" would otherwise look like one part.
+        if "\\" in name:
             return True
         p = PurePosixPath(name)
         if p.is_absolute():
             return True
-        if len(p.parts) != 1:
-            return True
         if ".." in p.parts:
             return True
-        # Also reject Windows-style separator just in case
-        if "\\" in name:
+        if len(p.parts) != 1:
             return True
         return False

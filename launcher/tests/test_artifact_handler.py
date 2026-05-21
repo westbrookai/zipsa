@@ -7,7 +7,7 @@ from zipsa.core.artifact_handler import ArtifactHandler
 from zipsa import paths as zipsa_paths
 
 
-def _make_artifact(tmp_path, monkeypatch, skill, version, run_id, name, content):
+def _make_artifact(tmp_path, monkeypatch, skill, version, run_id, *, name, content):
     monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
     artifacts_dir = zipsa_paths.skill_run_artifacts_dir(skill, version, run_id)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -24,7 +24,7 @@ class TestArtifactHandler:
         _make_artifact(
             tmp_path, monkeypatch,
             "agenthud-report", "0.1.0", "2026-05-21_120000_000",
-            "agenthud-report.json", {"sessions": 3, "projects": ["a", "b"]},
+            name="agenthud-report.json", content={"sessions": 3, "projects": ["a", "b"]},
         )
         result = ArtifactHandler().run(
             skill="agenthud-report",
@@ -40,7 +40,7 @@ class TestArtifactHandler:
         _make_artifact(
             tmp_path, monkeypatch,
             "x-post", "0.1.0", "r1",
-            "draft.txt", "hello world",
+            name="draft.txt", content="hello world",
         )
         result = ArtifactHandler().run(
             skill="x-post", version="0.1.0", run_id="r1", name="draft.txt",
@@ -56,7 +56,7 @@ class TestArtifactHandler:
     def test_path_traversal_dotdot_rejected(self, tmp_path, monkeypatch):
         _make_artifact(
             tmp_path, monkeypatch,
-            "victim", "0.1.0", "r1", "innocent.txt", "ok",
+            "victim", "0.1.0", "r1", name="innocent.txt", content="ok",
         )
         with pytest.raises(RuntimeError, match="ARTIFACT_BAD_NAME"):
             ArtifactHandler().run(
@@ -82,9 +82,8 @@ class TestArtifactHandler:
     def test_too_large_artifact_rejected(self, tmp_path, monkeypatch):
         path = _make_artifact(
             tmp_path, monkeypatch,
-            "big", "0.1.0", "r1", "huge.txt", "x" * 100,
+            "big", "0.1.0", "r1", name="huge.txt", content="x" * 100,
         )
-        # Overwrite with >10MB content
         path.write_bytes(b"x" * (10 * 1024 * 1024 + 1))
         with pytest.raises(RuntimeError, match="ARTIFACT_TOO_LARGE"):
             ArtifactHandler().run(
@@ -94,7 +93,7 @@ class TestArtifactHandler:
     def test_bad_json_rejected(self, tmp_path, monkeypatch):
         _make_artifact(
             tmp_path, monkeypatch,
-            "broken", "0.1.0", "r1", "bad.json", "{not valid json",
+            "broken", "0.1.0", "r1", name="bad.json", content="{not valid json",
         )
         with pytest.raises(RuntimeError, match="ARTIFACT_BAD_JSON"):
             ArtifactHandler().run(
