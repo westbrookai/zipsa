@@ -2260,3 +2260,100 @@ class TestArtifactsDirCreation:
         ex._ensure_run_artifacts_dir(run_dir)
         assert (run_dir / "artifacts").exists()
         assert (run_dir / "artifacts").is_dir()
+
+    def test_build_docker_command_mounts_run_dir(self, tmp_path, monkeypatch):
+        """Container should see the host run_dir at /home/agent/runs/current/
+        with rw access, so the skill can write artifacts."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        skill_dir = tmp_path / "src" / "afct"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: afct, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        from zipsa.core.skill import Skill
+        from zipsa.core.executor import DockerExecutor
+
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+
+        sd = tmp_path / "afct@0.1.0"
+        sd.mkdir(parents=True, exist_ok=True)
+        run_dir = sd / "runs" / "2026-05-21_120000_000"
+        run_dir.mkdir(parents=True)
+        (run_dir / "artifacts").mkdir()
+
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+            run_dir=run_dir,
+        )
+        joined = " ".join(cmd)
+        assert f"{run_dir}:/home/agent/runs/current:rw" in joined
+
+    def test_build_docker_command_skips_mount_when_run_dir_none(self, tmp_path):
+        """Dry-run / shell mode pass run_dir=None — no run_dir mount."""
+        from zipsa.core.skill import Skill
+        from zipsa.core.executor import DockerExecutor
+
+        skill_dir = tmp_path / "src" / "afct"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: afct, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+
+        cmd = ex._build_docker_command(
+            skill, "hi", tmp_path / "claude.json", {},
+        )
+        joined = " ".join(cmd)
+        assert "/home/agent/runs/current" not in joined
+
+    def test_user_manifest_cannot_shadow_run_current_path(self, tmp_path):
+        """A user manifest declaring container: /home/agent/runs/current must
+        be rejected by the collision tracker (since we pre-seed that path
+        when run_dir is given)."""
+        from zipsa.core.skill import Skill
+        from zipsa.core.executor import DockerExecutor, MountCollisionError
+
+        skill_dir = tmp_path / "src" / "afct"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata: {name: afct, version: 0.1.0}\n"
+            "spec:\n"
+            "  purpose: test\n"
+            "  instructions: ./SKILL.md\n"
+            "  mounts:\n"
+            f"    - {{host: {tmp_path}, container: /home/agent/runs/current, mode: ro}}\n"
+        )
+        (skill_dir / "SKILL.md").write_text("# x")
+
+        skill = Skill.load(skill_dir)
+        ex = DockerExecutor(runtime="claude", image="x")
+
+        sd = tmp_path / "afct@0.1.0"
+        sd.mkdir(parents=True, exist_ok=True)
+        run_dir = sd / "runs" / "2026-05-21_120000_000"
+        run_dir.mkdir(parents=True)
+
+        with pytest.raises(MountCollisionError, match="/home/agent/runs/current"):
+            ex._build_docker_command(
+                skill, "hi", tmp_path / "claude.json", {},
+                run_dir=run_dir,
+            )

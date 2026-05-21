@@ -315,6 +315,7 @@ class DockerExecutor:
                 mcp_debug_host=mcp_debug_host,
                 extra_docker_opts=extra_docker_opts,
                 requires_values=self._requires_values,
+                run_dir=run_dir,
             )
             # Shared limits state for the single phase — needed for summary cost/turns.
             single_limits_state = new_state("main")
@@ -893,6 +894,7 @@ class DockerExecutor:
                         npm_volume=npm_volume,
                         requires_values=self._requires_values,
                         model=phase_model,
+                        run_dir=run_dir,
                     )
 
                     # Stream events, capture last assistant text.
@@ -1130,6 +1132,7 @@ class DockerExecutor:
         npm_volume: Optional[str] = None,
         requires_values: Optional[dict[str, object]] = None,
         model: Optional[str] = None,
+        run_dir: Optional[Path] = None,
     ) -> list[str]:
         """Build full docker run command.
 
@@ -1214,6 +1217,15 @@ class DockerExecutor:
         seen_container_paths: set[str] = {
             "/.zipsa", "/skill", "/zipsa-hooks/pretooluse.py",
         }
+
+        # Mount the run_dir read-write into the container so the skill
+        # can write artifacts/<name> for cross-process consumption.
+        # Skipped when run_dir is None (dry-run, shell mode).
+        if run_dir is not None:
+            container_path = "/home/agent/runs/current"
+            cmd.extend(["-v", f"{run_dir}:{container_path}:rw"])
+            seen_container_paths.add(container_path)
+
         for m in skill.manifest.spec.mounts:
             if m.host is not None:
                 # Static mount
