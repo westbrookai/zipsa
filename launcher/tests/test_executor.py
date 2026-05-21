@@ -638,15 +638,25 @@ Status  : OK
         # Inner status preserved inside result
         assert out["result"]["status"] == "OK"
 
-    def test_strategy4_fallback_invalid_output(self):
-        """Strategy 4: fallback when no parseable JSON with status."""
+    def test_unparseable_text_returns_none(self):
+        """When no parseable envelope is found, return None (not a
+        synthetic envelope). The caller is responsible for recording
+        the failed phase with error.code=invalid_output_format and the
+        raw text — that way the downstream phase_id_mismatch check
+        doesn't clobber the real error by tripping on a sentinel
+        phase value."""
         executor = DockerExecutor()
         text = "I could not complete the task due to an error."
-        out = executor._extract_skill_output(text)
-        assert out is not None
-        assert out["status"] == "failed"
-        assert out["error"]["code"] == "invalid_output_format"
-        assert "I could not complete" in out["error"]["raw_output"]
+        assert executor._extract_skill_output(text) is None
+
+    def test_json_without_status_returns_none(self):
+        """A valid JSON object that lacks a 'status' key isn't a skill
+        envelope. Return None instead of a synthetic envelope so the
+        caller can record the real cause (agent emitted bare next_phase_input
+        without wrapping it in the envelope)."""
+        executor = DockerExecutor()
+        text = '```json\n{"voice": "x", "interests": ["a"]}\n```'
+        assert executor._extract_skill_output(text) is None
 
     def test_none_input_returns_none(self):
         """None input returns None."""
