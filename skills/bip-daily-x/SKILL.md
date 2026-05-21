@@ -147,6 +147,63 @@ and extract tone/structure insights for the draft phase.
      (substitute `{N}` with the count, e.g., `3`).
    - If `insights` is empty: `"BIP 검색 결과 없음 — 웹 데이터 없이 계속"`.
 
+### interests
+
+Confirm or override the user's interest topics for this run, then
+WebSearch and summarize current chatter on those topics.
+
+1. Read `interests` from `previous_phase_input` (originally set by
+   precheck from ask_once memory).
+
+2. Ask the user (Korean), inlining the current list as a brace
+   substitution. The prompt is a template — substitute
+   `{interests_joined}` with the list joined by `, ` and wrapped in
+   `**bold**` markdown (e.g., `**AI agents, MCP, build-in-public**`):
+
+   ```
+   현재 저장된 관심사: {interests_joined}
+   오늘은 이대로 검색할까요, 아니면 다른 주제로 갈까요?
+   (다른 주제면 쉼표로 나열, 그대로면 엔터)
+   ```
+
+3. Parse the user reply:
+   - Empty / whitespace only → `interests_used = interests` (the stored list).
+   - Non-empty → parse as comma-separated, trim each item, drop empties.
+     `interests_used = parsed list`. Do NOT overwrite the stored
+     `interests` ask_once value — this override is for this run only.
+   - On parse failure (no comma-splittable items) → reprompt once.
+     If second attempt also fails, fall back to the stored list and
+     mention in `user_facing_summary`.
+
+4. Call `WebSearch`. If `interests_used` has 1-2 items, do a single
+   query joining them with `OR`. If 3+ items, do up to 3 separate
+   queries (one per top-3 items) to keep tool budget reasonable.
+
+5. Synthesize the result snippets into **3-5 sentences of English
+   prose** summarizing what's notable across these topics today.
+   This text feeds the English draft phase directly.
+
+   Example:
+   > "Agent frameworks are seeing a wave of multi-agent orchestration
+   > posts this week, especially around handoff protocols. MCP
+   > adoption questions are dominant — people are asking what to
+   > standardize next."
+
+6. On `WebSearch` 0-results or repeated failure, set
+   `interests_summary = "(검색 결과 없음)"` and continue.
+
+7. Output `next_phase_input`:
+   ```json
+   {
+     ...previous fields...,
+     "interests_summary": "<English prose>",
+     "interests_used": ["...", "...", "..."]
+   }
+   ```
+   `user_facing_summary` (Korean):
+   `"관심사 검색 요약 완료 — {N} 주제"` (substitute `{N}` with
+   `len(interests_used)`).
+
 ### report
 
 Fetch a structured per-project activity report from agenthud, then
