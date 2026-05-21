@@ -105,15 +105,16 @@ Model 3 (long-lived launcher daemon) is out of scope — adds daemon lifecycle c
 
 **Changes:**
 
-- New MCP tool: `mcp__zipsa__run_skill(name: str, args: str = "") -> {status, exit_code, run_id, summary}`.
-- `launcher/zipsa/core/run_skill_mcp.py` (new) — `subprocess.run(["uv", "run", "zipsa", "run", name, args])`. Discard stdout. Read summary.json. Return parsed dict.
-- `HitlServer` registration (currently registers ask/confirm/choose/ask_once — add run_skill).
+- New MCP tool: `mcp__zipsa__run_skill(name: str, args: str = "") -> {status, exit_code, skill, version, run_id, summary}`.
+- Response **must include both `skill` and `version`** (echoing the resolved child manifest's name/version, not the parent's `name` arg — which may be unqualified). Parents pair these with `run_id` to call `mcp__zipsa__get_artifact` for the child's outputs. Without `version` in the response, an orchestrator would have to hard-code the child's version or guess — both fragile.
+- `launcher/zipsa/core/run_skill_mcp.py` (new) — `subprocess.run(["uv", "run", "zipsa", "run", name, args])`. Discard stdout. Read summary.json (already records `skill`, `version`, `status`, `exit_code` — all four routing fields needed for downstream `get_artifact`). Return parsed dict with those fields plus the full summary.
+- `HitlServer` registration (currently registers ask/confirm/choose/ask_once/get_artifact — add run_skill).
 - Validation: only children declared in caller's `spec.children` are allowed. Other names rejected with `error.code = "skill_not_in_children"`.
 - Cost accounting: child's cost counts against child's own limits. Parent's phase counter increments by 1 turn (the run_skill call); child's internal cost does NOT subtract from parent's budget.
 
 **Files:** `launcher/zipsa/core/hitl_runner.py` (extend), `launcher/zipsa/core/run_skill_mcp.py` (new), `launcher/zipsa/system-prompts/runtime-contract.md` (document new tool).
 
-**Verification:** Test fixture parent skill with `children: [hello-world]`. Run parent → MCP `run_skill("hello-world")` returns `{status: "ok", exit_code: 0, run_id: <timestamp>}`.
+**Verification:** Test fixture parent skill with `children: [hello-world]`. Run parent → MCP `run_skill("hello-world")` returns `{status: "ok", exit_code: 0, skill: "hello-world", version: "<resolved>", run_id: <timestamp>, summary: {...}}`. Parent immediately uses `{skill, version, run_id}` to call `get_artifact` for the child's output and verifies the chained call succeeds.
 
 ### Phase 3 — Atomic skills
 
