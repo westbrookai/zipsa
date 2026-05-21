@@ -5,10 +5,57 @@ exposes the bare framework so port/token can be asserted in tests."""
 
 from __future__ import annotations
 
+import functools
+import inspect
+import logging
 import secrets
 import socket
 import threading
 from typing import Optional
+
+
+_mcp_log = logging.getLogger("mcp.zipsa")
+# Force INFO-level stderr output regardless of root log config. uvicorn
+# only configures its own loggers; without our own handler the propagated
+# log silently drops at the WARNING-default root.
+if not _mcp_log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[mcp] %(message)s"))
+    _mcp_log.addHandler(_h)
+    _mcp_log.setLevel(logging.INFO)
+    _mcp_log.propagate = False
+
+
+def _logged(fn):
+    """Wrap an MCP tool function to log one INFO line per invocation.
+
+    Apply BELOW @mcp.tool() so FastMCP's introspection of the wrapped
+    function still sees the original signature via __wrapped__ (which
+    inspect.signature follows by default). String args > 80 chars are
+    truncated in the log; nothing is redacted (the MCP token is the
+    only real secret and is never passed as a tool arg).
+    """
+    name = fn.__name__
+
+    def _format(kwargs: dict) -> str:
+        safe = {
+            k: (v[:80] + "…" if isinstance(v, str) and len(v) > 80 else v)
+            for k, v in kwargs.items()
+        }
+        return f"call {name}({safe})"
+
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def awrapped(**kwargs):
+            _mcp_log.info(_format(kwargs))
+            return await fn(**kwargs)
+        return awrapped
+
+    @functools.wraps(fn)
+    def wrapped(**kwargs):
+        _mcp_log.info(_format(kwargs))
+        return fn(**kwargs)
+    return wrapped
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -117,6 +164,7 @@ class HitlServer:
         choose_h = ChooseHandler(self._io)
 
         @mcp.tool()
+        @_logged
         def ask(prompt: str) -> str:
             """Ask the user a free-text question and return their reply."""
             try:
@@ -125,6 +173,7 @@ class HitlServer:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         @mcp.tool()
+        @_logged
         def confirm(message: str, default: bool | None = None) -> bool:
             """Ask the user a yes/no question."""
             try:
@@ -133,6 +182,7 @@ class HitlServer:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         @mcp.tool()
+        @_logged
         def choose(prompt: str, options: list[str]) -> str:
             """Ask the user to choose one of the given options."""
             try:
@@ -164,6 +214,7 @@ class HitlServer:
             return self._skill_stores_by_caller[key]
 
         @mcp.tool()
+        @_logged
         def recall(key: str, scope: str = "skill") -> str | None:
             """Read a value previously stored via remember.
 
@@ -179,6 +230,7 @@ class HitlServer:
             return _json.dumps(value, ensure_ascii=False)
 
         @mcp.tool()
+        @_logged
         def remember(key: str, value: str, scope: str = "skill") -> None:
             """Store a value for future runs of this (or any) skill.
 
@@ -189,18 +241,21 @@ class HitlServer:
             store.set(key, value)
 
         @mcp.tool()
+        @_logged
         def forget(key: str, scope: str = "skill") -> bool:
             """Delete a stored value. Returns true if removed, false if missing."""
             store = _store_for_scope(scope)
             return store.delete(key)
 
         @mcp.tool()
+        @_logged
         def list_memory(scope: str = "skill") -> list[str]:
             """List keys in the chosen scope."""
             store = _store_for_scope(scope)
             return list(store.keys())
 
         @mcp.tool()
+        @_logged
         def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
             """Ask the user a question and cache the answer permanently.
 
@@ -231,6 +286,7 @@ class HitlServer:
         artifact_h = ArtifactHandler()
 
         @mcp.tool()
+        @_logged
         def get_artifact(
             skill: str, version: str, run_id: str, name: str
         ) -> dict:
@@ -264,6 +320,7 @@ class HitlServer:
         run_skill_h = RunSkillHandler(server=self)
 
         @mcp.tool()
+        @_logged
         async def run_skill(name: str, args: str = "") -> dict:
             """Invoke a child skill declared in this skill's spec.children.
 
