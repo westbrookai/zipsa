@@ -183,6 +183,7 @@ status codes asking the launcher to prompt.
 | "pick one of" / "choose from" | `mcp__zipsa__choose({prompt, options})` |
 | "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
 | Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
+| Read a file artifact another phase or skill wrote | `mcp__zipsa__get_artifact({skill, version, run_id, name})` → see "Artifacts" |
 
 For `ask_once` and the memory primitives, the default scope is
 `"skill"` (visible only to this skill). Use `scope: "global"` for
@@ -201,6 +202,58 @@ not `c1`, `ws1`). Memory values must be JSON-serializable.
 - If a tool errors with a message starting `HITL_UNATTENDED`, the
   run is non-interactive (cron, redirected stdin). End the phase
   with `status=failed` and `error.code="hitl_unattended"`.
+
+## Artifacts
+
+Use artifacts to pass file-shaped output to another phase or another
+skill. Artifacts are distinct from `next_phase_input` (JSON, in-memory)
+and `state_updates` (key-value memory): use them for blobs, reports, or
+structured files that exceed what fits cleanly in JSON fields.
+
+### Writing artifacts
+
+Write to `/home/agent/runs/current/artifacts/<name>` inside the
+container. The directory exists before the phase starts — do not create
+it. Use flat filenames only (no slashes, no `..`).
+
+On the host the file becomes:
+
+    ~/.zipsa/<skill>@<version>/runs/<timestamp>/artifacts/<name>
+
+### Reading artifacts: `mcp__zipsa__get_artifact`
+
+Always available — no manifest opt-in required.
+
+```
+mcp__zipsa__get_artifact(skill, version, run_id, name)
+→ {name, size, content}
+```
+
+- `content` is a parsed JSON object for `*.json` files; utf-8 text
+  otherwise.
+- `name` must be a flat filename (no `..`, no slashes, no absolute
+  paths).
+- 10 MiB cap per file.
+- Error codes: `ARTIFACT_NOT_FOUND`, `ARTIFACT_BAD_NAME`,
+  `ARTIFACT_TOO_LARGE`, `ARTIFACT_BAD_JSON`.
+
+### Orchestrator pattern (preview)
+
+A phase (or a parent skill) writes an artifact, then a later phase reads
+it:
+
+```
+# phase 1: write
+write /home/agent/runs/current/artifacts/report.json
+
+# phase 2 or orchestrator skill: read
+mcp__zipsa__get_artifact(skill="my-skill", version="1.0.0",
+                          run_id="<id from previous_phase_output>",
+                          name="report.json")
+```
+
+Pass `run_id` through `next_phase_input` so the reading phase knows
+which run produced the artifact.
 
 ## State management
 
