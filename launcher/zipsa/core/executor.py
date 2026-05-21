@@ -1113,6 +1113,7 @@ class DockerExecutor:
             "mcp__zipsa__forget", "mcp__zipsa__list_memory",
             "mcp__zipsa__ask_once",
             "mcp__zipsa__get_artifact",
+            "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
             "ToolSearch",
         ]
         path = output_dir / "phase-allow.json"

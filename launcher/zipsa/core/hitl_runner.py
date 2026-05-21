@@ -260,6 +260,25 @@ class HitlServer:
                 skill=skill, version=version, run_id=run_id, name=name,
             )
 
+        from .run_skill_handler import RunSkillHandler
+        run_skill_h = RunSkillHandler(server=self)
+
+        @mcp.tool()
+        def run_skill(name: str, args: str = "") -> dict:
+            """Invoke a child skill declared in this skill's spec.children.
+
+            Returns {status, exit_code, skill, version, run_id, summary}.
+            Pair `skill`+`version`+`run_id` with `mcp__zipsa__get_artifact`
+            to read the child's outputs.
+
+            Args:
+              name: child skill name (must be in this skill's spec.children)
+              args: passed to child as user_query (string). For structured
+                    data, JSON-encode it yourself; the child SKILL.md
+                    decides whether to parse user_query as JSON.
+            """
+            return run_skill_h.run(name=name, args=args)
+
         app = mcp.streamable_http_app()
         app.add_middleware(CallerContextMiddleware, token_map=self._token_map)
         config = uvicorn.Config(
