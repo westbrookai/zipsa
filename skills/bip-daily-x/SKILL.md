@@ -92,6 +92,43 @@ Three groups of user-specific values:
    ```
    `user_facing_summary` (Korean): "프리체크 완료 — voice/interests 로드"
 
+### discover
+
+Search public build-in-public tweets via the WebSearch built-in tool
+and extract tone/structure insights for the draft phase.
+
+1. Build the WebSearch query from `config.discover_query` (default:
+   `"#buildinpublic OR #buildinpublic AI"`).
+
+2. Call `WebSearch` with that query. Aim for 5-10 results. Examples
+   of useful results: short personal updates with metrics, before/after
+   framing, question-style hooks.
+
+3. From the result snippets, extract **3-5 short insights** about what
+   format/tone is working today. Phrase them as actionable rules a
+   tweet writer could apply. Examples:
+
+   - "Lead with a concrete number in the first 50 chars"
+   - "Before/after framing outperforms generic 'shipped X' posts"
+   - "End with a question to drive replies"
+
+   Do NOT copy other people's tweet text verbatim (avoidance of
+   inadvertent plagiarism). Distill, don't paste.
+
+4. If WebSearch returns 0 results OR fails twice in a row, set
+   `insights=[]` and continue — the draft phase can still operate.
+
+5. Output `next_phase_input`:
+   ```json
+   {
+     ...previous fields...,
+     "insights": ["...", "...", "..."]
+   }
+   ```
+   `user_facing_summary` (Korean):
+   "BIP 트렌드 분석 완료 — 인사이트 N개"
+   (where N is the count of insights; if 0, say "인사이트 추출 실패, 계속 진행").
+
 ### report
 
 Fetch a structured per-project activity report from agenthud, then
