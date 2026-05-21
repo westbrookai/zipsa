@@ -442,3 +442,80 @@ implemented in parallel since memory_store + paths.skill_memory_file
 already do the heavy lifting.
 
 ---
+
+## Container reuse across phases (intra-skill optimization, 2026-05-21)
+
+**Symptom (latent).** `executor.py:_execute_phases` spawns a new
+docker container for every phase. A 5-phase skill = 5 container
+startups + each starts cold (npm cache empty, /tmp empty). Each cold
+startup costs 1-3 seconds plus the first agenthud/npx call has to
+re-download. Multi-phase orchestrator skills feel this most.
+
+The original "container per phase" decision predates zipsa hosting
+MCP servers. The MCP servers (HITL, future `run_skill`, future
+`get_artifact`) all live on the host and aren't affected by container
+boundaries — so phase isolation, the only real reason for fresh
+containers, can be revisited.
+
+**Proposed direction.** Reuse the docker container across all phases
+of a single `zipsa run` invocation. Each phase still issues its own
+`claude --print` invocation (per-phase model override + system prompt
++ tool restriction unchanged — PR #42's `phase.model` mechanism
+keeps working) but they execute inside the same container.
+
+Benefits:
+
+- Container startup: 1× per `zipsa run` instead of N (saves 1-3s per
+  eliminated phase boundary).
+- `npm`/`npx` cache: persists between phases naturally. The agenthud
+  wrapper's warmup call (PR #55) only pays the download cost on the
+  first phase that uses it; subsequent phases reuse the cache.
+- `/tmp` shared between phases: removes the need for the artifact-mount
+  gymnastics planned in the skill-composition spec (Phase 1) for
+  intra-skill phase data passing. Cross-skill (parent → child) still
+  needs the artifact mount.
+- Claude prompt cache: NOT shared — each `claude --print` is still a
+  fresh invocation with its own cache. The savings here are npm /
+  filesystem level, not Claude-prompt-cache level.
+
+Risks:
+
+- Phase isolation weakens. A phase that corrupts in-container state
+  (broken /tmp file, mutated env var) affects subsequent phases.
+  Currently each container starts pristine. Trade-off: skill author
+  takes on more responsibility for cleanup.
+- Crash recovery: if one phase crashes the container itself (rare —
+  most failures are contract-level via `zipsa_limits_breach`), the
+  run ends. Currently the executor handles per-phase failures via
+  contract JSON, NOT via container death, so semantics are mostly
+  unchanged.
+
+**Why not done now.** This is a launcher-level optimization. The
+in-flight skill-composition spec (atomic + orchestrator + MCP
+`run_skill`) is orthogonal. Tackling both together would balloon the
+PR series. Defer until skill composition lands and we can measure
+real-world phase counts + startup cost on the orchestrator skills.
+
+**Out of scope for this entry.** Container reuse ACROSS `zipsa run`
+invocations (long-lived launcher daemon). Different architecture —
+BACKLOG candidate if very-frequent invocations materialize. This
+entry covers only WITHIN a single invocation.
+
+**Implementation sketch.**
+
+- Modify `_execute_phases` (`launcher/zipsa/core/executor.py`) to
+  spawn container once at loop start, tear down once at loop end.
+- `_build_docker_command` splits into setup-once (image + mounts)
+  vs per-phase `--print` invocation.
+- Use `docker exec` for subsequent phase invocations against the
+  same container.
+- Hook script + phase-allow.json rewrite per phase (already
+  per-phase, no change).
+
+**Test plan.** Verify existing `_execute_phases` integration tests
+still pass. New test: assert one `docker run` invocation per skill
+execution + N `docker exec` invocations for an N-phase skill. Measure
+wall-time on a 3-phase fixture skill — should be ~3-9 seconds faster
+than current.
+
+---
