@@ -173,6 +173,86 @@ class TestRunSkillHandler:
         finally:
             current_caller.set(None)
 
+    def test_cycle_rejected_in_process(self, tmp_path, monkeypatch):
+        """Cycle caps must fire BEFORE spawning the child subprocess —
+        env-var-based check in cli.py wouldn't trigger because every
+        run_skill call goes through the same parent HitlServer process
+        whose os.environ never accumulates new DEPTH/TRACE."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        server = MagicMock(port=12345, token="parent-tok")
+        h = _build_handler(server, children=["loop"])
+        # Caller already has "loop" in its trace
+        current_caller.set(CallerInfo(
+            "loop", "1.0.0", depth=2, trace=("a", "loop"),
+        ))
+        try:
+            result = h.run(name="loop", args="")
+            assert result["status"] == "failed"
+            assert result["exit_code"] == 2
+            assert result["error"]["code"] == "skill_cycle_detected"
+            # Subprocess must NOT have been spawned
+            server.register_caller.assert_not_called()
+        finally:
+            current_caller.set(None)
+
+    def test_depth_cap_rejected_in_process(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        server = MagicMock(port=12345, token="parent-tok")
+        h = _build_handler(server, children=["lvl5"])
+        # Caller at depth 4 → calling lvl5 would push to 5, hitting cap
+        current_caller.set(CallerInfo(
+            "lvl4", "1.0.0", depth=4,
+            trace=("lvl0", "lvl1", "lvl2", "lvl3"),
+        ))
+        try:
+            result = h.run(name="lvl5", args="")
+            assert result["status"] == "failed"
+            assert result["exit_code"] == 2
+            assert result["error"]["code"] == "skill_depth_exceeded"
+            server.register_caller.assert_not_called()
+        finally:
+            current_caller.set(None)
+
+    def test_child_token_registered_with_extended_chain(self, tmp_path, monkeypatch):
+        """When spawning a child, the registered CallerInfo must carry
+        depth+1 and trace+(caller,) so the child's OWN run_skill calls
+        see an accurate chain."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        server = MagicMock(port=12345, token="parent-tok")
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo(
+            "parent", "1.0.0", depth=2, trace=("gp", "p"),
+        ))
+        try:
+            run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
+            _make_summary(run_dir)
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
+                h._find_latest_run_dir = lambda name: run_dir
+                h.run(name="alpha", args="")
+
+            # First register_caller call (the one before subprocess
+            # spawn) should pass the extended chain.
+            first_call = server.register_caller.call_args_list[0]
+            registered_info = first_call.args[1]
+            assert registered_info.skill == "alpha"
+            assert registered_info.depth == 3  # 2 + 1
+            assert registered_info.trace == ("gp", "p", "parent")
+        finally:
+            current_caller.set(None)
+
+    def test_max_call_depth_matches_cli(self):
+        """Handler's _MAX_CALL_DEPTH must match cli._MAX_CALL_DEPTH so
+        both enforcement points (in-process here + env-var check in cli
+        for direct child invocations) agree on the cap."""
+        from zipsa.cli import _MAX_CALL_DEPTH as cli_max
+        from zipsa.core.run_skill_handler import _MAX_CALL_DEPTH as handler_max
+        assert cli_max == handler_max
+
     def test_child_timeout_returns_failed(self, tmp_path, monkeypatch):
         """Timeout is enforced by our own poll loop (Popen-based) so we
         can simulate it by having poll() always return None and shrinking

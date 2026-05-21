@@ -32,6 +32,13 @@ from typing import Optional
 class CallerInfo:
     skill: str
     version: str
+    # depth + trace are populated by RunSkillHandler so it can enforce
+    # cycle/depth caps in-process: every run_skill call goes through the
+    # same parent HitlServer, so env-var-based propagation does NOT
+    # accumulate (P0's os.environ never gets new DEPTH set). Default 0/()
+    # for top-level callers (no chain yet).
+    depth: int = 0
+    trace: tuple[str, ...] = ()
 
 
 current_caller: ContextVar[Optional[CallerInfo]] = ContextVar(

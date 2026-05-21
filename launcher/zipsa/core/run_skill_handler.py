@@ -26,6 +26,12 @@ from typing import TYPE_CHECKING, Optional
 from .. import paths as zipsa_paths
 from .caller_context import CallerInfo, current_caller
 
+# Mirrors cli._MAX_CALL_DEPTH. Kept in sync via test
+# (test_max_call_depth_matches_cli) so the two enforcement points
+# (in-process here + env-var-based check in cli for direct invocation)
+# agree on the cap.
+_MAX_CALL_DEPTH = 5
+
 if TYPE_CHECKING:
     from .hitl_runner import HitlServer
 
@@ -55,10 +61,38 @@ class RunSkillHandler:
                 f"'{caller.skill}' did not declare '{name}' in spec.children",
             )
 
-        # Mint and register child token (version unknown until summary read)
+        # Enforce cycle + depth caps IN-PROCESS using the caller's tracked
+        # chain. Env-var propagation alone wouldn't work because every
+        # run_skill call funnels back to the same parent HitlServer
+        # process — os.environ in the parent never grows.
+        new_trace = caller.trace + (caller.skill,)
+        new_depth = caller.depth + 1
+        if name in new_trace:
+            return {
+                "status": "failed", "exit_code": 2, "skill": name,
+                "version": None, "run_id": None, "summary": None,
+                "error": {
+                    "code": "skill_cycle_detected",
+                    "message": f"'{name}' is already in the call chain ({' -> '.join(new_trace)} -> {name})",
+                },
+            }
+        if new_depth >= _MAX_CALL_DEPTH:
+            return {
+                "status": "failed", "exit_code": 2, "skill": name,
+                "version": None, "run_id": None, "summary": None,
+                "error": {
+                    "code": "skill_depth_exceeded",
+                    "message": f"call depth {new_depth} >= cap {_MAX_CALL_DEPTH} (chain: {' -> '.join(new_trace)})",
+                },
+            }
+
+        # Mint and register child token with the full chain so that when
+        # the child itself calls run_skill, _its_ caller resolves with
+        # accurate depth/trace.
         child_token = secrets.token_urlsafe(32)
         self._server.register_caller(
-            child_token, CallerInfo(skill=name, version="*"),
+            child_token,
+            CallerInfo(skill=name, version="*", depth=new_depth, trace=new_trace),
         )
 
         env = self._build_child_env(caller, child_token)
