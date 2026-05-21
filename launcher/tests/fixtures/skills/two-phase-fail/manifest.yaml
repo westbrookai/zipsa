@@ -1,0 +1,32 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: two-phase-fail
+  version: 0.1.0
+  description: |
+    Integration fixture for resume. Phase 1 always succeeds with a
+    deterministic next_phase_input. Phase 2 always fails with a
+    declared error code.
+spec:
+  purpose: Resume integration test fixture.
+  instructions: ./SKILL.md
+  default_query: "go"
+  model:
+    name: claude-haiku-4-5-20251001
+  tools:
+    builtin: []
+  phases:
+    - id: succeed
+      goal: "Always emit ok with a deterministic next_phase_input."
+      allowed_tools: []
+      limits:
+        max_turns: 2
+        max_cost_usd: 0.10
+        timeout_seconds: 30
+    - id: fail
+      goal: "Always emit failed with an error."
+      allowed_tools: []
+      limits:
+        max_turns: 2
+        max_cost_usd: 0.10
+        timeout_seconds: 30

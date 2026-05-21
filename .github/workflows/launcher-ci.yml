@@ -42,12 +42,12 @@ jobs:
     - name: Run tests with coverage
       run: |
         cd launcher
-        uv run pytest --cov=zipsa --cov-report=term-missing --cov-report=xml
+        uv run pytest -m "not integration" --cov=zipsa --cov-report=term-missing --cov-report=xml
 
     - name: Check coverage threshold
       run: |
         cd launcher
-        uv run pytest --cov=zipsa --cov-fail-under=70
+        uv run pytest -m "not integration" --cov=zipsa --cov-fail-under=70
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4

@@ -52,6 +52,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --cov=zipsa --cov-report=term-missing"
+markers = [
+    "integration: tests that spawn real docker / take seconds-to-minutes",
+]
 
 [tool.mypy]
 python_version = "3.10"

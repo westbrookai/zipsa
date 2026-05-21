@@ -102,6 +102,8 @@ behavior change beyond message text.
 
 ## Resume a failed run from the failed phase (2026-05-18)
 
+**Status: shipped 2026-05-22 (PR #TBD)**
+
 **Symptom.** Every `zipsa run` starts at phase 0. If a multi-phase
 skill fails on phase N, the user must re-do phases 0..N-1 on retry.
 

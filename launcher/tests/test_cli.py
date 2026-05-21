@@ -43,7 +43,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}
+            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -119,7 +119,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}
+            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -142,7 +142,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None, requires_values={}
+            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None, requires_values={}, resume_from=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -1755,3 +1755,53 @@ class TestCallTraceCycleDetection:
         from zipsa.cli import _check_call_trace
         monkeypatch.setenv("ZIPSA_CALL_TRACE", "parent")
         _check_call_trace(skill_name="child")  # no raise — child not in trace
+
+
+class TestRunResumeFlag:
+    """The run command grows a --no-resume flag that skips the
+    eligibility check entirely. Other resume behavior (eligibility +
+    prompt) is unit-tested in test_resume; here we just verify the
+    flag plumbs through and the non-interactive exit-2 message fires."""
+
+    def test_no_resume_flag_in_signature(self):
+        import inspect
+        from zipsa.cli import run
+        sig = inspect.signature(run)
+        assert "no_resume" in sig.parameters
+
+    def test_non_interactive_with_candidate_exits_2(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """When eligibility says candidate exists AND stdin is not a
+        TTY AND --no-resume not passed, run() exits 2 with the
+        documented message."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        # Build a synthetic eligible prior run for "x"
+        from tests.test_resume import _two_phase_failed
+        _two_phase_failed(tmp_path, skill="x", version="0.1.0",
+                          user_input="today")
+        # Stub the skill resolver so we don't actually try to load
+        # an installed skill named "x"
+        import zipsa.cli as cli_mod
+        from unittest.mock import MagicMock
+
+        fake_skill = MagicMock()
+        fake_skill.name = "x"
+        fake_skill.manifest.metadata.version = "0.1.0"
+        fake_skill.manifest.spec.phases = [MagicMock(id="p1"), MagicMock(id="p2")]
+        monkeypatch.setattr(cli_mod, "_resolve_skill_path",
+                            lambda n: tmp_path / "fake_install_dir")
+        monkeypatch.setattr(cli_mod.Skill, "load", lambda p: fake_skill)
+        # Force non-interactive
+        import sys as _sys
+        class _Pipe:
+            def isatty(self): return False
+            def readline(self): return ""
+        monkeypatch.setattr(_sys, "stdin", _Pipe())
+
+        from typer.testing import CliRunner
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.app, ["run", "x", "today"],
+                                catch_exceptions=False)
+        assert result.exit_code == 2
+        assert "previous failed run found" in (result.stderr or "")

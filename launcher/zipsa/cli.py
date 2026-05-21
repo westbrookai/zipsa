@@ -240,12 +240,27 @@ def run(
         Optional[Path],
         typer.Option("--summary-to", help="Copy run summary.json to this path after the run."),
     ] = None,
+    no_resume: Annotated[
+        bool,
+        typer.Option(
+            "--no-resume",
+            help=(
+                "Skip the auto-detect-failed-run check. Always start "
+                "from phase 0, even if the previous run failed."
+            ),
+        ),
+    ] = False,
 ):
     """Execute a skill with the specified runtime."""
     # Reject cyclic invocations and depth-capped chains before any expensive work.
     _check_call_trace(name)
+
+    # Resume eligibility state — resolved inside the try block below.
+    resume_from: Optional[int] = None
+
     try:
-        # Load skill
+        # Load skill once. Reused for both the resume eligibility check
+        # (when --no-resume is not set) and the main execution path.
         skill = Skill.load(_resolve_skill_path(name))
         typer.echo(f"Loaded skill: {skill.name}", err=True)
 
@@ -262,6 +277,36 @@ def run(
         # In shell mode the substitution above is skipped; normalize None → "".
         if user_input is None:
             user_input = ""
+
+        # Resume eligibility — auto-detect a recoverable prior run. See
+        # docs/superpowers/specs/2026-05-21-resume-failed-run-design.md
+        # for the behavior matrix. Runs AFTER default_query substitution
+        # so current_args matches what the prior run recorded in
+        # summary.user_input (which is also the post-substitution value).
+        if not no_resume:
+            from .core.resume import find_resumable_run, prompt_user_to_resume
+            _phases = skill.manifest.spec.phases
+            _phase_count = len(_phases) if isinstance(_phases, list) else 0
+            candidate = find_resumable_run(
+                skill=name,
+                current_version=skill.manifest.metadata.version,
+                current_args=user_input,
+                current_phase_count=_phase_count,
+            )
+            if candidate is not None:
+                import sys as _sys
+                if _sys.stdin.isatty():
+                    if prompt_user_to_resume(candidate, stdin=_sys.stdin, stdout=_sys.stderr):
+                        resume_from = candidate.failed_phase_index
+                else:
+                    typer.echo(
+                        "Error: previous failed run found "
+                        f"({candidate.run_id}, phase '{candidate.failed_phase_id}'); "
+                        "pass --no-resume to start fresh, "
+                        "or run interactively to resume",
+                        err=True,
+                    )
+                    raise typer.Exit(code=2)
 
         # Parse environment variables
         env_dict = {}
@@ -301,7 +346,7 @@ def run(
 
         # Execute skill or start shell. user_input is always a string here
         # (substituted above) — no `or ""` guard needed.
-        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values)
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values, resume_from=resume_from)
 
         if output is None:
             # Dry run or shell mode — no exit code translation, no summary copy.
