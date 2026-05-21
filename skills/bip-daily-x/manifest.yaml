@@ -2,18 +2,21 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: bip-daily-x
-  version: 0.2.4
+  version: 0.3.0
   author: westbrookai
   description: |
     Generate, refine via user feedback, and post a single daily tweet
-    about your Claude Code work.
+    about your build-in-public progress. Pulls inspiration from public
+    BIP chatter and your interest topics; optionally enriches with
+    today's Claude Code activity via agenthud.
   tags: [productivity, build-in-public, x, claude-code]
 
 spec:
   purpose: |
-    Produce one tweet per day about the user's Claude Code work,
-    iterate until the user is satisfied, then post to X after
-    explicit approval. Refuse anything not in this scope.
+    Produce one tweet per day. Always pull web context (BIP trends +
+    user interest summary). Optionally enrich with agenthud activity
+    if the user opts in. Iterate via Korean-language review, then
+    post to X after explicit approval. Refuse anything not in scope.
 
   instructions: ./SKILL.md
 
@@ -25,8 +28,8 @@ spec:
   # "yesterday" or an ISO date.
   default_query: today
 
-  # Sonnet 4.6 handles tweet drafting + feedback refinement well;
-  # mechanical phases (precheck, report, post) override to Haiku below.
+  # Sonnet 4.6 handles tweet drafting + Korean feedback refinement well;
+  # mechanical and web-search phases override to Haiku below.
   model:
     name: claude-sonnet-4-6
 
@@ -65,15 +68,34 @@ spec:
     max_review_iterations: 5
     max_tweet_chars: 280
     agenthud_version: "0.9.2"        # pinned for reproducibility
+    discover_query: "#buildinpublic OR #buildinpublic AI"
+    # Example topics shown to the user on first run as the ask_once
+    # prompt for `interests`. The persisted value is the user's input.
+    default_interests:
+      - AI agents
+      - MCP
+      - build-in-public
 
-  state_schema: {}
+  state_schema:
+    insights:
+      type: list[string]
+    interests_summary:
+      type: string
+    use_agenthud:
+      type: bool
+    target_date:
+      type: string
+    report:
+      type: object
+    draft:
+      type: string
 
   phases:
     - id: precheck
       goal: |
-        Verify the 4 X credentials are present, ensure voice is
-        remembered, resolve target date.
-      # Mechanical: env-var check via script + ask_once for voice.
+        Verify the 4 X credentials are present, ensure voice and
+        interests are remembered, resolve target date.
+      # Mechanical: env-var check via script + two ask_once calls.
       # Haiku is ~10x cheaper than Sonnet on this kind of work, but
       # Haiku is also verbose in its thinking — give it a bit more
       # room than the absolute minimum.
@@ -82,15 +104,54 @@ spec:
       allowed_tools:
         - Bash(python3:*)
       limits:
-        max_turns: 6
+        max_turns: 8
         max_cost_usd: 0.10
-        timeout_seconds: 90
+        timeout_seconds: 120
+
+    - id: discover
+      goal: |
+        WebSearch public build-in-public chatter and extract 3-5
+        tone/structure insights for the draft phase.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools:
+        - WebSearch
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+    - id: interests
+      goal: |
+        Confirm or override stored interest topics, then WebSearch
+        and summarize current chatter on those topics.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools:
+        - WebSearch
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 180
+
+    - id: ask_agenthud
+      goal: |
+        Ask whether to fetch today's Claude Code activity; if yes,
+        ask which period (today/yesterday/YYYY-MM-DD).
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 4
+        max_cost_usd: 0.05
+        timeout_seconds: 600
 
     - id: report
       goal: |
-        Run agenthud for the target date and produce a structured
-        per-project activity summary.
-      # Also mechanical: bash npx + jq slicing + a small JSON dump.
+        Conditional. If use_agenthud=false, immediately return
+        result.report=null. If true, run agenthud for the target
+        date and produce a structured per-project activity summary.
+      # Mechanical: bash npx + jq slicing + a small JSON dump.
       model:
         name: claude-haiku-4-5-20251001
       allowed_tools:
@@ -106,8 +167,9 @@ spec:
 
     - id: draft
       goal: |
-        Write a single tweet (<= max_tweet_chars) in the user's voice
-        from the report.
+        Write a single English tweet (<= max_tweet_chars) in the
+        user's voice, combining insights + interests_summary +
+        optional report.
       # Sonnet 4.6 (inherited from spec.model) — creative tweet writing
       # is where the better model actually shows up, but Opus is overkill
       # for 280 chars.
@@ -119,10 +181,11 @@ spec:
 
     - id: review
       goal: |
-        Show the draft, accept feedback, regenerate up to 5 times,
-        then confirm before posting.
+        Show the English draft to the user and run a Korean review
+        loop. Accept feedback, regenerate up to 5 times, then
+        confirm before posting.
       # Sonnet (inherited) — iterating on user feedback while keeping
-      # voice consistent.
+      # voice consistent and the tweet in English.
       allowed_tools: []
       limits:
         max_turns: 10
@@ -132,7 +195,7 @@ spec:
     - id: post
       goal: |
         Run /skill/scripts/post.py with the approved draft; surface
-        the tweet URL and id.
+        the tweet URL and id in Korean user_facing_summary.
       # Mechanical: invoke a script with prepared input.
       model:
         name: claude-haiku-4-5-20251001
@@ -145,6 +208,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 37    # 6 + 14 + 3 + 10 + 4
-    max_cost_usd: 0.60
-    timeout_seconds: 2250
+    max_turns: 59         # 8+8+8+4+14+3+10+4 = 59
+    max_cost_usd: 0.85
+    timeout_seconds: 3180 # 120+120+180+600+240+60+1800+60 = 3180
