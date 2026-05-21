@@ -32,18 +32,25 @@ class ArtifactHandler:
     """Read an artifact file written by a skill into its run_dir/artifacts/."""
 
     def run(self, *, skill: str, version: str, run_id: str, name: str) -> ArtifactResult:
-        if self._is_unsafe_name(name):
-            raise RuntimeError(
-                f"ARTIFACT_BAD_NAME: name must be a flat filename, got {name!r}"
-            )
+        # All four inputs interpolate into the on-disk path. Validate each
+        # as a single safe path segment up-front so the audit-log claim
+        # "this read came from <skill>@<version>" stays honest — a `run_id`
+        # of "../../victim@0.1.0/runs/x" would otherwise resolve to a
+        # different skill's directory but still pass the ZIPSA_HOME
+        # containment guard below.
+        for field, value in (("skill", skill), ("version", version),
+                              ("run_id", run_id), ("name", name)):
+            if self._is_unsafe_segment(value):
+                raise RuntimeError(
+                    f"ARTIFACT_BAD_NAME: {field} must be a flat path segment, got {value!r}"
+                )
 
         artifacts_dir = zipsa_paths.skill_run_artifacts_dir(skill, version, run_id)
         path = artifacts_dir / name
 
-        # Defense-in-depth: regardless of how clever a `skill`, `version`,
-        # `run_id`, or `name` is, the final path must land somewhere under
-        # ZIPSA_HOME. _is_unsafe_name handles `name`; this catches the
-        # case where one of the other fields is also a traversal payload.
+        # Defense-in-depth: even with per-segment validation above, require
+        # the resolved path to land under ZIPSA_HOME. Catches symlink
+        # shenanigans on the host side that the segment check can't see.
         try:
             resolved = path.resolve(strict=False)
             home = zipsa_paths.zipsa_home().resolve()
@@ -75,19 +82,21 @@ class ArtifactHandler:
         return {"name": name, "size": size, "content": content}
 
     @staticmethod
-    def _is_unsafe_name(name: str) -> bool:
-        """A safe artifact name is a flat filename: no path separators,
-        no '..' parts, not absolute. Compared via PurePosixPath since the
-        container side runs Linux."""
-        if not name:
+    def _is_unsafe_segment(value: str) -> bool:
+        """A safe path segment: non-empty, ≤ 255 chars (POSIX NAME_MAX),
+        no path separators, no NUL, no '..', not absolute. Compared via
+        PurePosixPath since the container side runs Linux."""
+        if not value:
+            return True
+        if len(value) > 255:
             return True
         # Reject Windows separator explicitly — PurePosixPath treats it
         # as a literal char so "..\\foo" would otherwise look like one part.
-        if "\\" in name:
+        if "\\" in value:
             return True
-        if "\x00" in name:
+        if "\x00" in value:
             return True
-        p = PurePosixPath(name)
+        p = PurePosixPath(value)
         if p.is_absolute():
             return True
         if ".." in p.parts:

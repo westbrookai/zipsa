@@ -25,11 +25,18 @@ the system prompt. It contains:
   `Australia/Sydney`). Use this whenever the skill needs the user's
   local timezone for date math — e.g. `zoneinfo.ZoneInfo(tz_iana)` in
   Python. Don't ask the user for their timezone; this is already it.
+- `run_id`: timestamp identifier for this run (e.g.
+  `2026-05-21_120000_000`). Pair with skill name+version when calling
+  `mcp__zipsa__get_artifact` to read artifacts written by a prior
+  phase of this same run.
 - `phase_id`: which phase you are executing now
 - `phase_goal`: what this phase must accomplish
+- `allowed_tools`: comma-separated list of tools you may call in this
+  phase. The PreToolUse hook denies anything not in this list.
 - `previous_phase_output`: data from the previous phase, or null
 - `skill_state`: current skill state snapshot
 - `user_query`: original user query (only relevant for the first phase)
+- `config`: skill-author defaults from `spec.config`
 
 ## Empty `user_query`
 
