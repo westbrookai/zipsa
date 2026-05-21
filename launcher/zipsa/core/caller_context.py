@@ -9,19 +9,23 @@ can route skill-scoped operations (ask_once, recall, remember) to the
 correct skill's memory file without parent and child stepping on each
 other.
 
-Combines auth + routing: unknown/missing tokens return 401. Replaces
-the separate _BearerAuthMiddleware that HitlServer currently uses
-(swap happens in T3).
+Combines auth + routing: unknown/missing tokens return 401.
+
+Implemented as PURE ASGI middleware (not BaseHTTPMiddleware): MCP's
+StreamableHTTP transport uses long-lived SSE streams, and starlette's
+BaseHTTPMiddleware buffers request bodies in a way that triggers
+ClientDisconnect on streaming endpoints (observed: child container's
+initialize POST fails with ClientDisconnect when the middleware uses
+BaseHTTPMiddleware). Pure ASGI lets us inspect headers without
+touching the body stream.
 """
 
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Optional
-
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
 
 
 @dataclass(frozen=True)
@@ -35,29 +39,56 @@ current_caller: ContextVar[Optional[CallerInfo]] = ContextVar(
 )
 
 
-class CallerContextMiddleware(BaseHTTPMiddleware):
-    """Auth + caller-routing middleware.
+class CallerContextMiddleware:
+    """Pure ASGI middleware: auth + caller-routing.
 
-    Extracts Bearer token, resolves to CallerInfo, sets the contextvar
-    for the request's duration. Unknown or missing tokens → 401.
+    Extracts Bearer token from request headers, resolves to CallerInfo,
+    sets the contextvar for the duration of the request/response cycle.
+    Unknown or missing tokens → 401 (returned as a complete HTTP
+    response without forwarding to the inner app).
     """
 
-    def __init__(self, app, token_map: dict[str, CallerInfo]) -> None:
-        super().__init__(app)
+    def __init__(self, app, token_map: "dict[str, CallerInfo]") -> None:
+        self._app = app
         self._token_map = token_map
 
-    async def dispatch(self, request, call_next):
-        auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        token = auth[len("Bearer "):].strip()
-        if not token:
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        caller = self._token_map.get(token)
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        # ASGI headers: list[tuple[bytes, bytes]], lowercased names.
+        auth = ""
+        for k, v in scope.get("headers", []):
+            if k == b"authorization":
+                auth = v.decode("latin-1")
+                break
+
+        caller = None
+        if auth.startswith("Bearer "):
+            token = auth[len("Bearer "):].strip()
+            if token:
+                caller = self._token_map.get(token)
+
         if caller is None:
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
+            await _send_401(send)
+            return
+
         reset_token = current_caller.set(caller)
         try:
-            return await call_next(request)
+            await self._app(scope, receive, send)
         finally:
             current_caller.reset(reset_token)
+
+
+async def _send_401(send) -> None:
+    body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": 401,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("latin-1")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})

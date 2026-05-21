@@ -264,7 +264,7 @@ class HitlServer:
         run_skill_h = RunSkillHandler(server=self)
 
         @mcp.tool()
-        def run_skill(name: str, args: str = "") -> dict:
+        async def run_skill(name: str, args: str = "") -> dict:
             """Invoke a child skill declared in this skill's spec.children.
 
             Returns {status, exit_code, skill, version, run_id, summary}.
@@ -277,13 +277,24 @@ class HitlServer:
                     data, JSON-encode it yourself; the child SKILL.md
                     decides whether to parse user_query as JSON.
             """
-            return run_skill_h.run(name=name, args=args)
+            # Run blocking handler in a thread so the event loop stays
+            # free to process other MCP requests (especially the child
+            # container's MCP calls back into this same server).
+            import asyncio
+            return await asyncio.to_thread(run_skill_h.run, name=name, args=args)
 
         app = mcp.streamable_http_app()
         app.add_middleware(CallerContextMiddleware, token_map=self._token_map)
         config = uvicorn.Config(
             app,
-            host="127.0.0.1",
+            # Bind to all interfaces so secondary containers (Phase 2
+            # children) can reach us via host.docker.internal. With
+            # 127.0.0.1 binding, Docker Desktop's gateway only forwarded
+            # the FIRST container's traffic; subsequent containers got
+            # connection timeout (observed on macOS Docker Desktop 4.x).
+            # Auth still enforced by CallerContextMiddleware (every
+            # request needs a registered Bearer token).
+            host="0.0.0.0",
             port=self.port,
             log_level="error",
             access_log=False,

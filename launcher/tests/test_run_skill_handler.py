@@ -69,8 +69,12 @@ class TestRunSkillHandler:
         try:
             run_dir = tmp_path / "alpha@0.1.0" / "runs" / "2026-05-21_000000_000"
             _make_summary(run_dir)
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
                 h._find_latest_run_dir = lambda name: run_dir
                 result = h.run(name="alpha", args="hello")
 
@@ -81,7 +85,8 @@ class TestRunSkillHandler:
             assert "parent" in env["ZIPSA_CALL_TRACE"]
             assert env["ZIPSA_CALL_DEPTH"] == "1"
             assert call_kwargs["stdin"] == subprocess.DEVNULL
-            assert call_kwargs["capture_output"] is True
+            assert call_kwargs["stdout"] == subprocess.DEVNULL
+            assert call_kwargs["stderr"] == subprocess.PIPE
 
             # The child token should have been registered on the server
             server.register_caller.assert_called()
@@ -110,8 +115,12 @@ class TestRunSkillHandler:
         try:
             run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
             _make_summary(run_dir)
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
                 h._find_latest_run_dir = lambda name: run_dir
                 h.run(name="alpha", args="")
             env = mock_run.call_args.kwargs["env"]
@@ -129,8 +138,12 @@ class TestRunSkillHandler:
             run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
             _make_summary(run_dir, status="failed", exit_code=1,
                           error={"code": "agent_error", "message": "x"})
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"")
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 1
+                proc.returncode = 1
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
                 h._find_latest_run_dir = lambda name: run_dir
                 result = h.run(name="alpha", args="")
             assert result["status"] == "failed"
@@ -147,8 +160,12 @@ class TestRunSkillHandler:
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
                 h._find_latest_run_dir = lambda name: None
                 result = h.run(name="alpha", args="")
             assert result["status"] == "failed"
@@ -157,12 +174,23 @@ class TestRunSkillHandler:
             current_caller.set(None)
 
     def test_child_timeout_returns_failed(self, tmp_path, monkeypatch):
+        """Timeout is enforced by our own poll loop (Popen-based) so we
+        can simulate it by having poll() always return None and shrinking
+        the timeout env var to ~0."""
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        monkeypatch.setenv("ZIPSA_RUN_SKILL_TIMEOUT", "0")
         server = MagicMock(port=12345, token="parent-tok")
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
-            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=[], timeout=1)):
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                # Never finishes: poll always None until killed
+                proc.poll.return_value = None
+                proc.returncode = -9
+                proc.wait.return_value = -9
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
                 result = h.run(name="alpha", args="")
             assert result["status"] == "failed"
             assert result["error"]["code"] == "child_timeout"
