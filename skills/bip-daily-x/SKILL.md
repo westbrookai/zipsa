@@ -11,8 +11,11 @@ via user feedback, and post to X after explicit approval.
 - The final tweet text: **English** (it is the deliverable).
 
 This document uses English for clarity. The example user-facing
-strings quoted in each phase below are the exact Korean strings the
-agent must produce.
+strings quoted in each phase below are the **verbatim** Korean
+strings the agent must produce — do not paraphrase, do not translate.
+When referring to internal field names (`voice`, `interests`,
+`next_phase_input`, etc.) inside Korean prose, keep the field name
+in English.
 
 ## Per-user setup
 
@@ -65,9 +68,14 @@ Three groups of user-specific values:
    The cached answer is reused on subsequent runs.
 
 3. Call `mcp__zipsa__ask_once` with key=`interests`.
-   Prompt (Korean) — use `config.default_interests` as the example list:
-   "관심 주제 3-5개를 쉼표로 입력해주세요. 예: AI agents, MCP, build-in-public"
-   Parse the response into a list of trimmed strings.
+   Build the Korean prompt at runtime by joining
+   `config.default_interests` with `, ` and substituting into:
+   `"관심 주제 3-5개를 쉼표로 입력해주세요. 예: {example}"`
+   (so if the manifest's `default_interests` ever changes, the
+   prompt's example stays in sync — do not hardcode the items).
+   Parse the user's response into a list of trimmed, non-empty strings.
+   Store the raw response into ask_once memory under key=`interests`;
+   pass the parsed list downstream as `next_phase_input.interests`.
    The cached answer is reused on subsequent runs.
 
 4. Resolve target_date_default from the user query. Default: today in
