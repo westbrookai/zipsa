@@ -2599,3 +2599,29 @@ class TestResumeFromSkipsPhases:
         (run_dir / "phases").mkdir(parents=True)
         with pytest.raises(FileNotFoundError, match="state.json"):
             DockerExecutor._load_resume_state(run_dir, resume_from=2)
+
+    def test_load_resume_state_reads_from_prior_dir_not_current(self, tmp_path):
+        """state.json lives in the PRIOR (failed) run dir, not the
+        current (fresh) run dir. Regression test: caller must pass
+        the prior run dir to _load_resume_state, not the current one."""
+        from zipsa.core.executor import DockerExecutor
+        import json as _j
+
+        prior_run_dir = tmp_path / "x@0.1.0" / "runs" / "2026-05-21_100000_000000"
+        prior_phase_dir = prior_run_dir / "phases" / "0-precheck"
+        prior_phase_dir.mkdir(parents=True)
+        (prior_phase_dir / "state.json").write_text(_j.dumps({
+            "status": "ok", "phase": "precheck",
+            "next_phase_input": {"loaded": True},
+            "user_facing_summary": "ok", "state_updates": None, "result": None,
+        }))
+
+        # Fresh current run dir — empty, no phases/
+        current_run_dir = tmp_path / "x@0.1.0" / "runs" / "2026-05-21_110000_000000"
+        current_run_dir.mkdir()
+
+        # Read using the PRIOR dir explicitly
+        loaded = DockerExecutor._load_resume_state(
+            prior_run_dir, resume_from=1,
+        )
+        assert loaded == {"loaded": True}

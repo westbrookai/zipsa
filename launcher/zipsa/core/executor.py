@@ -92,6 +92,7 @@ class DockerExecutor:
         extra_docker_opts: Optional[list[str]] = None,
         requires_values: Optional[dict[str, object]] = None,
         resume_from: Optional[int] = None,
+        resume_from_run_dir: Optional[Path] = None,
     ) -> Optional[Iterator[dict]]:
         """Execute skill in Docker container.
 
@@ -196,6 +197,7 @@ class DockerExecutor:
             env_file=env_file,
             started_at=started_at,
             resume_from=resume_from,
+            resume_from_run_dir=resume_from_run_dir,
         )
 
     def _execute_with_hitl(
@@ -210,6 +212,7 @@ class DockerExecutor:
         env_file: Path,
         started_at: Optional[datetime] = None,
         resume_from: Optional[int] = None,
+        resume_from_run_dir: Optional[Path] = None,
     ) -> Iterator[dict]:
         """Wrap real execution with HitlServer lifecycle.
 
@@ -310,6 +313,7 @@ class DockerExecutor:
                     mcp_debug_host is not None, extra_docker_opts,
                     _limits_state_ref=_limits_state_ref,
                     resume_from=resume_from,
+                    resume_from_run_dir=resume_from_run_dir,
                 ):
                     # Capture final status from the complete event or breach event
                     etype = event.get("type")
@@ -909,6 +913,7 @@ class DockerExecutor:
         extra_docker_opts: Optional[list[str]],
         _limits_state_ref: Optional[list] = None,
         resume_from: Optional[int] = None,
+        resume_from_run_dir: Optional[Path] = None,
     ) -> Iterator[dict]:
         from .models import PhaseSpec
 
@@ -950,12 +955,16 @@ class DockerExecutor:
 
         # Resume support: when resume_from is set, skip phases
         # 0..resume_from-1 and seed previous_output from the persisted
-        # state.json of phase resume_from-1.
+        # state.json of phase resume_from-1 in the PRIOR (failed) run.
+        # The current run_dir is a fresh empty dir — state.json lives
+        # in resume_from_run_dir, which the CLI sets to
+        # candidate.run_dir (the failed run we're resuming from).
         start_phase_idx = 0
         if resume_from is not None and resume_from > 0:
             start_phase_idx = resume_from
+            prior_run_dir = resume_from_run_dir or run_dir
             previous_output = self._load_resume_state(
-                run_dir, resume_from=resume_from,
+                prior_run_dir, resume_from=resume_from,
             )
             # Pre-populate phase_summaries with ok markers for the
             # skipped phases so the new run's summary still records

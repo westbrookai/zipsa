@@ -43,7 +43,7 @@ class TestRunCommand:
         assert result.exit_code == 0
         mock_skill_cls.load.assert_called_once()
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None
+            mock_skill, user_input="Hello world", env={}, dry_run=False, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None, resume_from_run_dir=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -119,7 +119,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None
+            mock_skill, user_input="input", env={}, dry_run=True, shell=False, mcp_debug=False, extra_docker_opts=None, requires_values={}, resume_from=None, resume_from_run_dir=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
@@ -142,7 +142,7 @@ class TestRunCommand:
 
         assert result.exit_code == 0
         mock_executor.run.assert_called_once_with(
-            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None, requires_values={}, resume_from=None
+            mock_skill, user_input="input", env={}, dry_run=False, shell=False, mcp_debug=True, extra_docker_opts=None, requires_values={}, resume_from=None, resume_from_run_dir=None
         )
 
     @patch("zipsa.cli.resolve_skill", return_value=Path("/fake/skill"))
