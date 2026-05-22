@@ -261,8 +261,12 @@ structured Notion page payloads.
    - `date:Date:start` and `date:Date:is_datetime` are literal
      property keys — that's how the Notion MCP encodes a date column.
    - `Tools used` is a JSON-encoded **string**, not a native array.
-     Use the project's `labels` list — typically `["Bash", "Edit",
-     "Read"]`. Example: `"[\"Bash\", \"Edit\", \"Read\"]"`.
+     Build it from the project's `labels`, but first drop agenthud's
+     non-tool activity types — `Response`, `Thinking`, `User` — so
+     only real tools remain (e.g. `Bash`, `Edit`, `Read`, `Write`).
+     Those three are activity categories, not tools, and are not
+     valid `Tools used` options. Example: `"[\"Bash\", \"Edit\", \"Read\"]"`.
+     If filtering leaves nothing, use `"[]"`.
    - `Status` must match one of the schema options exactly.
 
    **Summary narrative rules:**
