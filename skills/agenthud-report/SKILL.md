@@ -43,83 +43,76 @@ short message naming the bad input.
 
 1. Resolve `target_date` from `user_query` per the Input rules above.
 
-2. Invoke the skill-vendored agenthud wrapper, redirecting stdout to
-   `/tmp/agenthud-report.json`. Do NOT pipe stdout through the Bash
-   tool result — busy days produce 50-200KB+ of JSON.
+2. Invoke the skill-vendored agenthud wrapper, writing its full
+   stdout directly to the artifact path. The artifact IS the raw
+   agenthud report — this skill does no projection, no slicing, no
+   include-filtering. Orchestrators that need a slimmer shape do
+   their own jq pass on the artifact.
 
    ```bash
    /skill/scripts/agenthud report \
      --date <target_date> \
      --format json \
-     --include response,bash,edit \
-     --detail-limit 200 \
+     --include all \
      --with-git \
-     > /tmp/agenthud-report.json
+     > /home/agent/runs/current/artifacts/agenthud-report.json
    ```
 
    The wrapper pins `agenthud@0.9.2` and warms the npx cache so the
    real call's stdout is guaranteed clean JSON. `~/.claude/projects`
    is bind-mounted at agenthud's default path; each `project_roots`
    entry is mounted at its own absolute host path so `--with-git`
-   can resolve session `cwd → .git`.
+   can resolve session `cwd → .git` and emit commit entries.
 
-   **`thinking` deliberately excluded** — verbose internal reasoning
-   isn't share-worthy.
+   **Why `--include all` and no `--detail-limit`:** this is an atomic
+   skill. Trimming activity types or truncating bodies up-front
+   throws away information the orchestrator might need. Some
+   orchestrators want only commits; others want responses for tweet
+   drafting; a future one might want thinking. Atomic emits the full
+   record; orchestrators decide what to drop. Busy days can produce
+   500KB+ of JSON — within the 10 MiB artifact cap.
 
-3. Run ONE jq query to produce a slim per-project summary, writing
-   it as the artifact:
+3. Compute metadata for the `result` field using `jq` on the
+   artifact (no projection, just counting):
 
    ```bash
    jq '{
-     target_date: "<target_date>",
-     projects: ([.sessions[] | {
-       project: .project,
-       activity_count: (.activities | length),
-       commits: ([.activities[] | select(.type == "commit") | .label] | unique),
-       sample_responses: ([.activities[] | select(.type == "Response") | .text] | .[:3]),
-       sample_edits: ([.activities[] | select(.type == "Edit") | .label] | .[:3]),
-       sample_bash: ([.activities[] | select(.type == "Bash") | .label] | .[:3])
-     }] | group_by(.project) | map({
-       name: .[0].project,
-       activity_count: (map(.activity_count) | add),
-       commits: (map(.commits[]) | unique),
-       sample_responses: (map(.sample_responses[]) | .[:4]),
-       sample_edits: (map(.sample_edits[]) | unique | .[:5]),
-       sample_bash: (map(.sample_bash[]) | unique | .[:5])
-     }))
-   }' /tmp/agenthud-report.json > /home/agent/runs/current/artifacts/agenthud-report.json
+     session_count: (.sessions | length),
+     activity_count: ([.sessions[].activities | length] | add // 0),
+     project_count: ([.sessions[].project] | unique | length)
+   }' /home/agent/runs/current/artifacts/agenthud-report.json
    ```
 
-   **Shell-quoting notes:**
-   - Wrap the whole jq filter in single quotes; nothing inside needs
-     escaping.
-   - Substitute `<target_date>` into the jq string literal before
-     invoking (use bash variable expansion outside the single-quoted
-     filter, or use jq's `--arg` form). Do NOT leave the literal
-     placeholder text.
-   - Use **explicit `{key: .key}` form** throughout — the
-     `{key1, key2}` shorthand can be mangled by some wrappers.
+   These three numbers go into the skill envelope's `result` field.
+   The orchestrator can compute anything else from the artifact.
 
-4. The artifact's shape:
+4. The artifact is the raw agenthud `--format json` output, schema
+   defined by agenthud itself. Top-level shape (as of agenthud 0.9.2):
 
    ```json
    {
-     "target_date": "2026-05-22",
-     "projects": [
+     "date": "2026-05-22",
+     "sessions": [
        {
-         "name": "launcher",
-         "activity_count": 47,
-         "commits": ["feat: ...", "fix: ..."],
-         "sample_responses": ["..."],
-         "sample_edits": ["..."],
-         "sample_bash": ["..."]
+         "project": "launcher",
+         "session_id": "...",
+         "cwd": "/Users/.../launcher",
+         "start": "...",
+         "end": "...",
+         "activities": [
+           {"type": "Response", "text": "..."},
+           {"type": "Edit", "label": "..."},
+           {"type": "Bash", "label": "..."},
+           {"type": "commit", "label": "...", "sha": "..."},
+           ...
+         ]
        }
      ]
    }
    ```
 
-   If agenthud found 0 sessions, the artifact is still written with
-   `projects: []`. This is a normal "no activity today" signal, not
+   If agenthud found 0 sessions on the date, the artifact has
+   `sessions: []`. That is a normal "no activity today" signal, not
    an error.
 
 5. Emit the skill-envelope:
@@ -130,12 +123,13 @@ short message naming the bad input.
      "phase": "report",
      "result": {
        "target_date": "<resolved>",
-       "project_count": <N>,
-       "activity_count": <total across projects>,
+       "session_count": <N>,
+       "activity_count": <total across sessions>,
+       "project_count": <unique projects>,
        "artifact": "agenthud-report.json"
      },
      "state_updates": {},
-     "user_facing_summary": "agenthud report — {target_date} ({project_count} projects, {activity_count} activities)"
+     "user_facing_summary": "agenthud report — {target_date} ({session_count} sessions, {activity_count} activities, {project_count} projects)"
    }
    ```
 
@@ -147,15 +141,20 @@ short message naming the bad input.
   user-facing summary `"invalid target_date: <input>"`.
 - agenthud wrapper non-zero exit → `error.code="agenthud_failed"`,
   user-facing summary `"agenthud failed: <stderr first 200 chars>"`.
-- jq non-zero exit → `error.code="jq_failed"`, user-facing summary
-  similar.
-- 0 sessions is NOT an error — write the empty-projects artifact and
-  return `status="ok"`.
+- jq non-zero exit on the metadata pass → `error.code="jq_failed"`,
+  user-facing summary similar. The artifact has still been written
+  in this case (step 2 already succeeded); the failure is purely on
+  the metadata count.
+- 0 sessions is NOT an error — the artifact still has `sessions: []`
+  and the run returns `status="ok"`.
 
 ## Constraints
 
 - This skill does NOT call `mcp__zipsa__run_skill` (atomic = leaf in
   the call graph).
+- This skill does NOT project, slice, or filter the agenthud output.
+  The artifact is the raw `--include all --with-git` JSON. Down­-
+  stream skills own their own slicing decisions.
 - Output is exclusively via the artifact + the `result` field — agent
   text/markdown chatter is not the contract.
 - Output language is English (this is a machine-to-machine skill).

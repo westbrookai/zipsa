@@ -2,21 +2,22 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: agenthud-report
-  version: 0.1.0
+  version: 0.2.0
   author: westbrookai
   description: |
-    Atomic skill: fetch a structured per-project Claude Code activity
-    report from agenthud for a given date and emit it as a JSON
-    artifact. No user prompts, no domain knowledge — pure I/O for
-    orchestrator skills to compose.
+    Atomic skill: invoke agenthud for a given date and write its raw
+    --include all --with-git JSON output to artifacts/agenthud-report.json.
+    No projection, no filtering, no slicing — downstream orchestrators
+    own those decisions. No user prompts, no domain knowledge.
   tags: [atomic, claude-code, agenthud]
 
 spec:
   purpose: |
-    Run agenthud for a target date (today/yesterday/YYYY-MM-DD),
-    structure the output per project, and write it to
-    artifacts/agenthud-report.json. Orchestrators read the artifact
-    via mcp__zipsa__get_artifact. No HITL, no memory, single phase.
+    Run agenthud for a target date (today/yesterday/YYYY-MM-DD) and
+    write its raw JSON output to artifacts/agenthud-report.json.
+    Result field carries session/activity/project counts; the artifact
+    carries the full agenthud document for orchestrators to slice.
+    No HITL, no memory, single phase.
 
   instructions: ./SKILL.md
 
@@ -58,8 +59,11 @@ spec:
   phases:
     - id: report
       goal: |
-        Resolve target_date from user_query, invoke agenthud, slice
-        with jq, write artifacts/agenthud-report.json.
+        Resolve target_date from user_query, invoke agenthud with
+        --include all --with-git, redirect stdout to
+        artifacts/agenthud-report.json (no projection), then jq the
+        artifact to compute session/activity/project counts for the
+        result field.
       allowed_tools:
         - Bash(/skill/scripts/agenthud:*)
         - Bash(echo:*)
