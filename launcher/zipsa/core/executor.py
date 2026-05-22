@@ -441,6 +441,7 @@ class DockerExecutor:
                         "type": "zipsa_run_complete",
                         "status": final_status,
                         "exit_code": final_exit_code,
+                        "run_dir": str(run_dir) if run_dir else None,
                     }
                     yield complete_event
                     return
@@ -506,6 +507,7 @@ class DockerExecutor:
                 "type": "zipsa_run_complete",
                 "status": final_status,
                 "exit_code": final_exit_code,
+                "run_dir": str(run_dir) if run_dir else None,
             }
             yield complete_event
 
@@ -1140,6 +1142,7 @@ class DockerExecutor:
                                 "exit_code": run_final_exit_code,
                                 "result": None,
                                 "error": run_final_error,
+                                "run_dir": str(run_dir) if run_dir else None,
                                 "_phase_summaries": phase_summaries,
 
                                 "_chain_started_at": chain_started_at,
@@ -1247,6 +1250,7 @@ class DockerExecutor:
                             "exit_code": run_final_exit_code,
                             "result": None,
                             "error": run_final_error,
+                            "run_dir": str(run_dir) if run_dir else None,
                             "_phase_summaries": phase_summaries,
 
                             "_chain_started_at": chain_started_at,
@@ -1269,6 +1273,7 @@ class DockerExecutor:
                     "exit_code": run_final_exit_code,
                     "result": last_phase_out,
                     "error": None,
+                    "run_dir": str(run_dir) if run_dir else None,
                     "_phase_summaries": phase_summaries,
 
                     "_chain_started_at": chain_started_at,

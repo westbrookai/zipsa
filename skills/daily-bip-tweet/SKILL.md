@@ -157,20 +157,52 @@ and read its artifact.
    )
    ```
 
-4. If `art.content.projects` is empty (0 sessions on the date),
-   set `next_phase_input.report = null` and use Korean
+   `art.content` is the raw agenthud JSON — see `agenthud-report`
+   SKILL.md for the full shape (`{date, sessions[{project, start,
+   end, activities[{time, icon, label, detail}], subAgents}]}`).
+   Activity icons used by this orchestrator:
+   - `◆` = commit (label=SHA, detail=commit subject) — the gold
+     standard for "share-worthy" content
+   - `~` = file edits
+   - `<` = agent responses (often the most quote-worthy prose)
+
+4. If `art.content.sessions` is empty (0 sessions on the date),
+   set `next_phase_input.activity_slim = null` and use Korean
    `user_facing_summary`: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`.
 
-5. Output `next_phase_input`:
+5. Reduce the raw artifact to a draft-friendly slim shape (the
+   draft phase reads this, NOT the full artifact — keeps that
+   phase's token budget reasonable):
+
+   ```json
+   "activity_slim": {
+     "commits": [
+       {"project": "launcher", "sha": "9bca6ab", "subject": "perf: gate ..."}
+     ],
+     "by_project": {
+       "launcher": {
+         "edit_count": 60, "bash_count": 193, "response_count": 115,
+         "sample_responses": ["<first 2-3 Response details, trimmed>"],
+         "sample_edits": ["<first 2-3 Edit details>"]
+       }
+     }
+   }
+   ```
+
+   Group `art.content.sessions[]` by `.project`, scan
+   `activities[]`, filter by `icon` to populate each bucket.
+
+6. Output `next_phase_input`:
    ```json
    {
      ...previous fields...,
-     "report": <art.content | null>
+     "activity_slim": <the slim shape above, or null>
    }
    ```
 
    `user_facing_summary` (Korean):
-   - success non-empty: `"agenthud 활동 로드 — {N} 프로젝트"`
+   - success with commits: `"agenthud 로드 — {N} 프로젝트, {C} 커밋"`
+   - success no commits: `"agenthud 로드 — {N} 프로젝트 (커밋 없음)"`
    - success empty: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`
    - failure: `"agenthud 실패 — 웹 데이터로만 진행"`
 
@@ -265,7 +297,8 @@ Inputs (from `previous_phase_input`):
 - `insights` (list of strings)
 - `interests_summary` (string)
 - `interests` (list of strings) — topic labels
-- `report` (object|null) — agenthud slice if available
+- `activity_slim` (object|null) — fetch phase's reduced agenthud
+  view: `{commits: [{project, sha, subject}], by_project: {...}}`
 
 Rules:
 
@@ -274,9 +307,12 @@ Rules:
 - Stay in `voice`. Apply 1-2 of the `insights` if natural — do not
   force them.
 - Prioritize content sources in this order:
-  1. If `report` is non-null and has a share-worthy highlight
-     (commits, completed features), lead with that.
-  2. Otherwise lead with the most interesting thread from
+  1. If `activity_slim.commits` is non-empty, pick the 1-2 most
+     share-worthy commit subjects and lead with what shipped.
+  2. Else if `activity_slim.by_project.*.sample_responses` has a
+     finished-sounding line (e.g. "shipped", "fixed", "merged"),
+     use that.
+  3. Otherwise lead with the most interesting thread from
      `interests_summary`.
 - Shape with `insights` (lead with a number, end with a question,
   etc.).
