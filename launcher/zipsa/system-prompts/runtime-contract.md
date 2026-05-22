@@ -228,9 +228,12 @@ On the host the file becomes:
 
     ~/.zipsa/<skill>@<version>/runs/<timestamp>/artifacts/<name>
 
-### Reading artifacts: `mcp__zipsa__get_artifact`
+### Reading artifacts: two paths
 
-Always available — no manifest opt-in required.
+There are two ways to read an artifact, depending on its size and
+where it was produced.
+
+**Path A — `mcp__zipsa__get_artifact` (for small artifacts).**
 
 ```
 mcp__zipsa__get_artifact(skill, version, run_id, name)
@@ -241,29 +244,49 @@ mcp__zipsa__get_artifact(skill, version, run_id, name)
   otherwise.
 - `name` must be a flat filename (no `..`, no slashes, no absolute
   paths).
-- 10 MiB cap per file.
+- 10 MiB cap on the artifact file itself, but Claude Code's per-
+  tool-result token cap is much lower (~60k chars). If the artifact
+  exceeds that, the tool result is truncated and saved by the SDK to
+  a temp file, which is awkward to recover from inside a phase that
+  has no Read tool.
+- Use this only when you're confident the artifact is small (a few
+  KB, e.g. a status JSON or a list of created IDs).
 - Error codes: `ARTIFACT_NOT_FOUND`, `ARTIFACT_BAD_NAME`,
   `ARTIFACT_TOO_LARGE`, `ARTIFACT_BAD_JSON`.
 
-### Orchestrator pattern (preview)
+**Path B — direct filesystem access via mounted child runs.**
 
-A phase (or a parent skill) writes an artifact, then a later phase reads
-it:
+When a parent skill calls `mcp__zipsa__run_skill(name, args)`, the
+launcher pre-mounts each declared child's runs dir read-only at:
+
+    /home/agent/children/<child_name>/runs/
+
+After `run_skill` returns, the child's artifacts are immediately
+visible at:
+
+    /home/agent/children/<child_name>/runs/<run_id>/artifacts/<name>
+
+Read them with `Read` for whole-file inline access, or `Bash(jq:*)`
+/ `Bash(cat:*)` for projection/streaming. No MCP transport in the
+data path, no token cap.
+
+This is the preferred path for non-trivial artifacts (≥ a few KB).
+Add `Read` and any bash tools you need to the orchestrator phase's
+`allowed_tools`.
+
+### Reading your OWN run's artifacts
+
+For artifacts your own current run wrote in an earlier phase, use
+`get_artifact` with `execution_context.run_id`:
 
 ```
-# phase 1: write
-write /home/agent/runs/current/artifacts/report.json
-
-# phase 2: read the artifact this run wrote earlier
 mcp__zipsa__get_artifact(skill="my-skill", version="1.0.0",
                           run_id="<execution_context.run_id>",
                           name="report.json")
 ```
 
-The current run's ID is in `execution_context.run_id`. For artifacts
-written by another skill (or a past run of this one), pass the relevant
-ID through `next_phase_input` so the reading phase knows which run
-produced the artifact.
+(Or read them off the local filesystem at
+`/home/agent/runs/current/artifacts/<name>` — same data, also fine.)
 
 ## Invoking child skills
 
@@ -286,18 +309,23 @@ mcp__zipsa__run_skill(name, args)
   returned as its last message), or `null` if the child crashed before
   producing one. Child failures surface via `summary.error`.
 
-### Chaining with get_artifact
+### Chaining: reading the child's artifact
 
-```python
+After `run_skill` returns, the child's `runs/` dir is mounted at
+`/home/agent/children/<child_name>/runs/`. For all but the smallest
+artifacts, read the file directly off that mount:
+
+```
 result = mcp__zipsa__run_skill(name="agenthud-report", args="2026-05-21")
 if result["status"] == "ok":
-    data = mcp__zipsa__get_artifact(
-        skill=result["skill"],
-        version=result["version"],
-        run_id=result["run_id"],
-        name="agenthud-report.json",
-    )
+    path = f"/home/agent/children/{result['skill']}/runs/{result['run_id']}/artifacts/agenthud-report.json"
+    # Use Read (whole file), or Bash(jq) / Bash(cat) for projection:
+    #   jq '.sessions | length' <path>
 ```
+
+Use `mcp__zipsa__get_artifact` only when the artifact is small (a
+few KB) and you actually want the parsed JSON delivered as a tool
+result — see the Artifacts section above for the size tradeoff.
 
 ### Error codes
 

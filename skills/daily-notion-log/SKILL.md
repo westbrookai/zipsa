@@ -143,18 +143,24 @@ and read its artifact.
    `status="failed"`, `error.code="agenthud_report_failed"`,
    `user_facing_summary`: `"agenthud-report failed: <result.summary.error.message truncated to 200 chars>"`.
 
-3. Read the artifact:
-   ```python
-   art = mcp__zipsa__get_artifact(
-     skill=result.skill,
-     version=result.version,
-     run_id=result.run_id,
-     name="agenthud-report.json"
-   )
+3. Read the artifact **directly off the child-runs mount** — do NOT
+   use `mcp__zipsa__get_artifact` here. The agenthud raw JSON is
+   typically 100-300 KB which exceeds Claude's per-tool-result token
+   cap. The launcher pre-mounts the child's runs dir at
+   `/home/agent/children/agenthud-report/runs/` (read-only). So:
+
+   ```bash
+   ART=/home/agent/children/agenthud-report/runs/<result.run_id>/artifacts/agenthud-report.json
    ```
 
-   `art.content` is the raw agenthud JSON (no projection — atomic
-   skill emits everything):
+   For large daily reports, use `Bash(jq:*)` to project rather than
+   `Read`-ing the whole file (which would chew through your phase's
+   token budget). A single jq pass that emits the slim shape you
+   need below is fine. For tiny days (≤ a few sessions) `Read` is
+   also OK.
+
+   Either way, what you eventually have in mind is the raw agenthud
+   JSON (no projection — atomic skill emits everything):
 
    ```json
    {
@@ -319,22 +325,24 @@ payload.
    `status="failed"`, `error.code="notion_page_write_failed"`,
    `user_facing_summary`: `"notion write failed: <error truncated>"`.
 
-5. Read the child's artifact for the URLs:
-   ```python
-   art = mcp__zipsa__get_artifact(
-     skill=result.skill, version=result.version,
-     run_id=result.run_id, name="notion-pages.json"
-   )
+5. Read the child's artifact for the URLs — off the mount, same
+   pattern as the fetch phase:
+
+   ```bash
+   ART=/home/agent/children/notion-page-write/runs/<result.run_id>/artifacts/notion-pages.json
+   cat "$ART"   # tiny file (~few hundred bytes), Read or cat both fine
    ```
+
+   `notion-pages.json` shape: `{data_source_id, created: [{page_id, url}, ...]}`.
 
 6. Set the phase `result` (this is the final phase — `result`
    surfaces to the user):
    ```json
    {
      "target_date": "...",
-     "entries_created": <len(art.content.created)>,
+     "entries_created": <len(created)>,
      "entries_updated": 0,
-     "pages": [<art.content.created>]
+     "pages": [<the created array verbatim>]
    }
    ```
 

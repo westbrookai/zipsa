@@ -261,6 +261,151 @@ class TestDockerExecutor:
         assert "/npm-cache" not in cmd_str
         assert "NPM_CONFIG_CACHE" not in cmd_str
 
+    def _install_minimal_child(self, zipsa_home_path, name: str, version: str = "0.1.0"):
+        """Drop a minimal child skill at <ZIPSA_HOME>/skills/<name>/ so the
+        executor's children-mount logic can resolve it."""
+        skill_dir = zipsa_home_path / "skills" / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "manifest.yaml").write_text(
+            f"""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: {name}
+  version: {version}
+  author: test
+  description: Test child skill.
+spec:
+  purpose: Fixture for children-mount test.
+  instructions: ./SKILL.md
+  tools:
+    builtin: []
+  limits:
+    max_turns: 1
+    max_cost_usd: 0.01
+    timeout_seconds: 5
+"""
+        )
+        (skill_dir / "SKILL.md").write_text(f"# {name}\nFixture.\n")
+        return skill_dir
+
+    def _make_parent_with_children(self, tmp_path, children: list[str]):
+        """Write a tmp parent manifest declaring the given children and
+        return the loaded Skill."""
+        parent_dir = tmp_path / "parent-skill"
+        parent_dir.mkdir()
+        # Inline `[]` for empty (`children:\n` would parse as None and
+        # Pydantic rejects); otherwise flow style for readability.
+        children_yaml = (
+            "[]" if not children
+            else "[" + ", ".join(children) + "]"
+        )
+        (parent_dir / "manifest.yaml").write_text(
+            f"""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: parent
+  version: 1.0.0
+  author: test
+  description: Parent.
+spec:
+  purpose: Test parent.
+  instructions: ./SKILL.md
+  children: {children_yaml}
+  tools:
+    builtin: []
+  limits:
+    max_turns: 1
+    max_cost_usd: 0.01
+    timeout_seconds: 5
+"""
+        )
+        (parent_dir / "SKILL.md").write_text("# parent\n")
+        return Skill.load(parent_dir)
+
+    def test_build_docker_command_mounts_children_runs(
+        self, tmp_path, monkeypatch
+    ):
+        """For each entry in spec.children, the parent container should
+        bind-mount the child's installed runs/ directory read-only at
+        /home/agent/children/<name>/runs/, so the parent agent can read
+        child artifacts via the filesystem (instead of pulling content
+        through MCP, which hits Claude's per-tool-result token cap on
+        large artifacts).
+
+        The host runs dir is created if it doesn't exist yet — docker's
+        bind mount of a missing path would otherwise materialize it as
+        an empty root-owned dir.
+        """
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        self._install_minimal_child(tmp_path, "alpha", version="0.3.0")
+        # Note: NOT pre-creating runs/ — the executor must mkdir before mount.
+        parent = self._make_parent_with_children(tmp_path, ["alpha"])
+        claude_json_path = parent.build_claude_json()
+
+        executor = DockerExecutor()
+        cmd = executor._build_docker_command(
+            skill=parent,
+            user_input="x",
+            claude_json_path=claude_json_path,
+            env={},
+        )
+
+        cmd_str = " ".join(cmd)
+        expected_host = tmp_path / "alpha@0.3.0" / "runs"
+        expected_mount = f"{expected_host}:/home/agent/children/alpha/runs:ro"
+        assert expected_mount in cmd_str, (
+            f"missing children-runs mount\n  expected: {expected_mount}\n"
+            f"  cmd: {cmd_str}"
+        )
+        # The host dir must now exist (executor created it) — otherwise
+        # docker would silently make a root-owned empty dir on first run.
+        assert expected_host.exists()
+
+    def _mount_args(self, cmd: list[str]) -> list[str]:
+        """Extract just the `host:container[:mode]` mount specs from a
+        docker run command, so assertions don't false-match on the same
+        substring appearing inside the embedded system prompt.
+
+        Docker's CLI uses `-v <spec>` pairs.
+        """
+        return [
+            cmd[i + 1] for i, tok in enumerate(cmd[:-1]) if tok == "-v"
+        ]
+
+    def test_build_docker_command_no_children_no_mount(
+        self, tmp_path, monkeypatch
+    ):
+        """A parent with empty spec.children adds no children mounts."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        parent = self._make_parent_with_children(tmp_path, [])
+        claude_json_path = parent.build_claude_json()
+        executor = DockerExecutor()
+        cmd = executor._build_docker_command(
+            skill=parent, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        mounts = self._mount_args(cmd)
+        assert not any("/home/agent/children/" in m for m in mounts)
+
+    def test_build_docker_command_skips_uninstalled_child(
+        self, tmp_path, monkeypatch
+    ):
+        """If a declared child is not installed, the executor must not
+        crash and must not invent a stale mount path — _validate_children
+        warns separately on the parent's behalf."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        # Note: NOT calling _install_minimal_child for "beta"
+        parent = self._make_parent_with_children(tmp_path, ["beta"])
+        claude_json_path = parent.build_claude_json()
+        executor = DockerExecutor()
+        # Should not raise
+        cmd = executor._build_docker_command(
+            skill=parent, user_input="x",
+            claude_json_path=claude_json_path, env={},
+        )
+        mounts = self._mount_args(cmd)
+        assert not any("/home/agent/children/beta/" in m for m in mounts)
+
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_run_creates_claude_config(self, mock_popen, tmp_path):
         """Run should create .claude.json in ~/.zipsa/<name>@<version>/."""
