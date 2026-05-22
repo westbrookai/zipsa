@@ -55,6 +55,9 @@ def build_summary(
     runtime_version: Optional[str] = None,
     claude_version: Optional[str] = None,
     model: Optional[str] = None,
+    hitl_wait_seconds: float = 0.0,
+    chain_started_at: Optional[datetime] = None,
+    resumed_from: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build the summary dict in the schema documented in the design spec.
 
@@ -79,6 +82,10 @@ def build_summary(
     function does NOT enforce consistency. (The executor's status
     tracking is the source of truth.)
     """
+    # chain_started_at = the very first run's start (or this run's start
+    # when not resuming). On resume, chain_duration spans the whole user
+    # experience, not just the current invocation.
+    effective_chain_start = chain_started_at or started_at
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -88,6 +95,10 @@ def build_summary(
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
         "duration_seconds": (finished_at - started_at).total_seconds(),
+        "chain_started_at": effective_chain_start.isoformat(),
+        "chain_duration_seconds": (finished_at - effective_chain_start).total_seconds(),
+        "hitl_wait_seconds": hitl_wait_seconds,
+        "resumed_from": resumed_from,
         "cost_usd": cost_usd,
         "turns": turns,
         "phases": [

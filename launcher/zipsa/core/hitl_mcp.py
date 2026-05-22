@@ -8,7 +8,9 @@ sockets or a real server.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import TextIO
 
 
@@ -26,6 +28,24 @@ class HitlIO:
     stdout: TextIO
     stdout_lock: threading.Lock
     is_interactive: bool
+    # Single-element list so handlers can mutate by reference; we don't
+    # want a property or recursive @dataclass field with default_factory
+    # for a float wrapper. List wins for simplicity.
+    hitl_wait_seconds: list = field(default_factory=lambda: [0.0])
+
+    @contextmanager
+    def measure_wait(self):
+        """Bracket a stdin.readline call to accumulate wait time.
+
+        Usage:
+            with self._io.measure_wait():
+                answer = self._io.stdin.readline()
+        """
+        t0 = time.monotonic()
+        try:
+            yield
+        finally:
+            self.hitl_wait_seconds[0] += time.monotonic() - t0
 
 
 class AskHandler:
@@ -38,7 +58,8 @@ class AskHandler:
         with self._io.stdout_lock:
             self._io.stdout.write(f"\n{PROMPT_OPEN}\n[ask] {prompt}\n> ")
             self._io.stdout.flush()
-            answer = self._io.stdin.readline()
+            with self._io.measure_wait():
+                answer = self._io.stdin.readline()
             self._io.stdout.write(f"{PROMPT_CLOSE}\n")
             self._io.stdout.flush()
         return answer.strip()
@@ -61,7 +82,9 @@ class ConfirmHandler:
             for _ in range(self._MAX_RETRIES):
                 self._io.stdout.write("> ")
                 self._io.stdout.flush()
-                line = self._io.stdin.readline().strip().lower()
+                with self._io.measure_wait():
+                    raw = self._io.stdin.readline()
+                line = raw.strip().lower()
                 if line == "" and default is not None:
                     self._io.stdout.write(f"{PROMPT_CLOSE}\n")
                     self._io.stdout.flush()
@@ -99,7 +122,9 @@ class ChooseHandler:
             for _ in range(self._MAX_RETRIES):
                 self._io.stdout.write("> ")
                 self._io.stdout.flush()
-                line = self._io.stdin.readline().strip()
+                with self._io.measure_wait():
+                    raw = self._io.stdin.readline()
+                line = raw.strip()
                 if line.isdigit():
                     idx = int(line)
                     if 1 <= idx <= len(options):

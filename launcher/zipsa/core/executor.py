@@ -48,6 +48,9 @@ class DockerExecutor:
         # _build_docker_command is invoked.
         self._hitl_port: Optional[int] = None
         self._hitl_token: Optional[str] = None
+        # HitlIO reference for summary-time read of accumulated wait
+        # time. Set by run() right after constructing the HitlIO.
+        self._hitl_io = None
         # Resolved requires values — set by run() from the kwarg.
         self._requires_values: dict[str, object] = {}
         # Image env-var cache (filled on first _get_image_env call). Same
@@ -240,6 +243,12 @@ class DockerExecutor:
         final_error: Optional[dict] = None
         final_result: Optional[dict] = None
         phase_summaries: list[PhaseSummary] = []
+        # Resume / chain metadata. None / 0.0 on fresh runs; populated by
+        # _execute_phases via the zipsa_run_complete event when a resume
+        # took place. See build_summary docstring for the contract.
+        chain_started_at: Optional[str] = None
+        resumed_from_id: Optional[str] = None
+        accumulated_hitl_wait: float = 0.0
         # Last result event from the Claude SDK stream — used at summary time
         # to extract stop_reason / usage / model_usage (folded in from the
         # old metadata.json so summary.json is the single source of truth).
@@ -260,6 +269,8 @@ class DockerExecutor:
             stdout_lock=stdout_lock,
             is_interactive=sys.stdin.isatty(),
         )
+        # Expose for summary-builder to read accumulated wait time.
+        self._hitl_io = hitl_io
         # Per-skill memory is cross-version: lives at
         # ~/.zipsa/memory/<skill>/skill-mem.json. resolve_skill_memory_path
         # silently migrates from the latest legacy per-version location
@@ -348,6 +359,9 @@ class DockerExecutor:
                         final_result = event.get("result")
                         final_error = event.get("error")
                         phase_summaries = event.get("_phase_summaries", [])
+                        chain_started_at = event.get("_chain_started_at")
+                        resumed_from_id = event.get("_resumed_from")
+                        accumulated_hitl_wait = event.get("_accumulated_hitl_wait", 0.0)
                     yield event
                 return
 
@@ -514,6 +528,31 @@ class DockerExecutor:
                         _zipsa_version = _pkg_version("zipsa")
                     except Exception:
                         _zipsa_version = None
+                    # Roll up cost/turns from phase_summaries. On resume,
+                    # skipped phases carry the prior run's actual values
+                    # (populated in _execute_phases) so the total reflects
+                    # the WHOLE chain, not just this invocation. For
+                    # non-resume runs the sum equals ls.run_*.
+                    total_cost = sum(p.cost_usd for p in phase_summaries)
+                    total_turns = sum(p.turns for p in phase_summaries)
+                    # chain_started_at: parsed from string (the
+                    # _execute_phases event yields ISO string); fall back
+                    # to current run's started_at when not resuming.
+                    parsed_chain_start = started_at
+                    if chain_started_at:
+                        try:
+                            parsed_chain_start = datetime.fromisoformat(
+                                chain_started_at,
+                            )
+                        except ValueError:
+                            pass  # malformed prior summary; use this run's start
+                    # HITL wait: current run's accumulated wait from
+                    # HitlIO + prior chain accumulator.
+                    current_hitl_wait = (
+                        self._hitl_io.hitl_wait_seconds[0]
+                        if self._hitl_io is not None else 0.0
+                    )
+                    total_hitl_wait = accumulated_hitl_wait + current_hitl_wait
                     summary = build_summary(
                         status=final_status,
                         exit_code=final_exit_code,
@@ -521,8 +560,8 @@ class DockerExecutor:
                         version=skill.manifest.metadata.version,
                         started_at=started_at,
                         finished_at=finished_at,
-                        cost_usd=ls.run_cost_usd if ls else 0.0,
-                        turns=ls.run_turns if ls else 0,
+                        cost_usd=total_cost,
+                        turns=total_turns,
                         phases=phase_summaries,
                         result=final_result if final_status == "ok" else None,
                         error=final_error if final_status != "ok" else None,
@@ -535,6 +574,9 @@ class DockerExecutor:
                         runtime_version=image_env.get("ZIPSA_RUNTIME_VERSION"),
                         claude_version=actual_claude_version or image_env.get("CLAUDE_CODE_VERSION"),
                         model=actual_model,
+                        hitl_wait_seconds=total_hitl_wait,
+                        chain_started_at=parsed_chain_start,
+                        resumed_from=resumed_from_id,
                     )
                     write_summary(run_dir / "summary.json", summary)
                 except Exception as e:
@@ -961,28 +1003,56 @@ class DockerExecutor:
         # in resume_from_run_dir, which the CLI sets to
         # candidate.run_dir (the failed run we're resuming from).
         start_phase_idx = 0
+        prior_phase_costs: dict[str, tuple[float, int]] = {}
+        chain_started_at = None
+        resumed_from_id = None
+        accumulated_hitl_wait = 0.0
         if resume_from is not None and resume_from > 0:
             start_phase_idx = resume_from
             prior_run_dir = resume_from_run_dir or run_dir
             previous_output = self._load_resume_state(
                 prior_run_dir, resume_from=resume_from,
             )
-            # Pre-populate phase_summaries with ok markers for the
-            # skipped phases so the new run's summary still records
-            # them as ran (cost/turns are 0 — actual cost is in the
-            # original run's summary).
-            #
-            # Also copy each skipped phase's state.json from the prior
-            # run into THIS run's per-phase dir. Without this copy a
-            # second resume (Run C resuming from Run B which itself
-            # resumed from Run A) would fail to find state.json in
-            # Run B and fall back to fresh start. The copy makes each
-            # resumed run self-sufficient as a resume source.
+            # Read prior summary so we can roll forward cost/turns for
+            # skipped phases AND propagate chain_started_at + accumulated
+            # hitl_wait_seconds. Each resumed run's summary then shows
+            # the WHOLE chain's cost/duration, not just this attempt.
+            prior_summary: dict = {}
+            prior_summary_path = prior_run_dir / "summary.json"
+            if prior_summary_path.exists():
+                try:
+                    prior_summary = json.loads(prior_summary_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    prior_summary = {}
+            for p in prior_summary.get("phases", []):
+                prior_phase_costs[p["id"]] = (
+                    float(p.get("cost_usd", 0.0)),
+                    int(p.get("turns", 0)),
+                )
+            # chain_started_at: prefer prior's chain field if present,
+            # else its own started_at. Walks the chain backward by one
+            # hop each resume; older runs in the chain self-propagated
+            # the same way.
+            chain_started_at = (
+                prior_summary.get("chain_started_at")
+                or prior_summary.get("started_at")
+            )
+            accumulated_hitl_wait = float(
+                prior_summary.get("hitl_wait_seconds") or 0.0
+            )
+            resumed_from_id = prior_run_dir.name
+
+            # Pre-populate phase_summaries with the SKIPPED phases'
+            # actual cost/turns from the prior run (not 0/0). And copy
+            # each skipped phase's state.json from the prior run into
+            # THIS run's per-phase dir, so a future resume can chain
+            # from THIS run.
             for skipped_idx in range(resume_from):
                 skipped = phases[skipped_idx]
+                cost, turns = prior_phase_costs.get(skipped.id, (0.0, 0))
                 phase_summaries.append(PhaseSummary(
                     id=skipped.id, status="ok",
-                    cost_usd=0.0, turns=0,
+                    cost_usd=cost, turns=turns,
                 ))
                 if run_dir is not None:
                     src = prior_run_dir / "phases" / f"{skipped_idx}-{skipped.id}" / "state.json"
@@ -1093,6 +1163,12 @@ class DockerExecutor:
                                 "result": None,
                                 "error": run_final_error,
                                 "_phase_summaries": phase_summaries,
+
+                                "_chain_started_at": chain_started_at,
+
+                                "_resumed_from": resumed_from_id,
+
+                                "_accumulated_hitl_wait": accumulated_hitl_wait,
                             }
                             return  # state_updates NOT applied on breach
                         yield event
@@ -1194,6 +1270,12 @@ class DockerExecutor:
                             "result": None,
                             "error": run_final_error,
                             "_phase_summaries": phase_summaries,
+
+                            "_chain_started_at": chain_started_at,
+
+                            "_resumed_from": resumed_from_id,
+
+                            "_accumulated_hitl_wait": accumulated_hitl_wait,
                         }
                         return
 
@@ -1210,6 +1292,12 @@ class DockerExecutor:
                     "result": last_phase_out,
                     "error": None,
                     "_phase_summaries": phase_summaries,
+
+                    "_chain_started_at": chain_started_at,
+
+                    "_resumed_from": resumed_from_id,
+
+                    "_accumulated_hitl_wait": accumulated_hitl_wait,
                 }
         finally:
             if npm_volume:
