@@ -257,6 +257,7 @@ def run(
 
     # Resume eligibility state — resolved inside the try block below.
     resume_from: Optional[int] = None
+    resume_from_run_dir: Optional[Path] = None
 
     try:
         # Load skill once. Reused for both the resume eligibility check
@@ -298,6 +299,7 @@ def run(
                 if _sys.stdin.isatty():
                     if prompt_user_to_resume(candidate, stdin=_sys.stdin, stdout=_sys.stderr):
                         resume_from = candidate.failed_phase_index
+                        resume_from_run_dir = candidate.run_dir
                 else:
                     typer.echo(
                         "Error: previous failed run found "
@@ -346,7 +348,7 @@ def run(
 
         # Execute skill or start shell. user_input is always a string here
         # (substituted above) — no `or ""` guard needed.
-        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values, resume_from=resume_from)
+        output = executor.run(skill, user_input=user_input, env=env_dict, dry_run=dry_run, shell=shell, mcp_debug=mcp_debug, extra_docker_opts=docker_opt, requires_values=requires_values, resume_from=resume_from, resume_from_run_dir=resume_from_run_dir)
 
         if output is None:
             # Dry run or shell mode — no exit code translation, no summary copy.
