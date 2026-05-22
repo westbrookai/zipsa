@@ -1,0 +1,382 @@
+# daily-bip-tweet Skill
+
+Orchestrator: fetch a day's Claude Code activity via the atomic
+`agenthud-report` skill, draft a build-in-public tweet in the user's
+voice, run a Korean-language review loop, and publish via the atomic
+`x-post` skill.
+
+## Orchestrator skill contract
+
+This is an **orchestrator** — it owns all user-facing UX (`ask_once`
+for setup, HITL review loop, error surfacing) and composes atomic
+skills to do the actual fetch and publish. Atomic dependencies:
+
+- `agenthud-report` — fetches per-project Claude Code activity
+- `x-post` — publishes the approved tweet text to X
+
+Composition uses `mcp__zipsa__run_skill` (declared in
+`spec.children`) and `mcp__zipsa__get_artifact` (always available).
+
+## Language Policy
+
+- Agent reasoning, phase goals, field names: **English**.
+- All user-facing strings (prompts, error messages,
+  `user_facing_summary`): **Korean**.
+- The final tweet text: **English** (it is the deliverable).
+
+Example user-facing Korean strings quoted below are **verbatim** —
+do not paraphrase, do not translate. Brace-delimited tokens like
+`{N}` or `{target_date}` are placeholders — substitute with the
+actual runtime value.
+
+## State carryover
+
+Each phase reads `previous_phase_input` and emits `next_phase_input`.
+Unless a phase explicitly says otherwise, `next_phase_input` MUST
+include every field from `previous_phase_input` plus any new fields
+this phase produces.
+
+## Per-user setup
+
+**Launcher-resolved (before container starts):**
+
+No `spec.requires` on this skill. `project_roots` belongs to the
+atomic `agenthud-report` skill, where agenthud actually runs. First
+time `agenthud-report` is invoked as a child, the launcher prompts
+for `project_roots` against that skill.
+
+**Environment (via `~/.zipsa/.env`):**
+
+X credentials (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
+`X_ACCESS_SECRET`) come through automatically. The orchestrator
+verifies their presence in precheck before doing expensive work.
+
+**Agent-time prompts (remembered in skill memory):**
+
+- `voice` — 1–2 sentences describing the user's tweet tone. Asked
+  once on first run, reused thereafter.
+- `interests` — comma-separated list of 3-5 topics for the
+  `interests` phase to search every day. Asked once. The manifest's
+  `config.default_interests` is shown as an example in the prompt;
+  the stored value is whatever the user types.
+
+## Period semantics
+
+- Default: **today** (manifest `default_query`).
+- Override via `user_query`: `today`, `yesterday`, or
+  `YYYY-MM-DD`.
+
+## Phases
+
+### precheck
+
+Verify X credentials, ensure `voice` and `interests` are remembered,
+resolve target date.
+
+1. Verify all 4 X env vars are present. Inspect `execution_context`
+   for them (the launcher injects via `~/.zipsa/.env`). If any are
+   missing, stop with `status="failed"`,
+   `error.code="x_credentials_missing"`,
+   `user_facing_summary` (Korean):
+   `"X 환경변수 누락: <comma-separated missing var names>"`.
+
+2. Call `mcp__zipsa__ask_once` with key=`voice` (EXACTLY that — not
+   `x_voice`, `tweet_voice`, etc.). Prompt (Korean):
+   `"1–2 문장으로 트윗 톤을 알려주세요."`
+   Cached answer is reused on subsequent runs.
+
+3. Call `mcp__zipsa__ask_once` with key=`interests`. Build the
+   Korean prompt at runtime by joining `config.default_interests`
+   with `, ` and substituting into:
+   `"관심 주제 3-5개를 쉼표로 입력해주세요. 예: {example}"`
+   (so when the manifest's `default_interests` changes, the prompt's
+   example stays in sync — do not hardcode the items).
+   Parse the user's response into a list of trimmed non-empty
+   strings. Store the raw response into ask_once memory under
+   key=`interests`; pass the parsed list downstream as
+   `next_phase_input.interests`.
+
+4. Resolve `target_date` from `user_query`:
+   - empty / whitespace / `today` → today in user's local timezone
+   - `yesterday` → yesterday in user's local timezone
+   - `YYYY-MM-DD` (matches `^\d{4}-\d{2}-\d{2}$`) → use verbatim
+   - anything else → default to today and mention the fallback in
+     `user_facing_summary`.
+
+5. Output `next_phase_input`:
+   ```json
+   {
+     "voice": "<from ask_once>",
+     "interests": ["...", "...", "..."],
+     "target_date": "YYYY-MM-DD"
+   }
+   ```
+
+   `user_facing_summary` (Korean):
+   `"프리체크 완료 — voice/interests 로드, target {target_date}"`.
+
+### fetch
+
+Invoke the atomic `agenthud-report` child skill for `target_date`
+and read its artifact.
+
+1. Call:
+   ```python
+   result = mcp__zipsa__run_skill(
+     name="agenthud-report",
+     args=previous_phase_input.target_date
+   )
+   ```
+
+2. If `result.status != "ok"`, do NOT stop the skill — agenthud is
+   nice-to-have for this skill, not required. Set
+   `next_phase_input.report = null` and log
+   `user_facing_summary` (Korean):
+   `"agenthud 실패 — 웹 데이터로만 진행"`. Continue to discover.
+
+3. On success, read the artifact:
+   ```python
+   art = mcp__zipsa__get_artifact(
+     skill=result.skill, version=result.version,
+     run_id=result.run_id, name="agenthud-report.json"
+   )
+   ```
+
+4. If `art.content.projects` is empty (0 sessions on the date),
+   set `next_phase_input.report = null` and use Korean
+   `user_facing_summary`: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`.
+
+5. Output `next_phase_input`:
+   ```json
+   {
+     ...previous fields...,
+     "report": <art.content | null>
+   }
+   ```
+
+   `user_facing_summary` (Korean):
+   - success non-empty: `"agenthud 활동 로드 — {N} 프로젝트"`
+   - success empty: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`
+   - failure: `"agenthud 실패 — 웹 데이터로만 진행"`
+
+### discover
+
+Search public build-in-public chatter via `WebSearch` and extract
+3-5 short tone/structure insights for the draft phase.
+
+1. Read `config.discover_query` from the manifest at runtime (do not
+   hardcode the literal — the manifest is the source of truth).
+
+2. Call `WebSearch` with that query. Examples of useful results:
+   short personal updates with metrics, before/after framing,
+   question-style hooks.
+
+3. Extract **3-5 short insights** about what format/tone is working
+   today. Phrase as actionable rules a tweet writer could apply.
+   The bullets below are illustrative shapes only — do not reuse
+   verbatim:
+
+   - "Lead with a concrete number in the first 50 chars"
+   - "Before/after framing outperforms generic 'shipped X' posts"
+   - "End with a question to drive replies"
+
+   Do NOT copy other people's tweet text verbatim. Distill, don't
+   paste.
+
+4. On `WebSearch` error, retry **exactly once**. If the retry also
+   fails OR returns 0 results, set `insights = []` and continue.
+
+5. Output `next_phase_input`:
+   ```json
+   {
+     ...previous fields...,
+     "insights": ["...", "...", "..."]
+   }
+   ```
+
+   `user_facing_summary` (Korean):
+   - non-empty: `"BIP 트렌드 분석 완료 — 인사이트 {N}개"`
+   - empty: `"BIP 검색 결과 없음 — 웹 데이터 없이 계속"`
+
+### interests_search
+
+WebSearch the user's interest topics and summarize current chatter
+in English prose (the draft phase is English).
+
+1. Read `previous_phase_input.interests` (set by precheck from
+   ask_once).
+
+2. Call `WebSearch`. If `interests` has 1-2 items, do a single
+   query joining them with `OR`. If 3+ items, do **one query per
+   item in list order, capped at the first 3 items**, to keep tool
+   budget reasonable and behavior deterministic.
+
+3. Synthesize the result snippets into **3-5 sentences of English
+   prose** summarizing what's notable across these topics today.
+   This text feeds the English `draft` phase.
+
+   Example shape only — your prose must reflect today's actual
+   results, not these phrasings:
+   > "Topic A is seeing a wave of activity around <specific angle>
+   > this week. Topic B's conversation is dominated by <specific
+   > question>. Topic C is comparatively quiet, with the main thread
+   > being <specific concern>."
+
+4. On `WebSearch` 0-results or repeated failure, set
+   `interests_summary = "(no search results)"` and continue. Plain
+   English — this field is consumed by the English draft phase;
+   Korean status belongs in `user_facing_summary`.
+
+5. Output `next_phase_input`:
+   ```json
+   {
+     ...previous fields...,
+     "interests_summary": "<English prose>"
+   }
+   ```
+
+   `user_facing_summary` (Korean):
+   `"관심사 검색 요약 완료 — {N} 주제"` (substitute `{N}` with
+   the number of items actually queried, max 3).
+
+### draft
+
+Write ONE English tweet ≤ `config.max_tweet_chars` (280) in the
+user's `voice`.
+
+Inputs (from `previous_phase_input`):
+
+- `voice` (string)
+- `insights` (list of strings)
+- `interests_summary` (string)
+- `interests` (list of strings) — topic labels
+- `report` (object|null) — agenthud slice if available
+
+Rules:
+
+- The tweet **must be English**. Even if the user reviews in Korean,
+  the tweet text stays English.
+- Stay in `voice`. Apply 1-2 of the `insights` if natural — do not
+  force them.
+- Prioritize content sources in this order:
+  1. If `report` is non-null and has a share-worthy highlight
+     (commits, completed features), lead with that.
+  2. Otherwise lead with the most interesting thread from
+     `interests_summary`.
+- Shape with `insights` (lead with a number, end with a question,
+  etc.).
+- NO hashtag chains. One hashtag at most, only if natural.
+- NO URLs unless essential.
+
+Output:
+
+```json
+next_phase_input = {
+  ...previous fields...,
+  "draft": "<English tweet, ≤ 280 chars>"
+}
+```
+
+`user_facing_summary` (Korean): `"초안 작성 완료"`.
+
+### review
+
+Run a Korean-language review loop on the English draft.
+
+**Language constraint:**
+- All conversation with the user in this phase is **Korean**.
+- The draft text itself is **English** and must NOT be translated
+  when shown back to the user.
+
+Steps:
+
+1. Show the draft (English) with its character count. Ask (Korean):
+   ```
+   이대로 갈까요? 수정 요청? (엔터=확정)
+   ```
+
+2. If the user gives empty input → treat as approval, jump to step 4.
+
+3. If the user gives feedback (Korean or English) → apply the
+   feedback to the draft while keeping it in **English** and in
+   `voice`. Verify ≤ `config.max_tweet_chars`. Go back to step 1.
+
+   Cap at `config.max_review_iterations` (5). After the cap, force
+   a binary decision with:
+   ```
+   추가 수정 한도(5회) 도달. 이대로 게시할까요? (y/N)
+   ```
+
+4. Final confirmation (Korean):
+   ```
+   X에 게시할까요? (y/N)
+   ```
+
+   - `y` / `yes` / `네` / `예` / `응` / `ㅇ` / `ㅇㅇ` →
+     `approved_for_post = true`, proceed.
+   - Anything else (including empty) → stop with `status="failed"`,
+     `error.code="user_declined"`,
+     `user_facing_summary` (Korean): `"사용자가 게시를 취소했습니다"`.
+
+Output (on approval):
+
+```json
+next_phase_input = {
+  ...previous fields...,
+  "draft": "<final English tweet>",
+  "approved_for_post": true
+}
+```
+
+`user_facing_summary` (Korean): `"최종 컨펌 완료 — 게시 진행"`.
+
+### post
+
+Invoke the atomic `x-post` child skill with the approved draft.
+
+1. Call:
+   ```python
+   result = mcp__zipsa__run_skill(
+     name="x-post",
+     args=previous_phase_input.draft
+   )
+   ```
+
+2. If `result.status != "ok"`, stop with `status="failed"`,
+   `error.code="x_post_failed"`,
+   `user_facing_summary` (Korean):
+   `"게시 실패: <result.summary.error.message truncated to 200 chars>"`.
+
+3. On success, read the artifact:
+   ```python
+   art = mcp__zipsa__get_artifact(
+     skill=result.skill, version=result.version,
+     run_id=result.run_id, name="tweet-result.json"
+   )
+   ```
+
+   `art.content` is `{"status": "ok", "tweet_id", "url", "text"}`.
+
+4. Set the phase `result` (final phase — surfaces to the user):
+   ```json
+   {
+     "tweet_id": "<from artifact>",
+     "url": "<from artifact>",
+     "text": "<from artifact>"
+   }
+   ```
+
+   `user_facing_summary` (Korean):
+   `"게시 완료: <url>"`.
+
+The `tweet_id` is the durable key for "what posted when".
+
+## Constraints
+
+- Do NOT call the X API directly — only via `mcp__zipsa__run_skill(name="x-post", ...)`.
+- Single tweet only — no threads, no replies, no attachments in v0.1.
+- HITL phases (precheck, review) MUST NOT call
+  `mcp__zipsa__run_skill` — the launcher enforces this via separate
+  phase IDs.
+- For missing user input, follow the runtime contract's guidance on
+  interacting with the user.
