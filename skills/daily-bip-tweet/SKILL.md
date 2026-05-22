@@ -149,28 +149,35 @@ and read its artifact.
    `user_facing_summary` (Korean):
    `"agenthud 실패 — 웹 데이터로만 진행"`. Continue to discover.
 
-3. On success, read the artifact:
-   ```python
-   art = mcp__zipsa__get_artifact(
-     skill=result.skill, version=result.version,
-     run_id=result.run_id, name="agenthud-report.json"
-   )
+3. Read the artifact **directly off the child-runs mount** — NOT
+   via `mcp__zipsa__get_artifact` (that would pull the full JSON
+   through MCP and bust Claude's per-tool-result token cap on big
+   days). The launcher pre-mounts the child's runs dir at
+   `/home/agent/children/agenthud-report/runs/<run_id>/artifacts/`.
+
+   Use `Bash(jq:*)` to project — your goal is the `activity_slim`
+   shape below, not the full artifact in your context. Example:
+
+   ```bash
+   ART=/home/agent/children/agenthud-report/runs/<run_id>/artifacts/agenthud-report.json
+   wc -c "$ART"   # sanity check: file exists and is non-trivial
+   jq '.sessions | length' "$ART"
    ```
 
-   `art.content` is the raw agenthud JSON — see `agenthud-report`
-   SKILL.md for the full shape (`{date, sessions[{project, start,
-   end, activities[{time, icon, label, detail}], subAgents}]}`).
-   Activity icons used by this orchestrator:
+   The raw agenthud schema (see `agenthud-report` SKILL.md):
+   `{date, sessions[{project, start, end,
+   activities[{time, icon, label, detail}], subAgents}]}`. Activity
+   icons that matter for tweet drafting:
    - `◆` = commit (label=SHA, detail=commit subject) — the gold
      standard for "share-worthy" content
    - `~` = file edits
    - `<` = agent responses (often the most quote-worthy prose)
 
-4. If `art.content.sessions` is empty (0 sessions on the date),
-   set `next_phase_input.activity_slim = null` and use Korean
+4. If `jq '.sessions | length' "$ART"` returns 0 (no activity on the
+   date), set `next_phase_input.activity_slim = null` and use Korean
    `user_facing_summary`: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`.
 
-5. Reduce the raw artifact to a draft-friendly slim shape (the
+5. Reduce the artifact to a draft-friendly slim shape (the
    draft phase reads this, NOT the full artifact — keeps that
    phase's token budget reasonable):
 
@@ -398,15 +405,14 @@ Invoke the atomic `x-post` child skill with the approved draft.
    `user_facing_summary` (Korean):
    `"게시 실패: <result.summary.error.message truncated to 200 chars>"`.
 
-3. On success, read the artifact:
-   ```python
-   art = mcp__zipsa__get_artifact(
-     skill=result.skill, version=result.version,
-     run_id=result.run_id, name="tweet-result.json"
-   )
+3. On success, read the artifact off the child-runs mount:
+
+   ```bash
+   ART=/home/agent/children/x-post/runs/<result.run_id>/artifacts/tweet-result.json
+   cat "$ART"   # tiny file (~200 bytes)
    ```
 
-   `art.content` is `{"status": "ok", "tweet_id", "url", "text"}`.
+   Contents: `{"status": "ok", "tweet_id", "url", "text"}`.
 
 4. Set the phase `result` (final phase — surfaces to the user):
    ```json

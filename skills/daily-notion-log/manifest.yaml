@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-notion-log
-  version: 0.1.0
+  version: 0.2.0
   author: westbrookai
   description: |
     Orchestrator: fetch a day's Claude Code activity via the atomic
@@ -86,14 +86,22 @@ spec:
     - id: fetch
       goal: |
         Invoke mcp__zipsa__run_skill("agenthud-report", target_date),
-        read the agenthud-report.json artifact via
-        mcp__zipsa__get_artifact, surface it on next_phase_input.
+        then jq-slice the child's artifact directly off the
+        /home/agent/children/agenthud-report/runs/<run_id>/artifacts/
+        mount into a slim report_by_project shape on next_phase_input.
       model:
         name: claude-haiku-4-5-20251001
-      allowed_tools: []
+      # Read + Bash(jq|wc|cat) for direct-mount access to the child's
+      # agenthud-report.json. Token-cheaper than get_artifact on large
+      # days (200 KB+ JSON exceeds Claude's per-tool-result cap).
+      allowed_tools:
+        - Read
+        - Bash(jq:*)
+        - Bash(wc:*)
+        - Bash(cat:*)
       limits:
-        max_turns: 6
-        max_cost_usd: 0.10
+        max_turns: 8
+        max_cost_usd: 0.15
         timeout_seconds: 300
 
     - id: prepare
@@ -113,10 +121,14 @@ spec:
         Build the notion-page-write JSON payload
         (data_source_id + pages[]) and invoke
         mcp__zipsa__run_skill("notion-page-write", <payload>).
-        Read the notion-pages.json artifact for created URLs.
+        Read notion-pages.json off the mount to surface URLs.
       model:
         name: claude-haiku-4-5-20251001
-      allowed_tools: []
+      # Read + Bash for direct-mount access to notion-page-write's
+      # tiny notion-pages.json artifact (~few hundred bytes).
+      allowed_tools:
+        - Read
+        - Bash(cat:*)
       limits:
         max_turns: 6
         max_cost_usd: 0.10
@@ -124,6 +136,6 @@ spec:
 
   # Aggregate run limits (sum across phases + buffer).
   limits:
-    max_turns: 35        # 10 + 6 + 8 + 6 = 30 + buffer
-    max_cost_usd: 0.80
-    timeout_seconds: 900 # 120 + 300 + 240 + 180 = 840 + buffer
+    max_turns: 40        # 10 + 8 + 8 + 6 = 32 + buffer
+    max_cost_usd: 0.85
+    timeout_seconds: 960 # 120 + 300 + 240 + 180 = 840 + buffer

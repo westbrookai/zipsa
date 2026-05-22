@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-bip-tweet
-  version: 0.1.0
+  version: 0.2.0
   author: westbrookai
   description: |
     Orchestrator: fetch a day's Claude Code activity via the atomic
@@ -81,15 +81,22 @@ spec:
     - id: fetch
       goal: |
         Invoke mcp__zipsa__run_skill("agenthud-report", target_date),
-        read the agenthud-report.json artifact via
-        mcp__zipsa__get_artifact. agenthud failure is non-fatal —
-        web-only path is the fallback.
+        then jq-slice the child's artifact directly off the
+        /home/agent/children/agenthud-report/runs/<run_id>/artifacts/
+        mount into a slim activity_slim shape. agenthud failure is
+        non-fatal — web-only path is the fallback.
       model:
         name: claude-haiku-4-5-20251001
-      allowed_tools: []
+      # Read + Bash(jq|wc|cat) for direct-mount artifact access.
+      # See daily-notion-log fetch comment for the token-cap rationale.
+      allowed_tools:
+        - Read
+        - Bash(jq:*)
+        - Bash(wc:*)
+        - Bash(cat:*)
       limits:
-        max_turns: 6
-        max_cost_usd: 0.10
+        max_turns: 8
+        max_cost_usd: 0.15
         timeout_seconds: 300
 
     - id: discover
@@ -143,11 +150,15 @@ spec:
     - id: post
       goal: |
         Invoke mcp__zipsa__run_skill("x-post", approved draft).
-        Read tweet-result.json artifact for tweet_id and url;
+        Read tweet-result.json off the mount for tweet_id and url;
         surface in Korean user_facing_summary.
       model:
         name: claude-haiku-4-5-20251001
-      allowed_tools: []
+      # Read + Bash for direct-mount access to x-post's tiny
+      # tweet-result.json (~200 bytes).
+      allowed_tools:
+        - Read
+        - Bash(cat:*)
       limits:
         max_turns: 6
         max_cost_usd: 0.05
@@ -155,6 +166,6 @@ spec:
 
   # Aggregate run limits (sum across phases + buffer).
   limits:
-    max_turns: 55         # 8+6+8+8+5+10+6 = 51 + buffer
-    max_cost_usd: 0.80
+    max_turns: 60         # 8+8+8+8+5+10+6 = 53 + buffer
+    max_cost_usd: 0.85
     timeout_seconds: 2820 # 120+300+120+180+120+1800+90 = 2730 + buffer
