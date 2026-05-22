@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
+from .output_parser import extract_skill_output as _extract_skill_output_impl
 from .skill import Skill
 from .summary import PhaseSummary, build_summary, write_summary
 from ..runtimes import get_runtime
@@ -432,7 +433,7 @@ class DockerExecutor:
                 yield event
 
             # Determine final status from skill's contract JSON output
-            phase_out = self._extract_skill_output(last_assistant_text)
+            phase_out = _extract_skill_output_impl(last_assistant_text)
             if phase_out is None:
                 # Parse failed — preserve the real cause + raw text.
                 phase_out = {
@@ -1177,7 +1178,7 @@ class DockerExecutor:
                         return
 
                     # Extract and validate skill output
-                    phase_out = self._extract_skill_output(last_assistant_text)
+                    phase_out = _extract_skill_output_impl(last_assistant_text)
 
                     if phase_out is None:
                         # Parse failed — record the real cause (the agent
@@ -1711,76 +1712,9 @@ class DockerExecutor:
             config=config_json,
         )
 
-    @staticmethod
-    def _extract_skill_output(text: str | None) -> dict | None:
-        """Extract skill contract JSON from final assistant text.
-
-        Tries three strategies in order:
-        1. Direct json.loads on stripped text
-        2. Extract last ```json ... ``` fenced block
-        3. Find last {...} object containing a "status" key
-
-        Returns the parsed dict on success, or None if no envelope
-        could be extracted. Callers are responsible for handling None
-        — they should record a failed phase with
-        `error.code = "invalid_output_format"` and preserve the raw
-        agent text so the user can debug. (Earlier versions returned
-        a synthetic envelope here with `phase="unknown"`, which then
-        tripped the downstream phase_id_mismatch check and clobbered
-        the real error code.)
-        """
-        import re
-        if not text:
-            return None
-
-        # Strategy 1: direct parse
-        try:
-            data = json.loads(text.strip())
-            if isinstance(data, dict) and "status" in data:
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Strategy 2: last ```json ... ``` block
-        blocks = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
-        if blocks:
-            try:
-                data = json.loads(blocks[-1].strip())
-                if isinstance(data, dict) and "status" in data:
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # Strategy 3: last TOP-LEVEL {...} containing "status".
-        # We scan the text once tracking depth so nested objects (e.g.
-        # a contract JSON whose `result` field happens to itself contain
-        # "status") are NOT considered as standalone candidates. Only
-        # outermost balanced {...} blocks are candidates; we return the
-        # last one with a top-level "status" key.
-        top_level_spans = []
-        depth = 0
-        start = None
-        for i, ch in enumerate(text):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                if depth > 0:
-                    depth -= 1
-                    if depth == 0 and start is not None:
-                        top_level_spans.append((start, i + 1))
-                        start = None
-        for s, e in reversed(top_level_spans):
-            try:
-                data = json.loads(text[s:e])
-                if isinstance(data, dict) and "status" in data:
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # No envelope found. Caller handles None.
-        return None
+    # Backward-compat shim: tests reach DockerExecutor._extract_skill_output
+    # directly. The real implementation lives in core.output_parser.
+    _extract_skill_output = staticmethod(_extract_skill_output_impl)
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
