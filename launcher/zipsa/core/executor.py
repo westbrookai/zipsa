@@ -13,6 +13,21 @@ from pathlib import Path
 from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
+from .output_parser import extract_skill_output as _extract_skill_output_impl
+from .phase_allow import (
+    ALWAYS_ON_TOOLS as _ALWAYS_ON_TOOLS_LIST,
+    merge_always_on_tools as _merge_always_on_tools_impl,
+    write_default_phase_allow_file as _write_default_phase_allow_file_impl,
+    write_phase_allow_file as _write_phase_allow_file_impl,
+)
+from .phase_state import (
+    load_resume_state as _load_resume_state_impl,
+    write_phase_state as _write_phase_state_impl,
+)
+from .prompts import (
+    build_system_prompt as _build_system_prompt_impl,
+    build_user_message as _build_user_message_impl,
+)
 from .skill import Skill
 from .summary import PhaseSummary, build_summary, write_summary
 from ..runtimes import get_runtime
@@ -180,7 +195,7 @@ class DockerExecutor:
                 # shell mode: Hook needs an allow file even in shell mode (where
                 # the user may invoke claude manually). Use the skill's full
                 # tool set.
-                self._write_default_phase_allow_file(claude_json_path.parent, skill)
+                _write_default_phase_allow_file_impl(claude_json_path.parent, skill)
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
             finally:
@@ -367,7 +382,7 @@ class DockerExecutor:
 
             # Single-phase path: execute skill directly.
             # PreToolUse hook needs phase-allow.json too.
-            self._write_default_phase_allow_file(claude_json_path.parent, skill)
+            _write_default_phase_allow_file_impl(claude_json_path.parent, skill)
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env,
                 mcp_debug_host=mcp_debug_host,
@@ -432,7 +447,7 @@ class DockerExecutor:
                 yield event
 
             # Determine final status from skill's contract JSON output
-            phase_out = self._extract_skill_output(last_assistant_text)
+            phase_out = _extract_skill_output_impl(last_assistant_text)
             if phase_out is None:
                 # Parse failed — preserve the real cause + raw text.
                 phase_out = {
@@ -635,46 +650,9 @@ class DockerExecutor:
         artifacts.mkdir(exist_ok=True)
         return artifacts
 
-    @staticmethod
-    def _write_phase_state(phase_dir: Optional[Path], envelope: dict) -> None:
-        """Persist the phase's full skill envelope to state.json.
-
-        Called after a phase completes with status="ok" so a future
-        `zipsa run` invocation can resume from the next phase using
-        the persisted `next_phase_input`. No-op when phase_dir is None
-        (dry-run, shell, or single-shot path where multi-phase
-        per-phase dirs aren't created).
-        """
-        if phase_dir is None:
-            return
-        path = phase_dir / "state.json"
-        path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2))
-
-    @staticmethod
-    def _load_resume_state(run_dir: Path, resume_from: int) -> object:
-        """Read the next_phase_input from the phase BEFORE resume_from.
-
-        Used by _execute_phases when resume_from is set: the previous
-        phase's state.json is the source of truth for what the resumed
-        phase should see as previous_output.
-
-        Phase dirs are named "<idx>-<phase_id>"; we scan the phases/
-        directory for the one starting with f"{resume_from-1}-".
-        """
-        prev_idx = resume_from - 1
-        phases_dir = run_dir / "phases"
-        if phases_dir.exists():
-            for d in sorted(phases_dir.iterdir()):
-                if d.name.startswith(f"{prev_idx}-"):
-                    state_path = d / "state.json"
-                    if state_path.exists():
-                        return json.loads(state_path.read_text()).get(
-                            "next_phase_input",
-                        )
-                    break
-        raise FileNotFoundError(
-            f"state.json for phase {prev_idx} not found under {phases_dir}"
-        )
+    # Backward-compat shims. Real implementations in core.phase_state.
+    _write_phase_state = staticmethod(_write_phase_state_impl)
+    _load_resume_state = staticmethod(_load_resume_state_impl)
 
     def _execute_skill(
         self,
@@ -1010,7 +988,7 @@ class DockerExecutor:
         if resume_from is not None and resume_from > 0:
             start_phase_idx = resume_from
             prior_run_dir = resume_from_run_dir or run_dir
-            previous_output = self._load_resume_state(
+            previous_output = _load_resume_state_impl(
                 prior_run_dir, resume_from=resume_from,
             )
             # Read prior summary so we can roll forward cost/turns for
@@ -1080,10 +1058,10 @@ class DockerExecutor:
 
                 while True:
                     phase_allowed_tools = ",".join(phase.allowed_tools)
-                    self._write_phase_allow_file(
+                    _write_phase_allow_file_impl(
                         claude_json_path.parent, phase.id, list(phase.allowed_tools),
                     )
-                    user_message = self._build_user_message(
+                    user_message = _build_user_message_impl(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input,
                         run_id=run_dir.name if run_dir else "unknown",
@@ -1177,7 +1155,7 @@ class DockerExecutor:
                         return
 
                     # Extract and validate skill output
-                    phase_out = self._extract_skill_output(last_assistant_text)
+                    phase_out = _extract_skill_output_impl(last_assistant_text)
 
                     if phase_out is None:
                         # Parse failed — record the real cause (the agent
@@ -1229,7 +1207,7 @@ class DockerExecutor:
                         ))
                         # Persist the envelope so a future invocation
                         # can resume from the next phase.
-                        self._write_phase_state(phase_dir, phase_out)
+                        _write_phase_state_impl(phase_dir, phase_out)
                         if phase_out.get("state_updates"):
                             self._apply_skill_state(skill, phase_out["state_updates"])
                             skill_state = self._load_skill_state(skill)
@@ -1316,60 +1294,20 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    # Backward-compat shims. Real implementations live in core.phase_allow.
+    _ALWAYS_ON_TOOLS = _ALWAYS_ON_TOOLS_LIST
+
     @classmethod
     def _merge_always_on_tools(cls, allowed_tools: str) -> str:
-        """Merge always-on tools into a comma-separated --allowedTools string.
-        Skips entries already present so the output stays unique."""
-        existing = [t.strip() for t in allowed_tools.split(",") if t.strip()]
-        for t in cls._ALWAYS_ON_TOOLS:
-            if t not in existing:
-                existing.append(t)
-        return ",".join(existing)
-
-    # Always-on tools shared between the PreToolUse hook (phase-allow.json)
-    # and Claude Code's --allowedTools flag. The hook gates execution;
-    # --allowedTools controls which tools Claude exposes to the model at all.
-    # Both must include these names for an always-on tool to actually work.
-    _ALWAYS_ON_TOOLS: list[str] = [
-        "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
-        "mcp__zipsa__recall", "mcp__zipsa__remember",
-        "mcp__zipsa__forget", "mcp__zipsa__list_memory",
-        "mcp__zipsa__ask_once",
-        "mcp__zipsa__get_artifact",
-        "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
-        "ToolSearch",
-    ]
+        return _merge_always_on_tools_impl(allowed_tools)
 
     def _write_phase_allow_file(
-        self,
-        output_dir: Path,
-        phase_id: str,
-        allowed_tools: list[str],
+        self, output_dir: Path, phase_id: str, allowed_tools: list[str],
     ) -> Path:
-        """Write the per-phase tool allow list consumed by the PreToolUse hook.
-
-        The file lives next to .claude.json so it's already covered by the
-        /.zipsa read-only mount.
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        allowed_tools = list(allowed_tools) + self._ALWAYS_ON_TOOLS
-        path = output_dir / "phase-allow.json"
-        path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
-        return path
+        return _write_phase_allow_file_impl(output_dir, phase_id, allowed_tools)
 
     def _write_default_phase_allow_file(self, output_dir: Path, skill: "Skill") -> Path:
-        """Write phase-allow.json for single-shot (no-phases) skills.
-
-        The hook is mounted unconditionally, so single-shot skills also need
-        an allow list — otherwise every tool call would be denied. Use the
-        skill's full declared tool set (spec.tools.builtin + per-MCP-server
-        allowed_tools, prefixed as mcp__<server>__<tool>).
-        """
-        tools = list(skill.manifest.spec.tools.builtin)
-        for server in skill.manifest.spec.mcp:
-            for t in server.allowed_tools:
-                tools.append(f"mcp__{server.name}__{t}")
-        return self._write_phase_allow_file(output_dir, "main", tools)
+        return _write_default_phase_allow_file_impl(output_dir, skill)
 
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
         """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
@@ -1596,12 +1534,12 @@ class DockerExecutor:
             cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
         else:
             # Runtime-specific command (from plugin)
-            system_prompt = self._build_system_prompt(skill)
+            system_prompt = _build_system_prompt_impl(skill)
             allowed_tools = allowed_tools_override if allowed_tools_override is not None else skill.get_allowed_tools()
             # Augment with the always-on MCP tools so Claude exposes them
             # to the model. Without this, the hook would allow them but
             # Claude would never offer them — they'd be invisible.
-            allowed_tools = self._merge_always_on_tools(allowed_tools)
+            allowed_tools = _merge_always_on_tools_impl(allowed_tools)
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # Collect container paths for all stdio MCP mounts so Claude Code
@@ -1633,43 +1571,12 @@ class DockerExecutor:
 
         return cmd
 
+    # Backward-compat shims: existing tests call these via the class.
+    # Real implementations live in core.output_parser and core.prompts.
+    _extract_skill_output = staticmethod(_extract_skill_output_impl)
+
     def _build_system_prompt(self, skill: Skill) -> str:
-        prompts_dir = Path(__file__).parent.parent / "system-prompts"
-        contract = (prompts_dir / "runtime-contract.md").read_text(encoding="utf-8")
-        template = (prompts_dir / "system-prompt-template.md").read_text(encoding="utf-8")
-
-        mcp_paths_section = ""
-        mounted_servers = [
-            s for s in skill.manifest.spec.mcp
-            if s.type == "stdio" and s.mount
-        ]
-        if mounted_servers:
-            lines = ["# MCP Server Paths"]
-            for server in mounted_servers:
-                lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
-            mcp_paths_section = "\n".join(lines) + "\n\n"
-
-        skill_body = f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
-
-# Purpose
-{skill.manifest.spec.purpose}
-
-# Instructions
-{skill.instructions}
-
-{mcp_paths_section}# Behavior rules
-- Single-task focused: only do what your purpose describes
-- Be concise: no preamble, just answer
-- Decline gracefully for off-topic requests
-"""
-
-        meta = skill.manifest.metadata
-        return template.format(
-            contract=contract,
-            skill_name=meta.name,
-            skill_version=meta.version,
-            skill_body=skill_body,
-        )
+        return _build_system_prompt_impl(skill)
 
     def _build_user_message(
         self,
@@ -1682,105 +1589,10 @@ class DockerExecutor:
         user_query: str,
         run_id: str = "unknown",
     ) -> str:
-        from tzlocal import get_localzone
-
-        prompts_dir = Path(__file__).parent.parent / "system-prompts"
-        template = (prompts_dir / "user-message-template.md").read_text(encoding="utf-8")
-
-        now = datetime.now().astimezone()
-        tz_offset = now.strftime("%z")
-        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
-        tz_iana = str(get_localzone())
-
-        config_json = json.dumps(skill.manifest.spec.config, ensure_ascii=False)
-        state_json = json.dumps(skill_state, ensure_ascii=False)
-        prev_output = json.dumps(previous_phase_output, ensure_ascii=False)
-
-        return template.format(
-            date=now.strftime("%Y-%m-%d"),
-            time=now.strftime("%H:%M:%S"),
-            timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
-            tz_iana=tz_iana,
-            run_id=run_id,
-            phase_id=phase_id,
-            phase_goal=phase_goal,
-            allowed_tools=phase_allowed_tools,
-            previous_phase_output=prev_output,
-            skill_state=state_json,
-            user_query=user_query,
-            config=config_json,
+        return _build_user_message_impl(
+            skill, phase_id, phase_goal, phase_allowed_tools,
+            previous_phase_output, skill_state, user_query, run_id,
         )
-
-    @staticmethod
-    def _extract_skill_output(text: str | None) -> dict | None:
-        """Extract skill contract JSON from final assistant text.
-
-        Tries three strategies in order:
-        1. Direct json.loads on stripped text
-        2. Extract last ```json ... ``` fenced block
-        3. Find last {...} object containing a "status" key
-
-        Returns the parsed dict on success, or None if no envelope
-        could be extracted. Callers are responsible for handling None
-        — they should record a failed phase with
-        `error.code = "invalid_output_format"` and preserve the raw
-        agent text so the user can debug. (Earlier versions returned
-        a synthetic envelope here with `phase="unknown"`, which then
-        tripped the downstream phase_id_mismatch check and clobbered
-        the real error code.)
-        """
-        import re
-        if not text:
-            return None
-
-        # Strategy 1: direct parse
-        try:
-            data = json.loads(text.strip())
-            if isinstance(data, dict) and "status" in data:
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Strategy 2: last ```json ... ``` block
-        blocks = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
-        if blocks:
-            try:
-                data = json.loads(blocks[-1].strip())
-                if isinstance(data, dict) and "status" in data:
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # Strategy 3: last TOP-LEVEL {...} containing "status".
-        # We scan the text once tracking depth so nested objects (e.g.
-        # a contract JSON whose `result` field happens to itself contain
-        # "status") are NOT considered as standalone candidates. Only
-        # outermost balanced {...} blocks are candidates; we return the
-        # last one with a top-level "status" key.
-        top_level_spans = []
-        depth = 0
-        start = None
-        for i, ch in enumerate(text):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                if depth > 0:
-                    depth -= 1
-                    if depth == 0 and start is not None:
-                        top_level_spans.append((start, i + 1))
-                        start = None
-        for s, e in reversed(top_level_spans):
-            try:
-                data = json.loads(text[s:e])
-                if isinstance(data, dict) and "status" in data:
-                    return data
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # No envelope found. Caller handles None.
-        return None
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
