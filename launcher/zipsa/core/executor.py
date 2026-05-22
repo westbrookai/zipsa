@@ -14,6 +14,12 @@ from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
 from .output_parser import extract_skill_output as _extract_skill_output_impl
+from .phase_allow import (
+    ALWAYS_ON_TOOLS as _ALWAYS_ON_TOOLS_LIST,
+    merge_always_on_tools as _merge_always_on_tools_impl,
+    write_default_phase_allow_file as _write_default_phase_allow_file_impl,
+    write_phase_allow_file as _write_phase_allow_file_impl,
+)
 from .prompts import (
     build_system_prompt as _build_system_prompt_impl,
     build_user_message as _build_user_message_impl,
@@ -185,7 +191,7 @@ class DockerExecutor:
                 # shell mode: Hook needs an allow file even in shell mode (where
                 # the user may invoke claude manually). Use the skill's full
                 # tool set.
-                self._write_default_phase_allow_file(claude_json_path.parent, skill)
+                _write_default_phase_allow_file_impl(claude_json_path.parent, skill)
                 self._run_shell(docker_cmd, claude_json_path)
                 return None
             finally:
@@ -372,7 +378,7 @@ class DockerExecutor:
 
             # Single-phase path: execute skill directly.
             # PreToolUse hook needs phase-allow.json too.
-            self._write_default_phase_allow_file(claude_json_path.parent, skill)
+            _write_default_phase_allow_file_impl(claude_json_path.parent, skill)
             docker_cmd = self._build_docker_command(
                 skill, user_input, claude_json_path, env,
                 mcp_debug_host=mcp_debug_host,
@@ -1085,7 +1091,7 @@ class DockerExecutor:
 
                 while True:
                     phase_allowed_tools = ",".join(phase.allowed_tools)
-                    self._write_phase_allow_file(
+                    _write_phase_allow_file_impl(
                         claude_json_path.parent, phase.id, list(phase.allowed_tools),
                     )
                     user_message = _build_user_message_impl(
@@ -1321,60 +1327,20 @@ class DockerExecutor:
         env_file.chmod(0o600)
         return env_file
 
+    # Backward-compat shims. Real implementations live in core.phase_allow.
+    _ALWAYS_ON_TOOLS = _ALWAYS_ON_TOOLS_LIST
+
     @classmethod
     def _merge_always_on_tools(cls, allowed_tools: str) -> str:
-        """Merge always-on tools into a comma-separated --allowedTools string.
-        Skips entries already present so the output stays unique."""
-        existing = [t.strip() for t in allowed_tools.split(",") if t.strip()]
-        for t in cls._ALWAYS_ON_TOOLS:
-            if t not in existing:
-                existing.append(t)
-        return ",".join(existing)
-
-    # Always-on tools shared between the PreToolUse hook (phase-allow.json)
-    # and Claude Code's --allowedTools flag. The hook gates execution;
-    # --allowedTools controls which tools Claude exposes to the model at all.
-    # Both must include these names for an always-on tool to actually work.
-    _ALWAYS_ON_TOOLS: list[str] = [
-        "mcp__zipsa__ask", "mcp__zipsa__confirm", "mcp__zipsa__choose",
-        "mcp__zipsa__recall", "mcp__zipsa__remember",
-        "mcp__zipsa__forget", "mcp__zipsa__list_memory",
-        "mcp__zipsa__ask_once",
-        "mcp__zipsa__get_artifact",
-        "mcp__zipsa__run_skill",  # handler-side check gates by spec.children
-        "ToolSearch",
-    ]
+        return _merge_always_on_tools_impl(allowed_tools)
 
     def _write_phase_allow_file(
-        self,
-        output_dir: Path,
-        phase_id: str,
-        allowed_tools: list[str],
+        self, output_dir: Path, phase_id: str, allowed_tools: list[str],
     ) -> Path:
-        """Write the per-phase tool allow list consumed by the PreToolUse hook.
-
-        The file lives next to .claude.json so it's already covered by the
-        /.zipsa read-only mount.
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        allowed_tools = list(allowed_tools) + self._ALWAYS_ON_TOOLS
-        path = output_dir / "phase-allow.json"
-        path.write_text(json.dumps({"phase_id": phase_id, "allowed_tools": allowed_tools}))
-        return path
+        return _write_phase_allow_file_impl(output_dir, phase_id, allowed_tools)
 
     def _write_default_phase_allow_file(self, output_dir: Path, skill: "Skill") -> Path:
-        """Write phase-allow.json for single-shot (no-phases) skills.
-
-        The hook is mounted unconditionally, so single-shot skills also need
-        an allow list — otherwise every tool call would be denied. Use the
-        skill's full declared tool set (spec.tools.builtin + per-MCP-server
-        allowed_tools, prefixed as mcp__<server>__<tool>).
-        """
-        tools = list(skill.manifest.spec.tools.builtin)
-        for server in skill.manifest.spec.mcp:
-            for t in server.allowed_tools:
-                tools.append(f"mcp__{server.name}__{t}")
-        return self._write_phase_allow_file(output_dir, "main", tools)
+        return _write_default_phase_allow_file_impl(output_dir, skill)
 
     def _ensure_oauth_credentials(self, skill: "Skill", env: dict[str, str]) -> None:
         """Inject ZIPSA_TOKEN_<NAME> for all oauth2 HTTP servers that lack a token in env."""
@@ -1606,7 +1572,7 @@ class DockerExecutor:
             # Augment with the always-on MCP tools so Claude exposes them
             # to the model. Without this, the hook would allow them but
             # Claude would never offer them — they'd be invisible.
-            allowed_tools = self._merge_always_on_tools(allowed_tools)
+            allowed_tools = _merge_always_on_tools_impl(allowed_tools)
             mcp_debug_container = "/home/agent/mcp-debug.log" if mcp_debug_host else None
 
             # Collect container paths for all stdio MCP mounts so Claude Code
