@@ -425,3 +425,134 @@ class TestLimitsBreachEvent:
         out = capsys.readouterr().out.strip()
         import json as _json
         assert _json.loads(out) == event
+
+
+class TestEnvelopeSurfaceInResult:
+    """The result footer should surface fields the skill explicitly
+    produced for the user — user_facing_summary and the compact result
+    field — not just the SDK's duration/turns/cost numbers."""
+
+    def test_user_facing_summary_shown_in_pretty_mode(self, capsys):
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '```json\n'
+                    '{"status": "ok", "phase": "report", '
+                    '"result": {"target_date": "2026-05-22", "session_count": 3}, '
+                    '"user_facing_summary": "agenthud report — 2026-05-22 (3 sessions)"}\n```'}]},
+            },
+            {"type": "result", "is_error": False, "duration_ms": 1000,
+             "num_turns": 1, "total_cost_usd": 0.01},
+        ]
+        render(iter(events), OutputMode.pretty)
+        # Strip ANSI color codes for stable substring assertions
+        import re as _re
+        out = _re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+        # The new footer must label the summary explicitly — substring
+        # alone isn't enough (the agent text echoes the same string).
+        assert "Summary: agenthud report — 2026-05-22 (3 sessions)" in out
+        # The result field's contents must surface under their own label
+        assert "Result: target_date=2026-05-22, session_count=3" in out
+
+    def test_user_facing_summary_only_in_pretty_mode(self, capsys):
+        """answer mode emits just the last text; user_facing_summary
+        surfacing is a pretty-mode affordance."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '{"status":"ok","user_facing_summary":"hi"}'}]},
+            },
+            {"type": "result", "is_error": False, "duration_ms": 1000,
+             "num_turns": 1, "total_cost_usd": 0.01},
+        ]
+        render(iter(events), OutputMode.answer)
+        out = capsys.readouterr().out
+        # 'hi' may be in out because answer mode prints the text, but
+        # the user_facing_summary key-label decoration shouldn't fire
+        assert "Summary:" not in out
+
+    def test_missing_envelope_keeps_existing_footer(self, capsys):
+        """If the agent didn't emit a parseable envelope (or omitted
+        user_facing_summary), the footer keeps its old terse shape —
+        no crash, no empty 'Summary:' line."""
+        events = [
+            {"type": "assistant",
+             "message": {"content": [{"type": "text", "text": "just some prose, no JSON"}]}},
+            {"type": "result", "is_error": False, "duration_ms": 1000,
+             "num_turns": 1, "total_cost_usd": 0.01},
+        ]
+        render(iter(events), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "Summary:" not in out
+        # Existing footer fields must still appear
+        assert "Duration:" in out
+
+
+class TestRunCompleteFooter:
+    """zipsa_run_complete is the very last event of every run. The
+    renderer uses it to print a final block listing the artifacts the
+    skill wrote, with sizes, plus the run_dir path — so the user
+    immediately knows what was produced and where to look."""
+
+    def test_artifacts_listed_with_sizes(self, capsys, tmp_path):
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "agenthud-report.json").write_text("x" * 2048)
+        (artifacts / "summary.txt").write_text("hi")
+        event = {
+            "type": "zipsa_run_complete",
+            "status": "ok", "exit_code": 0,
+            "run_dir": str(tmp_path),
+        }
+        render(iter([event]), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert "agenthud-report.json" in out
+        assert "summary.txt" in out
+        # Some size annotation must appear (KB / B / etc)
+        assert "2" in out  # 2KB-ish
+
+    def test_run_dir_path_shown(self, capsys, tmp_path):
+        (tmp_path / "artifacts").mkdir()
+        event = {
+            "type": "zipsa_run_complete",
+            "status": "ok", "exit_code": 0,
+            "run_dir": str(tmp_path),
+        }
+        render(iter([event]), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert str(tmp_path) in out
+
+    def test_no_artifacts_dir_still_shows_run_dir(self, capsys, tmp_path):
+        """A run that wrote nothing to artifacts/ shouldn't crash; the
+        block should still surface the run_dir."""
+        event = {
+            "type": "zipsa_run_complete",
+            "status": "ok", "exit_code": 0,
+            "run_dir": str(tmp_path),
+        }
+        render(iter([event]), OutputMode.pretty)
+        out = capsys.readouterr().out
+        assert str(tmp_path) in out
+
+    def test_no_run_dir_field_is_noop(self, capsys):
+        """Older events without run_dir (back-compat with replayed
+        output.jsonl) must not crash the renderer."""
+        event = {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0}
+        render(iter([event]), OutputMode.pretty)
+        # Just assert no exception
+        capsys.readouterr()
+
+    def test_run_complete_not_in_json_mode(self, capsys, tmp_path):
+        """In json mode the event itself is dumped verbatim — no extra
+        rendering."""
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "a.json").write_text("{}")
+        event = {
+            "type": "zipsa_run_complete",
+            "status": "ok", "exit_code": 0,
+            "run_dir": str(tmp_path),
+        }
+        render(iter([event]), OutputMode.json)
+        out = capsys.readouterr().out.strip()
+        import json as _json
+        assert _json.loads(out) == event

@@ -3,6 +3,7 @@
 import json
 import re
 from enum import Enum
+from pathlib import Path
 from typing import Iterator, Optional
 
 
@@ -21,35 +22,72 @@ _BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 
-def _extract_phase_status(text: Optional[str]) -> Optional[str]:
-    """Try to extract the phase 'status' from the agent's last text block.
+def _extract_envelope(text: Optional[str]) -> Optional[dict]:
+    """Parse the skill-contract JSON envelope out of an agent text block.
 
     The skill contract requires the agent to end every phase with a JSON
-    object containing a 'status' field (ok | failed | out_of_scope).
-    We peek at it so the per-phase footer reflects the *phase outcome*,
-    not just whether the Claude Code SDK call crashed (is_error).
+    object: {status, phase, result, state_updates, user_facing_summary,
+    error}. We peek at it so the footer can surface the fields the skill
+    explicitly produced for the user — not just SDK metrics.
 
-    Returns the status string if parseable, else None.
+    Returns the parsed dict if found, else None. Tolerant of either a
+    ```json fenced block or raw text body.
     """
     if not text:
         return None
-    # Try ```json ... ``` fenced block first (most common).
     m = re.search(r"```(?:json)?\s*\n(.+?)\n\s*```", text, re.DOTALL)
     if m:
         try:
             obj = json.loads(m.group(1))
-            if isinstance(obj, dict) and isinstance(obj.get("status"), str):
-                return obj["status"]
+            if isinstance(obj, dict):
+                return obj
         except json.JSONDecodeError:
             pass
-    # Try raw text as JSON.
     try:
         obj = json.loads(text.strip())
-        if isinstance(obj, dict) and isinstance(obj.get("status"), str):
-            return obj["status"]
+        if isinstance(obj, dict):
+            return obj
     except json.JSONDecodeError:
         pass
     return None
+
+
+def _extract_phase_status(text: Optional[str]) -> Optional[str]:
+    """Back-compat wrapper around _extract_envelope. Returns the phase
+    'status' field if the envelope parses, else None."""
+    env = _extract_envelope(text)
+    if env is None:
+        return None
+    status = env.get("status")
+    return status if isinstance(status, str) else None
+
+
+def _format_size(num_bytes: int) -> str:
+    """Human-readable file size — single-decimal KB/MB; whole-number B."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    if num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    return f"{num_bytes / (1024 * 1024):.1f} MB"
+
+
+def _format_result_compact(result: dict) -> str:
+    """Render the envelope's `result` dict as 'k=v, k=v' lines.
+
+    Skips nested dicts/lists (only scalar values surface here — anything
+    structural belongs in an artifact, not the inline footer). Truncates
+    long string values to keep one line readable.
+    """
+    if not isinstance(result, dict):
+        return str(result)
+    parts: list[str] = []
+    for k, v in result.items():
+        if isinstance(v, (dict, list)):
+            continue
+        if isinstance(v, str) and len(v) > 60:
+            v = v[:57] + "..."
+        parts.append(f"{k}={v}")
+    return ", ".join(parts)
 
 
 def render(events: Iterator[dict], mode: OutputMode) -> None:
@@ -220,7 +258,8 @@ def _format(
         # `is_error` is True only if the SDK call itself blew up; a
         # phase that returns status=failed in its JSON still has
         # is_error=False. The user cares about the phase outcome.
-        phase_status = _extract_phase_status(last_text)
+        envelope = _extract_envelope(last_text)
+        phase_status = envelope.get("status") if envelope else None
         if phase_status == "failed":
             status = f"{_RED}Failed{_RESET}"
         elif phase_status == "out_of_scope":
@@ -230,6 +269,43 @@ def _format(
         else:
             status = "Success"
         sep = "=" * 50
-        return f"\n{sep}\n{status}\nDuration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}\n{sep}"
+        lines = [sep, status]
+        if envelope:
+            ufs = envelope.get("user_facing_summary")
+            if isinstance(ufs, str) and ufs.strip():
+                lines.append(f"{_GRAY}Summary:{_RESET} {ufs}")
+            result_obj = envelope.get("result")
+            if isinstance(result_obj, dict) and result_obj:
+                compact = _format_result_compact(result_obj)
+                if compact:
+                    lines.append(f"{_GRAY}Result:{_RESET} {compact}")
+        lines.append(f"Duration: {duration_s:.1f}s | Turns: {num_turns} | Cost: ${cost:.4f}")
+        lines.append(sep)
+        return "\n" + "\n".join(lines)
+
+    if event_type == "zipsa_run_complete":
+        if mode != OutputMode.pretty:
+            return None
+        run_dir_s = event.get("run_dir")
+        if not run_dir_s:
+            return None
+        run_dir = Path(run_dir_s)
+        artifacts_dir = run_dir / "artifacts"
+        lines = [f"\n{_GRAY}Run dir:{_RESET} {run_dir}"]
+        if artifacts_dir.exists():
+            files = sorted(
+                p for p in artifacts_dir.iterdir() if p.is_file()
+            )
+            if files:
+                lines.append(f"{_GRAY}Artifacts:{_RESET}")
+                for f in files:
+                    try:
+                        size = _format_size(f.stat().st_size)
+                    except OSError:
+                        size = "?"
+                    lines.append(f"  {f.name} ({size})")
+            else:
+                lines.append(f"{_GRAY}Artifacts:{_RESET} (none)")
+        return "\n".join(lines)
 
     return None
