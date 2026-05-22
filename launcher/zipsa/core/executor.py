@@ -14,6 +14,10 @@ from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
 from .output_parser import extract_skill_output as _extract_skill_output_impl
+from .prompts import (
+    build_system_prompt as _build_system_prompt_impl,
+    build_user_message as _build_user_message_impl,
+)
 from .skill import Skill
 from .summary import PhaseSummary, build_summary, write_summary
 from ..runtimes import get_runtime
@@ -1084,7 +1088,7 @@ class DockerExecutor:
                     self._write_phase_allow_file(
                         claude_json_path.parent, phase.id, list(phase.allowed_tools),
                     )
-                    user_message = self._build_user_message(
+                    user_message = _build_user_message_impl(
                         skill, phase.id, phase.goal, phase_allowed_tools,
                         previous_output, skill_state, user_input,
                         run_id=run_dir.name if run_dir else "unknown",
@@ -1597,7 +1601,7 @@ class DockerExecutor:
             cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
         else:
             # Runtime-specific command (from plugin)
-            system_prompt = self._build_system_prompt(skill)
+            system_prompt = _build_system_prompt_impl(skill)
             allowed_tools = allowed_tools_override if allowed_tools_override is not None else skill.get_allowed_tools()
             # Augment with the always-on MCP tools so Claude exposes them
             # to the model. Without this, the hook would allow them but
@@ -1634,43 +1638,12 @@ class DockerExecutor:
 
         return cmd
 
+    # Backward-compat shims: existing tests call these via the class.
+    # Real implementations live in core.output_parser and core.prompts.
+    _extract_skill_output = staticmethod(_extract_skill_output_impl)
+
     def _build_system_prompt(self, skill: Skill) -> str:
-        prompts_dir = Path(__file__).parent.parent / "system-prompts"
-        contract = (prompts_dir / "runtime-contract.md").read_text(encoding="utf-8")
-        template = (prompts_dir / "system-prompt-template.md").read_text(encoding="utf-8")
-
-        mcp_paths_section = ""
-        mounted_servers = [
-            s for s in skill.manifest.spec.mcp
-            if s.type == "stdio" and s.mount
-        ]
-        if mounted_servers:
-            lines = ["# MCP Server Paths"]
-            for server in mounted_servers:
-                lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
-            mcp_paths_section = "\n".join(lines) + "\n\n"
-
-        skill_body = f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
-
-# Purpose
-{skill.manifest.spec.purpose}
-
-# Instructions
-{skill.instructions}
-
-{mcp_paths_section}# Behavior rules
-- Single-task focused: only do what your purpose describes
-- Be concise: no preamble, just answer
-- Decline gracefully for off-topic requests
-"""
-
-        meta = skill.manifest.metadata
-        return template.format(
-            contract=contract,
-            skill_name=meta.name,
-            skill_version=meta.version,
-            skill_body=skill_body,
-        )
+        return _build_system_prompt_impl(skill)
 
     def _build_user_message(
         self,
@@ -1683,38 +1656,10 @@ class DockerExecutor:
         user_query: str,
         run_id: str = "unknown",
     ) -> str:
-        from tzlocal import get_localzone
-
-        prompts_dir = Path(__file__).parent.parent / "system-prompts"
-        template = (prompts_dir / "user-message-template.md").read_text(encoding="utf-8")
-
-        now = datetime.now().astimezone()
-        tz_offset = now.strftime("%z")
-        tz_offset_fmt = f"UTC{tz_offset[:3]}:{tz_offset[3:]}"
-        tz_iana = str(get_localzone())
-
-        config_json = json.dumps(skill.manifest.spec.config, ensure_ascii=False)
-        state_json = json.dumps(skill_state, ensure_ascii=False)
-        prev_output = json.dumps(previous_phase_output, ensure_ascii=False)
-
-        return template.format(
-            date=now.strftime("%Y-%m-%d"),
-            time=now.strftime("%H:%M:%S"),
-            timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
-            tz_iana=tz_iana,
-            run_id=run_id,
-            phase_id=phase_id,
-            phase_goal=phase_goal,
-            allowed_tools=phase_allowed_tools,
-            previous_phase_output=prev_output,
-            skill_state=state_json,
-            user_query=user_query,
-            config=config_json,
+        return _build_user_message_impl(
+            skill, phase_id, phase_goal, phase_allowed_tools,
+            previous_phase_output, skill_state, user_query, run_id,
         )
-
-    # Backward-compat shim: tests reach DockerExecutor._extract_skill_output
-    # directly. The real implementation lives in core.output_parser.
-    _extract_skill_output = staticmethod(_extract_skill_output_impl)
 
     def _print_dry_run(self, skill: Skill, cmd: list[str], mcp_config: dict):
         """Print dry run information.
