@@ -20,6 +20,10 @@ from .phase_allow import (
     write_default_phase_allow_file as _write_default_phase_allow_file_impl,
     write_phase_allow_file as _write_phase_allow_file_impl,
 )
+from .phase_state import (
+    load_resume_state as _load_resume_state_impl,
+    write_phase_state as _write_phase_state_impl,
+)
 from .prompts import (
     build_system_prompt as _build_system_prompt_impl,
     build_user_message as _build_user_message_impl,
@@ -646,46 +650,9 @@ class DockerExecutor:
         artifacts.mkdir(exist_ok=True)
         return artifacts
 
-    @staticmethod
-    def _write_phase_state(phase_dir: Optional[Path], envelope: dict) -> None:
-        """Persist the phase's full skill envelope to state.json.
-
-        Called after a phase completes with status="ok" so a future
-        `zipsa run` invocation can resume from the next phase using
-        the persisted `next_phase_input`. No-op when phase_dir is None
-        (dry-run, shell, or single-shot path where multi-phase
-        per-phase dirs aren't created).
-        """
-        if phase_dir is None:
-            return
-        path = phase_dir / "state.json"
-        path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2))
-
-    @staticmethod
-    def _load_resume_state(run_dir: Path, resume_from: int) -> object:
-        """Read the next_phase_input from the phase BEFORE resume_from.
-
-        Used by _execute_phases when resume_from is set: the previous
-        phase's state.json is the source of truth for what the resumed
-        phase should see as previous_output.
-
-        Phase dirs are named "<idx>-<phase_id>"; we scan the phases/
-        directory for the one starting with f"{resume_from-1}-".
-        """
-        prev_idx = resume_from - 1
-        phases_dir = run_dir / "phases"
-        if phases_dir.exists():
-            for d in sorted(phases_dir.iterdir()):
-                if d.name.startswith(f"{prev_idx}-"):
-                    state_path = d / "state.json"
-                    if state_path.exists():
-                        return json.loads(state_path.read_text()).get(
-                            "next_phase_input",
-                        )
-                    break
-        raise FileNotFoundError(
-            f"state.json for phase {prev_idx} not found under {phases_dir}"
-        )
+    # Backward-compat shims. Real implementations in core.phase_state.
+    _write_phase_state = staticmethod(_write_phase_state_impl)
+    _load_resume_state = staticmethod(_load_resume_state_impl)
 
     def _execute_skill(
         self,
@@ -1021,7 +988,7 @@ class DockerExecutor:
         if resume_from is not None and resume_from > 0:
             start_phase_idx = resume_from
             prior_run_dir = resume_from_run_dir or run_dir
-            previous_output = self._load_resume_state(
+            previous_output = _load_resume_state_impl(
                 prior_run_dir, resume_from=resume_from,
             )
             # Read prior summary so we can roll forward cost/turns for
@@ -1240,7 +1207,7 @@ class DockerExecutor:
                         ))
                         # Persist the envelope so a future invocation
                         # can resume from the next phase.
-                        self._write_phase_state(phase_dir, phase_out)
+                        _write_phase_state_impl(phase_dir, phase_out)
                         if phase_out.get("state_updates"):
                             self._apply_skill_state(skill, phase_out["state_updates"])
                             skill_state = self._load_skill_state(skill)
