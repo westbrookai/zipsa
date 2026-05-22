@@ -1,0 +1,51 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: x-post
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Atomic skill: post a single approved tweet text to X via OAuth
+    1.0a credentials. No drafting, no review, no voice — caller
+    passes the exact text, this skill publishes it and emits an
+    artifact with the resulting tweet_id and URL.
+  tags: [atomic, x, twitter]
+
+spec:
+  purpose: |
+    Publish one tweet. Input is the exact text via args; output is
+    artifacts/tweet-result.json with tweet_id and url. No HITL,
+    no memory, single phase.
+
+  instructions: ./SKILL.md
+
+  # No default — caller MUST pass the tweet text via args.
+
+  # Mechanical: validate length, run script, parse JSON, write artifact.
+  model:
+    name: claude-haiku-4-5-20251001
+
+  # X credentials (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
+  # X_ACCESS_SECRET) come through ~/.zipsa/.env automatically.
+
+  tools:
+    builtin: []
+
+  phases:
+    - id: post
+      goal: |
+        Validate tweet text (non-empty, ≤280 chars), run
+        /skill/scripts/post.py, parse JSON output, write
+        artifacts/tweet-result.json.
+      allowed_tools:
+        - Bash(python3:*)
+        - Bash(mkdir:*)
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.05
+        timeout_seconds: 60
+
+  limits:
+    max_turns: 6
+    max_cost_usd: 0.05
+    timeout_seconds: 60

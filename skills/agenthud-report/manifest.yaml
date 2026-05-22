@@ -1,0 +1,79 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: agenthud-report
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Atomic skill: fetch a structured per-project Claude Code activity
+    report from agenthud for a given date and emit it as a JSON
+    artifact. No user prompts, no domain knowledge — pure I/O for
+    orchestrator skills to compose.
+  tags: [atomic, claude-code, agenthud]
+
+spec:
+  purpose: |
+    Run agenthud for a target date (today/yesterday/YYYY-MM-DD),
+    structure the output per project, and write it to
+    artifacts/agenthud-report.json. Orchestrators read the artifact
+    via mcp__zipsa__get_artifact. No HITL, no memory, single phase.
+
+  instructions: ./SKILL.md
+
+  default_query: today
+
+  # Mechanical: bash agenthud + jq + write file. Haiku handles this
+  # cleanly at ~25x lower cost than Sonnet.
+  model:
+    name: claude-haiku-4-5-20251001
+
+  # Per-user host-side values resolved before container start.
+  requires:
+    project_roots:
+      type: list[directory]
+      prompt: |
+        Which directories contain your git projects?
+        These get mounted read-only so agenthud --with-git can resolve
+        the .git directory referenced by each Claude session's `cwd`.
+        One path per line, ~ is expanded; empty line to finish.
+
+  mounts:
+    # Bind-mount Claude's session logs at agenthud's default path.
+    - host: ~/.claude/projects
+      container: /home/agent/.claude/projects
+      mode: ro
+
+    # Mount each project root at its own absolute host path so
+    # `agenthud --with-git` resolves session `cwd` to real .git.
+    - source: requires.project_roots
+      preserve_host_path: true
+      mode: ro
+
+  tools:
+    builtin: []
+
+  config:
+    agenthud_version: "0.9.2"
+
+  phases:
+    - id: report
+      goal: |
+        Resolve target_date from user_query, invoke agenthud, slice
+        with jq, write artifacts/agenthud-report.json.
+      allowed_tools:
+        - Bash(/skill/scripts/agenthud:*)
+        - Bash(echo:*)
+        - Bash(jq:*)
+        - Bash(wc:*)
+        - Bash(mkdir:*)
+        - Read
+      limits:
+        max_turns: 12
+        max_cost_usd: 0.20
+        timeout_seconds: 240
+
+  # Single-phase skill — aggregate limits mirror the phase.
+  limits:
+    max_turns: 12
+    max_cost_usd: 0.20
+    timeout_seconds: 240

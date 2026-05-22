@@ -46,6 +46,8 @@ docker-build.log
 # Test outputs
 test-results/
 coverage/
+.coverage
+htmlcov/
 
 # Temporary files
 *.tmp

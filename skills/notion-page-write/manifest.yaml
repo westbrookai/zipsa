@@ -1,0 +1,56 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: notion-page-write
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Atomic skill: write one or more pre-formed pages to a Notion
+    data source. Accepts a JSON payload, calls notion-create-pages
+    via the Notion MCP server, emits an artifact listing created
+    page IDs/URLs. No formatting, no summarization.
+  tags: [atomic, notion]
+
+spec:
+  purpose: |
+    Persist pages to Notion. Input is a complete JSON payload
+    (data_source_id + pages[]); output is artifacts/notion-pages.json
+    with created page IDs and URLs. No HITL, no memory, single phase.
+
+  instructions: ./SKILL.md
+
+  # No default — caller MUST pass JSON payload via args.
+
+  # Mechanical: parse JSON, call one MCP tool, write artifact.
+  model:
+    name: claude-haiku-4-5-20251001
+
+  mcp:
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+      allowed_tools:
+        - notion-create-pages
+
+  tools:
+    builtin: []
+
+  phases:
+    - id: persist
+      goal: |
+        Parse user_query as JSON, validate shape, call
+        mcp__notion__notion-create-pages, write
+        artifacts/notion-pages.json.
+      allowed_tools:
+        - mcp__notion__notion-create-pages
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+  limits:
+    max_turns: 8
+    max_cost_usd: 0.10
+    timeout_seconds: 120
