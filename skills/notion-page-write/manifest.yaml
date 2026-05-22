@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: notion-page-write
-  version: 0.1.0
+  version: 0.1.1
   author: westbrookai
   description: |
     Atomic skill: write one or more pre-formed pages to a Notion
@@ -43,8 +43,13 @@ spec:
         Parse user_query as JSON, validate shape, call
         mcp__notion__notion-create-pages, write
         artifacts/notion-pages.json.
+      # Write is needed to emit the artifact; the bash entries are
+      # for the rare case where the agent prefers shell over Write.
       allowed_tools:
         - mcp__notion__notion-create-pages
+        - Write
+        - Bash(mkdir:*)
+        - Bash(echo:*)
       limits:
         max_turns: 8
         max_cost_usd: 0.10
