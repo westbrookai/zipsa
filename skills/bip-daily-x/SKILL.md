@@ -218,7 +218,7 @@ Decide whether to enrich the draft with today's Claude Code activity.
 1. Ask the user (Korean):
 
    ```
-   오늘 작업한 Claude Code 내용도 트윗에 반영할까요? (y/N)
+   Claude Code로 작업한 내용도 트윗에 반영할까요? (y/N)
    ```
 
 2. Parse the reply. Treat as **yes** any of: `y`, `Y`, `yes`, `Yes`,

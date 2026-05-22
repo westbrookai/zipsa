@@ -182,9 +182,9 @@ spec:
       # for 280 chars.
       allowed_tools: []
       limits:
-        max_turns: 3
-        max_cost_usd: 0.05
-        timeout_seconds: 60
+        max_turns: 5
+        max_cost_usd: 0.10
+        timeout_seconds: 120
 
     - id: review
       goal: |
@@ -215,6 +215,6 @@ spec:
 
   # Aggregate run limits (sum across phases should not exceed)
   limits:
-    max_turns: 59         # 8+8+8+4+14+3+10+4 = 59
-    max_cost_usd: 0.85
-    timeout_seconds: 3180 # 120+120+180+600+240+60+1800+60 = 3180
+    max_turns: 61         # 8+8+8+4+14+5+10+4 = 61
+    max_cost_usd: 0.90
+    timeout_seconds: 3240 # 120+120+180+600+240+120+1800+60 = 3240
