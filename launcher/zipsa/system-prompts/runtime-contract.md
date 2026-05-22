@@ -188,7 +188,7 @@ status codes asking the launcher to prompt.
 | "ask the user X" / one-off question | `mcp__zipsa__ask({prompt})` |
 | "yes/no" / "confirm" | `mcp__zipsa__confirm({message, default?})` |
 | "pick one of" / "choose from" | `mcp__zipsa__choose({prompt, options})` |
-| "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?})` |
+| "ask once" / "remember" / "default" / "cache across runs" / "set up the first time" | `mcp__zipsa__ask_once({key, prompt, scope?, default?})` |
 | Finer-grained memory access | `mcp__zipsa__recall` / `mcp__zipsa__remember` / `mcp__zipsa__forget` / `mcp__zipsa__list_memory` |
 | Read a file artifact another phase or skill wrote | `mcp__zipsa__get_artifact({skill, version, run_id, name})` → see "Artifacts" |
 | Invoke a child skill declared in spec.children | `mcp__zipsa__run_skill({name, args})` → see "Invoking child skills" |
@@ -200,6 +200,11 @@ language, name).
 
 Pick descriptive stable keys (e.g. `default_city`, `notion_workspace`,
 not `c1`, `ws1`). Memory values must be JSON-serializable.
+
+If the prompt mentions a default value, pass it as `default` — don't
+rely on the agent inferring that empty input means the default. With a
+`default` set, the question is also answerable in non-interactive runs
+(it resolves to the default instead of failing).
 
 ### Guidelines
 
