@@ -5,13 +5,25 @@ given date and emit it as a JSON artifact for downstream skills.
 
 ## Atomic skill contract
 
-This is an **atomic** skill (Unix-philosophy single responsibility):
+This is an **atomic** skill: a leaf in the call graph — it does NOT
+call `mcp__zipsa__run_skill`, so it can be composed by orchestrators
+without depth/cycle concerns. Single-responsibility per Unix
+philosophy: agenthud invocation only, no downstream-domain knowledge
+(Notion, X, etc.).
+
+For this particular skill:
 
 - One input: a target date string.
 - One output: a JSON artifact at `artifacts/agenthud-report.json`.
-- NO ask, ask_once, confirm, choose, or any user prompts.
-- NO knowledge of downstream consumers (Notion, X, etc.).
-- Stateless across runs — no skill memory reads/writes.
+- `project_roots` is launcher-resolved via `spec.requires`; the
+  agent never prompts the user inside the container.
+- No agent-time HITL (`ask`, `confirm`, `choose`, `ask_once`) and no
+  skill-memory reads/writes — this skill genuinely has nothing it
+  needs to ask or remember beyond what the launcher provides.
+
+(Atomic skills MAY use HITL or memory in general — per-caller routing
+gives them their own namespace whether invoked directly or as a child.
+This one just doesn't need to.)
 
 Orchestrator skills compose this via `mcp__zipsa__run_skill` and read
 the artifact via `mcp__zipsa__get_artifact`.
@@ -142,8 +154,8 @@ short message naming the bad input.
 
 ## Constraints
 
-- This skill does NOT call any user-facing MCP tool (ask, confirm,
-  ask_once, choose). It is non-interactive by design.
-- This skill does NOT read from or write to skill memory.
-- Output is exclusively via the artifact + the `result` field.
+- This skill does NOT call `mcp__zipsa__run_skill` (atomic = leaf in
+  the call graph).
+- Output is exclusively via the artifact + the `result` field — agent
+  text/markdown chatter is not the contract.
 - Output language is English (this is a machine-to-machine skill).

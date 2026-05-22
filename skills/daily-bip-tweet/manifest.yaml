@@ -1,0 +1,160 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: daily-bip-tweet
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Orchestrator: fetch a day's Claude Code activity via the atomic
+    agenthud-report skill, compose a build-in-public tweet in the
+    user's voice (blended with web-sourced BIP trends + interest
+    summaries), run a Korean review loop, and publish via the
+    atomic x-post skill. Owns voice/interests ask_once + HITL.
+  tags: [orchestrator, productivity, build-in-public, x, claude-code]
+
+spec:
+  purpose: |
+    Produce and post one tweet per day. Always pull web context
+    (BIP trends + user interest summary). Always fetch agenthud
+    activity (atomic skill handles the heavy lift). Iterate via
+    Korean review, then publish via x-post after explicit approval.
+
+  instructions: ./SKILL.md
+
+  default_query: today
+
+  # Sonnet 4.6 handles tweet drafting + Korean feedback refinement
+  # well. Mechanical phases (precheck, fetch, post) override to Haiku.
+  model:
+    name: claude-sonnet-4-6
+
+  # Atomic children this orchestrator may invoke. Launcher rejects
+  # any other skill name.
+  children:
+    - agenthud-report
+    - x-post
+
+  # X creds (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
+  # come through ~/.zipsa/.env. Precheck verifies presence via
+  # execution_context.
+
+  tools:
+    builtin: []
+
+  config:
+    default_target_date: today
+    max_review_iterations: 5
+    max_tweet_chars: 280
+    discover_query: "#buildinpublic OR #buildinpublic AI"
+    # Shown to the user as the ask_once example for `interests`;
+    # the persisted value is the user's actual input.
+    default_interests:
+      - AI agents
+      - MCP
+      - build-in-public
+
+  state_schema:
+    insights:
+      type: list[string]
+    interests_summary:
+      type: string
+    target_date:
+      type: string
+    report:
+      type: object
+    draft:
+      type: string
+
+  phases:
+    - id: precheck
+      goal: |
+        Verify 4 X env vars are present, ensure voice and interests
+        are remembered, resolve target_date from user_query.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+    - id: fetch
+      goal: |
+        Invoke mcp__zipsa__run_skill("agenthud-report", target_date),
+        read the agenthud-report.json artifact via
+        mcp__zipsa__get_artifact. agenthud failure is non-fatal —
+        web-only path is the fallback.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.10
+        timeout_seconds: 300
+
+    - id: discover
+      goal: |
+        WebSearch public BIP chatter and extract 3-5 tone/structure
+        insights for the draft phase.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools:
+        - WebSearch
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+    - id: interests_search
+      goal: |
+        WebSearch the user's interest topics (capped at first 3),
+        synthesize 3-5 sentences of English prose for the draft.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools:
+        - WebSearch
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.10
+        timeout_seconds: 180
+
+    - id: draft
+      goal: |
+        Write ONE English tweet ≤ max_tweet_chars in the user's
+        voice, blending insights + interests_summary + report.
+      # Sonnet (inherited) — creative tweet writing benefits from
+      # the better model; Opus is overkill for 280 chars.
+      allowed_tools: []
+      limits:
+        max_turns: 5
+        max_cost_usd: 0.10
+        timeout_seconds: 120
+
+    - id: review
+      goal: |
+        Show the English draft, run Korean review loop (≤ 5
+        iterations), then confirm before posting.
+      allowed_tools: []
+      limits:
+        max_turns: 10
+        max_cost_usd: 0.20
+        timeout_seconds: 1800
+
+    - id: post
+      goal: |
+        Invoke mcp__zipsa__run_skill("x-post", approved draft).
+        Read tweet-result.json artifact for tweet_id and url;
+        surface in Korean user_facing_summary.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.05
+        timeout_seconds: 90
+
+  # Aggregate run limits (sum across phases + buffer).
+  limits:
+    max_turns: 55         # 8+6+8+8+5+10+6 = 51 + buffer
+    max_cost_usd: 0.80
+    timeout_seconds: 2820 # 120+300+120+180+120+1800+90 = 2730 + buffer
