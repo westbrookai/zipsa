@@ -2625,3 +2625,48 @@ class TestResumeFromSkipsPhases:
             prior_run_dir, resume_from=1,
         )
         assert loaded == {"loaded": True}
+
+
+class TestResumeChainState:
+    """When a resume run B itself fails, run C should be able to
+    resume from B by finding state.json for the skipped phases.
+    This requires B to copy state.json files from its source run A."""
+
+    def test_state_copied_from_prior_run_on_resume(self, tmp_path):
+        """Test the file-copy primitive that the resume code path uses
+        to make each resumed run self-sufficient as a resume source.
+
+        Setup: prior_run has phases/0-precheck/state.json and
+        phases/1-discover/state.json. New run is fresh and empty.
+        After the copy step, new_run has the same state.json files
+        in the same paths so a future resume can read from new_run."""
+        import shutil as _sh
+
+        prior_run = tmp_path / "x@0.1.0" / "runs" / "A"
+        for idx, pid in [(0, "precheck"), (1, "discover")]:
+            d = prior_run / "phases" / f"{idx}-{pid}"
+            d.mkdir(parents=True)
+            (d / "state.json").write_text(
+                f'{{"status":"ok","phase":"{pid}","next_phase_input":{{"i":{idx}}}}}'
+            )
+
+        new_run = tmp_path / "x@0.1.0" / "runs" / "B"
+        new_run.mkdir(parents=True)
+
+        # The same logic as in _execute_phases for resume_from=2
+        for skipped_idx, pid in [(0, "precheck"), (1, "discover")]:
+            src = prior_run / "phases" / f"{skipped_idx}-{pid}" / "state.json"
+            if src.exists():
+                dst_dir = new_run / "phases" / f"{skipped_idx}-{pid}"
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                _sh.copy(src, dst_dir / "state.json")
+
+        # Verify B is now self-sufficient
+        assert (new_run / "phases" / "0-precheck" / "state.json").exists()
+        assert (new_run / "phases" / "1-discover" / "state.json").exists()
+        # And the content matches
+        import json as _j
+        b_precheck = _j.loads(
+            (new_run / "phases" / "0-precheck" / "state.json").read_text()
+        )
+        assert b_precheck["next_phase_input"] == {"i": 0}

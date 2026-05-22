@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -970,12 +971,25 @@ class DockerExecutor:
             # skipped phases so the new run's summary still records
             # them as ran (cost/turns are 0 — actual cost is in the
             # original run's summary).
+            #
+            # Also copy each skipped phase's state.json from the prior
+            # run into THIS run's per-phase dir. Without this copy a
+            # second resume (Run C resuming from Run B which itself
+            # resumed from Run A) would fail to find state.json in
+            # Run B and fall back to fresh start. The copy makes each
+            # resumed run self-sufficient as a resume source.
             for skipped_idx in range(resume_from):
                 skipped = phases[skipped_idx]
                 phase_summaries.append(PhaseSummary(
                     id=skipped.id, status="ok",
                     cost_usd=0.0, turns=0,
                 ))
+                if run_dir is not None:
+                    src = prior_run_dir / "phases" / f"{skipped_idx}-{skipped.id}" / "state.json"
+                    if src.exists():
+                        dst_dir = run_dir / "phases" / f"{skipped_idx}-{skipped.id}"
+                        dst_dir.mkdir(parents=True, exist_ok=True)
+                        shutil.copy(src, dst_dir / "state.json")
         # Tracks final run status for the zipsa_run_complete event
         run_final_status = "infra_failed"
         run_final_exit_code = 5
