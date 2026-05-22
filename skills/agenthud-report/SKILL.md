@@ -87,7 +87,7 @@ short message naming the bad input.
    The orchestrator can compute anything else from the artifact.
 
 4. The artifact is the raw agenthud `--format json` output, schema
-   defined by agenthud itself. Top-level shape (as of agenthud 0.9.2):
+   defined by agenthud itself. Verified shape (agenthud 0.9.2):
 
    ```json
    {
@@ -95,21 +95,41 @@ short message naming the bad input.
      "sessions": [
        {
          "project": "launcher",
-         "session_id": "...",
-         "cwd": "/Users/.../launcher",
-         "start": "...",
-         "end": "...",
+         "start": "00:00",
+         "end": "06:23",
          "activities": [
-           {"type": "Response", "text": "..."},
-           {"type": "Edit", "label": "..."},
-           {"type": "Bash", "label": "..."},
-           {"type": "commit", "label": "...", "sha": "..."},
-           ...
-         ]
+           {"time": "00:01", "icon": "$",   "label": "Bash",     "detail": "grep -n ..."},
+           {"time": "00:01", "icon": "<",   "label": "Response", "detail": "Now CLI side..."},
+           {"time": "00:01", "icon": ">",   "label": "User",     "detail": "..."},
+           {"time": "00:00", "icon": "~",   "label": "Edit",     "detail": "executor.py"},
+           {"time": "00:02", "icon": "…",   "label": "Thinking", "detail": "..."},
+           {"time": "00:03", "icon": "○",   "label": "Read",     "detail": "..."},
+           {"time": "01:49", "icon": "◆",   "label": "9bca6ab",  "detail": "perf: gate ..."}
+         ],
+         "subAgents": []
        }
      ]
    }
    ```
+
+   **Activity icon → semantic table** (downstream skills filter by
+   this, since `label` is overloaded — type-name for most activities,
+   git SHA for commits):
+
+   | icon | meaning                          |
+   |------|----------------------------------|
+   | `$`  | Bash command (detail = command)  |
+   | `<`  | Agent Response (detail = text)   |
+   | `>`  | User input (detail = message)    |
+   | `~`  | Edit (detail = file path)        |
+   | `○`  | Read/Write (detail = file path)  |
+   | `…`  | Thinking (detail = reasoning)    |
+   | `◆`  | Commit (label = SHA, detail = commit message) |
+
+   For commit entries, `label` is the short SHA and `detail` is the
+   commit subject. The `--with-git` flag is what enables emission of
+   these — without per-session mounts (`spec.requires.project_roots`)
+   they won't appear.
 
    If agenthud found 0 sessions on the date, the artifact has
    `sessions: []`. That is a normal "no activity today" signal, not

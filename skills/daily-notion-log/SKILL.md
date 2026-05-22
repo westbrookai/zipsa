@@ -153,60 +153,96 @@ and read its artifact.
    )
    ```
 
-   `art.content` is the parsed JSON object:
+   `art.content` is the raw agenthud JSON (no projection — atomic
+   skill emits everything):
+
    ```json
    {
-     "target_date": "YYYY-MM-DD",
-     "projects": [
-       {"name": "...", "activity_count": <N>,
-        "commits": [...], "sample_responses": [...],
-        "sample_edits": [...], "sample_bash": [...]}
+     "date": "YYYY-MM-DD",
+     "sessions": [
+       {
+         "project": "launcher",
+         "start": "00:00", "end": "06:23",
+         "activities": [
+           {"time": "...", "icon": "$", "label": "Bash", "detail": "..."},
+           {"time": "...", "icon": "~", "label": "Edit", "detail": "..."},
+           {"time": "...", "icon": "◆", "label": "<sha>", "detail": "commit message"},
+           ...
+         ],
+         "subAgents": []
+       }
      ]
    }
    ```
 
-4. If `art.content.projects` is empty (no activity), output
-   `next_phase_input.report = {projects: []}` and let downstream
-   phases short-circuit. Do NOT stop the skill here — empty days
-   are valid (the write phase will simply skip writes).
+   See `agenthud-report` SKILL.md for the full icon table. Two
+   important facts for this orchestrator:
+   - **Multiple sessions can share the same `project`** if the user
+     opened/closed Claude Code more than once that day. Group by
+     `session.project` before summarizing per project.
+   - **Commits are `icon == "◆"`**, with `label` as the short SHA
+     and `detail` as the commit subject.
+
+4. If `art.content.sessions` is empty (no activity), set
+   `next_phase_input.report_by_project = {}` and let downstream
+   phases short-circuit. Do NOT stop the skill — empty days are
+   valid (the write phase will simply skip writes).
 
 5. Output `next_phase_input`:
    ```json
    {
      ...previous fields...,
-     "report": {
-       "target_date": "<from artifact>",
-       "projects": [<verbatim from artifact>]
+     "report_by_project": {
+       "launcher": {
+         "session_count": <int>,
+         "activity_count": <int>,
+         "commits": ["<sha>: <subject>", ...],
+         "labels": ["Bash", "Edit", ...],
+         "sample_responses": ["<first 2-3 Response details>"],
+         "sample_edits": ["<first 2-3 Edit details>"],
+         "sample_bash": ["<first 2-3 Bash details>"]
+       },
+       "skills": {...}
      }
    }
    ```
 
+   Build this dict by grouping `art.content.sessions[]` by
+   `.project`, then for each project's combined `activities`:
+   - `session_count` = number of sessions for this project
+   - `activity_count` = total activities across those sessions
+   - `commits` = entries with `icon == "◆"`, formatted `"{label}: {detail}"`
+   - `labels` = `unique` over `activity.label` for non-commit
+     entries (so "Bash", "Edit", etc. — drop the SHAs)
+   - `sample_*` = first 2-3 `detail` strings per label (truncate
+     each to 200 chars)
+
    `user_facing_summary` (user's language):
-   - non-empty: `"Activity fetched — {N} projects"`
+   - non-empty: `"Activity fetched — {N} projects, {C} commits"`
    - empty: `"No Claude Code activity on {target_date}"`
 
 ### prepare
 
-Summarize each project's raw activity into the Notion row shape.
-This is the LLM-summarization phase — it consumes `report.projects`
-and produces structured Notion page payloads.
+Summarize each project's activity into the Notion row shape.
+LLM-summarization phase — consumes `report_by_project` and produces
+structured Notion page payloads.
 
-1. Read `previous_phase_input.report.projects`. If empty, output
-   `next_phase_input.pages = []` and move on (write phase will skip
-   the run_skill call entirely).
+1. Read `previous_phase_input.report_by_project`. If empty, output
+   `next_phase_input.pages = []` and move on (write phase will
+   skip the run_skill call entirely).
 
-2. For each project, build a `page` object using the
+2. For each project entry, build a `page` object using the
    `notion-page-write` payload shape and the database schema:
 
    ```json
    {
      "properties": {
-       "Project": "<project.name>",
+       "Project": "<project name>",
        "date:Date:start": "<previous_phase_input.target_date>",
        "date:Date:is_datetime": 0,
        "Summary": "<2-4 sentence narrative in user's language>",
-       "Sessions": 1,
-       "Tools used": "<JSON-encoded string of unique tool labels>",
+       "Sessions": <session_count>,
+       "Tools used": "<JSON-encoded string of unique labels>",
        "Status": "<best-guess: in-progress | blocked | done | paused>"
      },
      "content": "<optional markdown body with commit list etc.>"
@@ -214,23 +250,27 @@ and produces structured Notion page payloads.
    ```
 
    **Field rules:**
-   - `parent.type` MUST be `"data_source_id"` (set in next phase, not
-     here — pages[] only needs `properties` and `content`).
+   - `parent.type` MUST be `"data_source_id"` (set in next phase,
+     not here — pages[] only needs `properties` and `content`).
    - `date:Date:start` and `date:Date:is_datetime` are literal
      property keys — that's how the Notion MCP encodes a date column.
    - `Tools used` is a JSON-encoded **string**, not a native array.
-     Example: `"[\"Bash\", \"Edit\", \"Read\"]"`.
+     Use the project's `labels` list — typically `["Bash", "Edit",
+     "Read"]`. Example: `"[\"Bash\", \"Edit\", \"Read\"]"`.
    - `Status` must match one of the schema options exactly.
-   - `Sessions` is a placeholder — `agenthud-report.json` doesn't
-     split sessions per project anymore. Use 1 as the default.
 
    **Summary narrative rules:**
    - 2-4 sentences in the user's language.
-   - Lead with what was SHIPPED (commits) if available.
-   - Otherwise lead with edits / bash / responses (in that order of
-     interestingness).
-   - Cap at ~400 chars to keep the row readable in the Notion table
-     view.
+   - Lead with what was SHIPPED (`commits` list) if non-empty —
+     reference the commit subjects, not the SHAs.
+   - Otherwise lead with `sample_edits` (what files changed) and
+     `sample_responses` (what the agent reported doing).
+   - Cap at ~400 chars to keep the row readable in the Notion
+     table view.
+
+   **`content` body (optional):** if there are commits, include
+   them as a markdown bullet list under "Commits" — this makes the
+   Notion page itself useful for skim-reading what shipped.
 
    **Status inference:**
    - Has commits → `done`
