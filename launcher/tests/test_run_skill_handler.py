@@ -2,13 +2,16 @@
 skill via uv run zipsa run, parses summary.json, returns the routing
 fields the parent needs to chain get_artifact."""
 
+import io
 import json
 import subprocess
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from zipsa.core.hitl_mcp import HitlIO
 from zipsa.core.run_skill_handler import RunSkillHandler
 from zipsa.core.caller_context import CallerInfo, current_caller
 
@@ -18,6 +21,54 @@ def _build_handler(server_mock, children: list[str]):
     h = RunSkillHandler(server=server_mock)
     h._resolve_caller_children = lambda c: children
     return h
+
+
+def _install_child_skill(
+    zipsa_home: Path,
+    name: str,
+    requires_block: str = "",
+    version: str = "0.1.0",
+) -> Path:
+    """Drop a minimal child-skill manifest into ZIPSA_HOME/skills/<name>/
+    so RunSkillHandler can load it before spawning the subprocess.
+    `requires_block` is the inline YAML for `spec.requires:` (or "" for none).
+    """
+    skill_dir = zipsa_home / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    manifest = f"""apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: {name}
+  version: {version}
+  author: test
+  description: |
+    Child skill fixture for requires-resolution tests.
+spec:
+  purpose: |
+    Tiny child skill used only by RunSkillHandler tests.
+  instructions: ./SKILL.md
+{requires_block}
+  tools:
+    builtin: []
+  limits:
+    max_turns: 1
+    max_cost_usd: 0.01
+    timeout_seconds: 5
+"""
+    (skill_dir / "manifest.yaml").write_text(manifest)
+    (skill_dir / "SKILL.md").write_text(f"# {name}\nNo-op test fixture.\n")
+    return skill_dir
+
+
+def _make_hitl_io(stdin_text: str = "", is_interactive: bool = True) -> HitlIO:
+    """HitlIO wired to StringIO so tests can drive prompts without sockets."""
+    stdin = io.StringIO(stdin_text)
+    stdout = io.StringIO()
+    return HitlIO(
+        stdin=stdin, stdout=stdout,
+        stdout_lock=threading.Lock(),
+        is_interactive=is_interactive,
+    )
 
 
 def _make_summary(run_dir: Path, status: str = "ok", skill: str = "alpha",
@@ -63,7 +114,9 @@ class TestRunSkillHandler:
 
     def test_spawns_subprocess_with_propagated_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
@@ -109,7 +162,9 @@ class TestRunSkillHandler:
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
         monkeypatch.setenv("ZIPSA_CALL_TRACE", "grandparent")
         monkeypatch.setenv("ZIPSA_CALL_DEPTH", "2")
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
@@ -131,7 +186,9 @@ class TestRunSkillHandler:
 
     def test_child_failed_status_propagates(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
@@ -156,7 +213,9 @@ class TestRunSkillHandler:
         """If the subprocess completes but no summary.json is found,
         surface a clean error."""
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:
@@ -218,7 +277,9 @@ class TestRunSkillHandler:
         depth+1 and trace+(caller,) so the child's OWN run_skill calls
         see an accurate chain."""
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo(
             "parent", "1.0.0", depth=2, trace=("gp", "p"),
@@ -253,13 +314,197 @@ class TestRunSkillHandler:
         from zipsa.core.run_skill_handler import _MAX_CALL_DEPTH as handler_max
         assert cli_max == handler_max
 
+    def test_child_with_no_requires_proceeds(self, tmp_path, monkeypatch):
+        """Baseline: child has no spec.requires → no resolution attempted,
+        subprocess spawned normally. Guards against the new code path
+        adding a regression when there's nothing to resolve."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(tmp_path, "alpha")
+        server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo("parent", "1.0.0"))
+        try:
+            run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
+            _make_summary(run_dir)
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
+                h._find_latest_run_dir = lambda name: run_dir
+                result = h.run(name="alpha", args="")
+            assert result["status"] == "ok"
+            mock_run.assert_called_once()
+        finally:
+            current_caller.set(None)
+
+    def test_child_not_installed_returns_clean_error(self, tmp_path, monkeypatch):
+        """If the child name passed children-allowlist check but is not
+        actually installed (no ~/.zipsa/skills/<name>/ dir), fail with
+        `child_not_installed` BEFORE attempting subprocess spawn. This is
+        a guard so the new requires-resolution path can rely on
+        installed_skill_dir existing."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        # Note: NOT calling _install_child_skill here
+        server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo("parent", "1.0.0"))
+        try:
+            with patch("subprocess.Popen") as mock_run:
+                result = h.run(name="alpha", args="")
+            assert result["status"] == "failed"
+            assert result["error"]["code"] == "child_not_installed"
+            mock_run.assert_not_called()
+        finally:
+            current_caller.set(None)
+
+    def test_child_with_existing_requires_yaml_skips_prompt(
+        self, tmp_path, monkeypatch
+    ):
+        """If the child already has a valid requires.yaml, no prompt fires —
+        subprocess spawns immediately. Verifies we don't unconditionally
+        re-prompt on every nested invocation."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        # Real existing directories so list[directory] validation passes
+        proj1 = tmp_path / "projects" / "p1"
+        proj1.mkdir(parents=True)
+        _install_child_skill(
+            tmp_path, "alpha",
+            requires_block=(
+                "  requires:\n"
+                "    project_roots:\n"
+                "      type: list[directory]\n"
+                "      prompt: |\n"
+                "        Paths?\n"
+            ),
+        )
+        # Pre-populate requires.yaml
+        from zipsa.core.requires import save_requires
+        from zipsa.paths import skill_requires_file
+        req_file = skill_requires_file("alpha", "0.1.0")
+        save_requires(req_file, {"project_roots": [str(proj1)]})
+
+        # stdin EMPTY: a prompt firing would EOF immediately and fail the test
+        server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io(stdin_text="", is_interactive=True)
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo("parent", "1.0.0"))
+        try:
+            run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
+            _make_summary(run_dir)
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
+                h._find_latest_run_dir = lambda name: run_dir
+                result = h.run(name="alpha", args="")
+            assert result["status"] == "ok"
+            mock_run.assert_called_once()
+            # stdin must remain unread
+            assert server._io.stdin.read() == ""
+        finally:
+            current_caller.set(None)
+
+    def test_child_with_unset_requires_prompts_via_parent_stdin(
+        self, tmp_path, monkeypatch
+    ):
+        """The point of the fix. Parent is interactive (real stdin/stdout
+        via its HitlIO), child has spec.requires but no requires.yaml.
+        run_skill must prompt the user via the PARENT's stdin (the only
+        real terminal in the call chain), save the child's requires.yaml,
+        then spawn the subprocess — which can now read the file without
+        needing its own TTY."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        proj1 = tmp_path / "projects" / "p1"
+        proj1.mkdir(parents=True)
+        _install_child_skill(
+            tmp_path, "alpha",
+            requires_block=(
+                "  requires:\n"
+                "    project_roots:\n"
+                "      type: list[directory]\n"
+                "      prompt: |\n"
+                "        Paths? (one per line, empty line to finish)\n"
+            ),
+        )
+        # stdin feeds one path then a blank line to terminate the list
+        stdin_text = f"{proj1}\n\n"
+        server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io(
+            stdin_text=stdin_text, is_interactive=True,
+        )
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo("parent", "1.0.0"))
+        try:
+            run_dir = tmp_path / "alpha@0.1.0" / "runs" / "r1"
+            _make_summary(run_dir)
+            with patch("subprocess.Popen") as mock_run:
+                proc = MagicMock()
+                proc.poll.return_value = 0
+                proc.returncode = 0
+                proc.communicate.return_value = (b"", b"")
+                mock_run.return_value = proc
+                h._find_latest_run_dir = lambda name: run_dir
+                result = h.run(name="alpha", args="")
+
+            # Resolution must have persisted child's requires.yaml
+            from zipsa.paths import skill_requires_file
+            from zipsa.core.requires import load_requires
+            saved = load_requires(skill_requires_file("alpha", "0.1.0"))
+            assert saved == {"project_roots": [str(proj1)]}
+
+            # Subprocess spawned AFTER resolution succeeded
+            assert result["status"] == "ok"
+            mock_run.assert_called_once()
+        finally:
+            current_caller.set(None)
+
+    def test_child_with_unset_requires_fails_when_parent_not_interactive(
+        self, tmp_path, monkeypatch
+    ):
+        """If the parent itself is non-interactive (e.g., cron, redirected
+        stdin), we cannot prompt the user. Fail with a clear MCP error
+        code so the orchestrator agent surfaces a usable message instead
+        of swallowing an opaque subprocess exit 4."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_child_skill(
+            tmp_path, "alpha",
+            requires_block=(
+                "  requires:\n"
+                "    project_roots:\n"
+                "      type: list[directory]\n"
+                "      prompt: |\n"
+                "        Paths?\n"
+            ),
+        )
+        server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io(stdin_text="", is_interactive=False)
+        h = _build_handler(server, children=["alpha"])
+        current_caller.set(CallerInfo("parent", "1.0.0"))
+        try:
+            with patch("subprocess.Popen") as mock_run:
+                result = h.run(name="alpha", args="")
+            assert result["status"] == "failed"
+            assert result["error"]["code"] == "child_requires_unset"
+            assert "project_roots" in result["error"]["message"]
+            mock_run.assert_not_called()
+        finally:
+            current_caller.set(None)
+
     def test_child_timeout_returns_failed(self, tmp_path, monkeypatch):
         """Timeout is enforced by our own poll loop (Popen-based) so we
         can simulate it by having poll() always return None and shrinking
         the timeout env var to ~0."""
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
         monkeypatch.setenv("ZIPSA_RUN_SKILL_TIMEOUT", "0")
+        _install_child_skill(tmp_path, "alpha")
         server = MagicMock(port=12345, token="parent-tok")
+        server._io = _make_hitl_io()
         h = _build_handler(server, children=["alpha"])
         current_caller.set(CallerInfo("parent", "1.0.0"))
         try:

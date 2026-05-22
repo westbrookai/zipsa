@@ -86,6 +86,16 @@ class RunSkillHandler:
                 },
             }
 
+        # Resolve the child's spec.requires from the PARENT's stdin if
+        # needed. Child subprocesses are spawned with stdin=DEVNULL (HITL
+        # routes through MCP, not stdin), so a child whose requires.yaml
+        # is missing would otherwise exit 4 immediately. We do the
+        # resolution here, write the child's requires.yaml, then spawn —
+        # the child reads the file like any other invocation.
+        requires_fail = self._resolve_child_requires(name)
+        if requires_fail is not None:
+            return requires_fail
+
         # Mint and register child token with the full chain so that when
         # the child itself calls run_skill, _its_ caller resolves with
         # accurate depth/trace.
@@ -215,6 +225,61 @@ class RunSkillHandler:
         existing_depth = int(env.get("ZIPSA_CALL_DEPTH", "0"))
         env["ZIPSA_CALL_DEPTH"] = str(existing_depth + 1)
         return env
+
+    def _resolve_child_requires(self, name: str) -> Optional[dict]:
+        """Ensure the child's spec.requires is satisfied before spawn.
+
+        Loads the child skill from the installed dir, classifies its
+        requires state, and — if anything still needs prompting — drives
+        `resolve_requires` against the PARENT's HitlIO (the only stdin in
+        the call chain that's actually attached to a terminal). On
+        success, the child's requires.yaml is written to disk and the
+        child subprocess can read it normally despite running with
+        stdin=DEVNULL.
+
+        Returns None when the child is good to spawn. Returns a fail dict
+        (same shape as `_fail`) when something blocks spawn, so the
+        caller can `return` it directly.
+        """
+        from .skill import Skill
+        from .requires import RequiresError, resolve_requires
+
+        install = zipsa_paths.installed_skill_dir(name)
+        if not install.exists():
+            return self._fail(
+                "child_not_installed",
+                f"'{name}' is not installed under ZIPSA_HOME/skills/",
+            )
+        try:
+            child_skill = Skill.load(install)
+        except Exception as e:
+            return self._fail("child_unloadable", str(e))
+
+        spec_requires = child_skill.manifest.spec.requires
+        if not spec_requires:
+            return None
+
+        io_ = getattr(self._server, "_io", None)
+        if io_ is None:
+            # HitlServer should always have _io. Fail loud rather than
+            # silently dropping the resolution.
+            return self._fail(
+                "parent_io_unavailable",
+                "parent HitlServer has no _io reference for requires prompt",
+            )
+
+        try:
+            resolve_requires(
+                child_skill.name,
+                child_skill.manifest.metadata.version,
+                spec_requires,
+                io_.stdin,
+                io_.stdout,
+                is_interactive=io_.is_interactive,
+            )
+        except RequiresError as e:
+            return self._fail("child_requires_unset", str(e))
+        return None
 
     def _resolve_caller_children(self, caller: CallerInfo) -> list[str]:
         """Load caller's manifest, return spec.children.
