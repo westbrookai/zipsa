@@ -2670,3 +2670,85 @@ class TestResumeChainState:
             (new_run / "phases" / "0-precheck" / "state.json").read_text()
         )
         assert b_precheck["next_phase_input"] == {"i": 0}
+
+
+class TestHitlIOMeasureWait:
+    """HitlIO accumulates time spent in stdin.readline so summary.json
+    can report hitl_wait_seconds (skill compute time = duration - hitl
+    wait)."""
+
+    def test_measure_wait_accumulates(self):
+        import io as _io
+        import threading as _t
+        import time as _time
+        from zipsa.core.hitl_mcp import HitlIO
+
+        h = HitlIO(stdin=_io.StringIO(""), stdout=_io.StringIO(),
+                   stdout_lock=_t.Lock(), is_interactive=True)
+        assert h.hitl_wait_seconds[0] == 0.0
+        with h.measure_wait():
+            _time.sleep(0.01)
+        assert h.hitl_wait_seconds[0] >= 0.01
+        # Cumulative
+        with h.measure_wait():
+            _time.sleep(0.01)
+        assert h.hitl_wait_seconds[0] >= 0.02
+
+    def test_ask_handler_accumulates_wait(self):
+        import io as _io
+        import threading as _t
+        from zipsa.core.hitl_mcp import HitlIO, AskHandler
+
+        h = HitlIO(stdin=_io.StringIO("answer\n"), stdout=_io.StringIO(),
+                   stdout_lock=_t.Lock(), is_interactive=True)
+        result = AskHandler(h).run(prompt="what?")
+        assert result == "answer"
+        # readline on a pre-loaded StringIO returns immediately, but the
+        # context manager still added some non-negative delta.
+        assert h.hitl_wait_seconds[0] >= 0.0
+
+
+class TestSummaryChainFields:
+    """build_summary writes chain_started_at, chain_duration_seconds,
+    hitl_wait_seconds, and resumed_from."""
+
+    def test_chain_fields_default_to_self(self):
+        from datetime import datetime, timedelta, timezone
+        from zipsa.core.summary import build_summary, PhaseSummary
+
+        t0 = datetime(2026, 5, 22, 10, 0, 0, tzinfo=timezone.utc)
+        t1 = t0 + timedelta(seconds=30)
+        s = build_summary(
+            status="ok", exit_code=0, skill="x", version="0.1.0",
+            started_at=t0, finished_at=t1, cost_usd=0.05, turns=2,
+            phases=[PhaseSummary(id="p", status="ok", cost_usd=0.05, turns=2)],
+        )
+        assert s["chain_started_at"] == t0.isoformat()
+        assert s["chain_duration_seconds"] == 30.0
+        assert s["hitl_wait_seconds"] == 0.0
+        assert s["resumed_from"] is None
+
+    def test_chain_fields_propagate_on_resume(self):
+        from datetime import datetime, timedelta, timezone
+        from zipsa.core.summary import build_summary, PhaseSummary
+
+        chain_origin = datetime(2026, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
+        this_start = datetime(2026, 5, 22, 10, 0, 0, tzinfo=timezone.utc)
+        this_end = this_start + timedelta(seconds=20)
+
+        s = build_summary(
+            status="ok", exit_code=0, skill="x", version="0.1.0",
+            started_at=this_start, finished_at=this_end,
+            cost_usd=0.10, turns=3,
+            phases=[PhaseSummary(id="p", status="ok", cost_usd=0.10, turns=3)],
+            chain_started_at=chain_origin,
+            resumed_from="2026-05-22_090000_000000",
+            hitl_wait_seconds=120.0,
+        )
+        # This run alone: 20s
+        assert s["duration_seconds"] == 20.0
+        # Chain: 1h 20s (3620s)
+        assert s["chain_duration_seconds"] == 3620.0
+        assert s["chain_started_at"] == chain_origin.isoformat()
+        assert s["hitl_wait_seconds"] == 120.0
+        assert s["resumed_from"] == "2026-05-22_090000_000000"
