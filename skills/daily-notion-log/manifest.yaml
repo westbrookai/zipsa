@@ -1,0 +1,129 @@
+apiVersion: zipsa.dev/v1alpha1
+kind: Skill
+metadata:
+  name: daily-notion-log
+  version: 0.1.0
+  author: westbrookai
+  description: |
+    Orchestrator: fetch a day's Claude Code activity via the atomic
+    agenthud-report skill, summarize per project, and persist one
+    Notion row per project via the atomic notion-page-write skill.
+    Owns the per-user UX (workspace/db ask_once + DB resolution).
+  tags: [orchestrator, productivity, notion, claude-code]
+
+spec:
+  purpose: |
+    For a target date (default: yesterday), compose agenthud-report
+    + notion-page-write into a daily progress log. This orchestrator
+    handles all user prompts (Notion workspace/db); atomic children
+    handle data fetch and persistence.
+
+  instructions: ./SKILL.md
+
+  default_query: yesterday
+
+  # Sonnet by default — prepare phase summarizes per-project work
+  # into Notion-row narratives (2-4 sentences each, in user's
+  # language). precheck/fetch/write override to Haiku since they are
+  # mechanical (MCP call routing, JSON construction).
+  model:
+    name: claude-sonnet-4-6
+
+  # Atomic children this orchestrator is permitted to invoke via
+  # mcp__zipsa__run_skill. The launcher rejects any other skill name.
+  children:
+    - agenthud-report
+    - notion-page-write
+
+  # Notion MCP for precheck's database resolution. The atomic
+  # notion-page-write child has its own Notion MCP for the actual
+  # writes; this one is only used here.
+  mcp:
+    - name: notion
+      type: http
+      url: https://mcp.notion.com/mcp
+      auth:
+        type: oauth2
+      allowed_tools:
+        - notion-search
+        - notion-fetch
+        - notion-create-database
+
+  tools:
+    builtin: []
+
+  config:
+    default_target_date: yesterday
+
+  state_schema:
+    db_id:
+      type: string
+    data_source_id:
+      type: string
+    last_run_date:
+      type: string
+
+  phases:
+    - id: precheck
+      goal: |
+        Verify Notion connectivity, resolve target date from
+        user_query, ask_once for notion_workspace + notion_db_name,
+        locate or create the Notion database, capture db_id and
+        data_source_id.
+      # Mechanical-ish (MCP search/fetch + ask_once). Haiku handles
+      # it; ~25x cheaper than Sonnet on this kind of work.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools:
+        - mcp__notion__notion-search
+        - mcp__notion__notion-fetch
+        - mcp__notion__notion-create-database
+      limits:
+        max_turns: 10
+        max_cost_usd: 0.15
+        timeout_seconds: 120
+
+    - id: fetch
+      goal: |
+        Invoke mcp__zipsa__run_skill("agenthud-report", target_date),
+        read the agenthud-report.json artifact via
+        mcp__zipsa__get_artifact, surface it on next_phase_input.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.10
+        timeout_seconds: 300
+
+    - id: prepare
+      goal: |
+        Summarize each project's raw activity into a Notion-row
+        payload (Project, date, Summary, Sessions, Tools used,
+        Status). 2-4 sentence narratives in user's language.
+      # Sonnet (inherited) — this is the creative summarization phase.
+      allowed_tools: []
+      limits:
+        max_turns: 8
+        max_cost_usd: 0.40
+        timeout_seconds: 240
+
+    - id: write
+      goal: |
+        Build the notion-page-write JSON payload
+        (data_source_id + pages[]) and invoke
+        mcp__zipsa__run_skill("notion-page-write", <payload>).
+        Read the notion-pages.json artifact for created URLs.
+      model:
+        name: claude-haiku-4-5-20251001
+      allowed_tools: []
+      limits:
+        max_turns: 6
+        max_cost_usd: 0.10
+        timeout_seconds: 180
+
+  # Aggregate run limits (sum across phases + buffer).
+  limits:
+    max_turns: 35        # 10 + 6 + 8 + 6 = 30 + buffer
+    max_cost_usd: 0.80
+    timeout_seconds: 900 # 120 + 300 + 240 + 180 = 840 + buffer
