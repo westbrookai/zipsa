@@ -361,6 +361,17 @@ spec:
         # docker would silently make a root-owned empty dir on first run.
         assert expected_host.exists()
 
+    def _mount_args(self, cmd: list[str]) -> list[str]:
+        """Extract just the `host:container[:mode]` mount specs from a
+        docker run command, so assertions don't false-match on the same
+        substring appearing inside the embedded system prompt.
+
+        Docker's CLI uses `-v <spec>` pairs.
+        """
+        return [
+            cmd[i + 1] for i, tok in enumerate(cmd[:-1]) if tok == "-v"
+        ]
+
     def test_build_docker_command_no_children_no_mount(
         self, tmp_path, monkeypatch
     ):
@@ -373,7 +384,8 @@ spec:
             skill=parent, user_input="x",
             claude_json_path=claude_json_path, env={},
         )
-        assert "/home/agent/children/" not in " ".join(cmd)
+        mounts = self._mount_args(cmd)
+        assert not any("/home/agent/children/" in m for m in mounts)
 
     def test_build_docker_command_skips_uninstalled_child(
         self, tmp_path, monkeypatch
@@ -391,7 +403,8 @@ spec:
             skill=parent, user_input="x",
             claude_json_path=claude_json_path, env={},
         )
-        assert "/home/agent/children/beta/" not in " ".join(cmd)
+        mounts = self._mount_args(cmd)
+        assert not any("/home/agent/children/beta/" in m for m in mounts)
 
     @patch("zipsa.core.executor.subprocess.Popen")
     def test_run_creates_claude_config(self, mock_popen, tmp_path):
