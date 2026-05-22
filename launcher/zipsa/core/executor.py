@@ -1505,6 +1505,38 @@ class DockerExecutor:
         # helper scripts (e.g. scripts/post.py) and reach them at /skill.
         cmd.extend(["-v", f"{skill.skill_dir}:/skill:ro"])
 
+        # Auto-mount each declared child skill's runs directory (read-only)
+        # at /home/agent/children/<name>/runs/. Lets the parent agent read
+        # child artifacts directly off the filesystem after
+        # mcp__zipsa__run_skill returns, bypassing Claude SDK's per-tool-
+        # result token cap that get_artifact hits on large outputs (e.g.
+        # agenthud-report on a busy day can produce 200KB+ of JSON, which
+        # Claude truncates and saves to a tool-results file).
+        #
+        # The child's installed manifest is loaded to pin the exact
+        # `<name>@<version>/runs/` host path. Children that aren't
+        # installed are skipped silently here; _validate_children warns
+        # separately at run-time.
+        for child_name in skill.manifest.spec.children:
+            child_install_dir = zipsa_paths.installed_skill_dir(child_name)
+            if not child_install_dir.exists():
+                continue
+            try:
+                child_skill = Skill.load(child_install_dir)
+            except Exception:
+                continue  # don't break parent's start over a broken child
+            child_version = child_skill.manifest.metadata.version
+            child_runs = zipsa_paths.skill_data_dir(
+                child_name, child_version
+            ) / "runs"
+            # docker bind-mount of a missing source materializes a
+            # root-owned empty dir on first run — mkdir first.
+            child_runs.mkdir(parents=True, exist_ok=True)
+            cmd.extend([
+                "-v",
+                f"{child_runs}:/home/agent/children/{child_name}/runs:ro",
+            ])
+
         # MCP debug file mount (bind-mount host log file into container)
         if mcp_debug_host:
             cmd.extend(["-v", f"{mcp_debug_host}:/home/agent/mcp-debug.log"])
