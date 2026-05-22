@@ -5,14 +5,27 @@ persistence skill — no formatting decisions, no summarization.
 
 ## Atomic skill contract
 
-This is an **atomic** skill:
+This is an **atomic** skill: a leaf in the call graph — it does NOT
+call `mcp__zipsa__run_skill`, so it can be composed by orchestrators
+without depth/cycle concerns. Single-responsibility: persist a
+pre-formed Notion payload, no formatting decisions, no summarization,
+no knowledge of the data's domain (daily logs, tweets, etc.).
 
-- One input: a JSON payload describing where to write and what to write.
+For this particular skill:
+
+- One input: a JSON payload describing the target data source and
+  pages to create.
 - One output: a JSON artifact at `artifacts/notion-pages.json` listing
-  the created/updated pages.
-- NO ask, ask_once, confirm, choose, or any user prompts.
-- NO knowledge of the data's domain (daily logs, tweets, etc.).
-- Stateless across runs — no skill memory.
+  the created pages.
+- The caller (orchestrator or human invoker) holds the
+  domain-specific UX — voice, db naming, schema decisions. This
+  skill receives a finished payload and writes it.
+- No agent-time HITL or skill memory needed: the caller passes
+  everything explicitly each call. Notion auth itself is per-skill
+  OAuth via the launcher.
+
+(Atomic skills MAY use HITL or memory in general — per-caller
+routing namespaces them safely. This one just doesn't need to.)
 
 Orchestrator skills (or any other caller) build the payload, invoke
 this skill via `mcp__zipsa__run_skill`, and read the artifact.
@@ -111,8 +124,9 @@ a message naming the first problem found.
 
 ## Constraints
 
-- This skill does NOT call any user-facing MCP tool.
-- This skill does NOT read or write skill memory.
+- This skill does NOT call `mcp__zipsa__run_skill` (atomic = leaf).
 - This skill does NOT format, summarize, or transform page content —
-  it passes `properties`/`children` through to Notion verbatim.
+  it passes `properties`/`children` through to Notion verbatim. The
+  caller owns those decisions.
+- Output is exclusively via the artifact + the `result` field.
 - Output language is English.

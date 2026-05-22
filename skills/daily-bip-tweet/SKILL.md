@@ -7,15 +7,28 @@ voice, run a Korean-language review loop, and publish via the atomic
 
 ## Orchestrator skill contract
 
-This is an **orchestrator** — it owns all user-facing UX (`ask_once`
-for setup, HITL review loop, error surfacing) and composes atomic
-skills to do the actual fetch and publish. Atomic dependencies:
+This is an **orchestrator** skill: a composer that calls
+`mcp__zipsa__run_skill` to delegate the heavy lifting to atomic
+children. It owns the cross-cutting UX — voice management, BIP
+research, draft+review loop — and emits a single coherent flow to
+the user. Atomic children:
 
 - `agenthud-report` — fetches per-project Claude Code activity
 - `x-post` — publishes the approved tweet text to X
 
 Composition uses `mcp__zipsa__run_skill` (declared in
 `spec.children`) and `mcp__zipsa__get_artifact` (always available).
+
+Note on UX boundaries: atomic children may have their own UX too
+(per-caller routing namespaces their memory and prompts safely). The
+split is by responsibility, not "atomic == silent". `agenthud-report`
+owns its `project_roots` prompt because agenthud itself needs the
+mounted paths. `x-post` is genuinely stateless — it gets the
+finished tweet from the caller. `voice` lives in THIS orchestrator's
+memory because tweet voice is a daily-bip-tweet decision; if a
+future second tweet orchestrator wants the same voice, the right
+fix is to extract a `tweet-voice` atomic and have both orchestrators
+call it (BACKLOG until that second orchestrator exists).
 
 ## Language Policy
 
@@ -41,9 +54,11 @@ this phase produces.
 **Launcher-resolved (before container starts):**
 
 No `spec.requires` on this skill. `project_roots` belongs to the
-atomic `agenthud-report` skill, where agenthud actually runs. First
-time `agenthud-report` is invoked as a child, the launcher prompts
-for `project_roots` against that skill.
+atomic `agenthud-report` skill, where agenthud actually runs. On
+first invocation, the launcher prompts for `project_roots` against
+`agenthud-report` via the parent HitlServer's stdin — the user sees
+the prompt at the top-level terminal. Subsequent invocations read
+the saved value.
 
 **Environment (via `~/.zipsa/.env`):**
 
@@ -375,8 +390,11 @@ The `tweet_id` is the durable key for "what posted when".
 
 - Do NOT call the X API directly — only via `mcp__zipsa__run_skill(name="x-post", ...)`.
 - Single tweet only — no threads, no replies, no attachments in v0.1.
-- HITL phases (precheck, review) MUST NOT call
-  `mcp__zipsa__run_skill` — the launcher enforces this via separate
-  phase IDs.
+- Phase isolation convention: phases that use HITL (precheck, review)
+  do not also call `mcp__zipsa__run_skill`, and vice versa. The
+  launcher does not enforce this — both tool families are always
+  available — but mixing them in one phase tangles user-interaction
+  policy with child-skill orchestration. Keep them in separate
+  phases for reviewability.
 - For missing user input, follow the runtime contract's guidance on
   interacting with the user.

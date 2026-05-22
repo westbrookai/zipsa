@@ -7,9 +7,11 @@ skill.
 
 ## Orchestrator skill contract
 
-This is an **orchestrator** skill — it owns all user-facing UX
-(`ask_once` for setup, error surfacing) and composes atomic skills
-to do the actual work. The atomic skills it depends on:
+This is an **orchestrator** skill: a composer that calls
+`mcp__zipsa__run_skill` to delegate work to atomic children. It owns
+its own UX for cross-cutting decisions (Notion workspace/db naming,
+target-date parsing) and surfaces the run as a single coherent flow
+to the user. Atomic children it composes:
 
 - `agenthud-report` — fetches per-project Claude Code activity
 - `notion-page-write` — persists pre-formed Notion pages
@@ -17,17 +19,22 @@ to do the actual work. The atomic skills it depends on:
 Composition uses `mcp__zipsa__run_skill` (declared in `spec.children`)
 and `mcp__zipsa__get_artifact` (always available).
 
+Note on UX boundaries: atomic children may have their own UX too
+(per-caller routing namespaces their memory and prompts safely). The
+split is by responsibility, not by "atomic == silent". `agenthud-report`
+owns its own `project_roots` prompt because that value is needed by
+agenthud itself — see Per-user setup below.
+
 ## Per-user setup
 
 **Launcher-resolved (before container starts):**
 
-No `spec.requires` on this skill — the launcher mount path for
-`project_roots` belongs to the atomic `agenthud-report` skill, where
-agenthud actually runs. This orchestrator never invokes agenthud
-directly; it asks `agenthud-report` to do it. The first time
-`agenthud-report` runs as a child, the launcher will prompt for
-`project_roots` for that skill. The user only sets it once per atomic
-skill version.
+No `spec.requires` on this skill. `project_roots` belongs to the
+atomic `agenthud-report` skill (where agenthud actually runs and
+needs the mounted paths). On first invocation, the launcher prompts
+for `project_roots` against `agenthud-report` via the parent
+HitlServer's stdin — the user sees the prompt at the top-level
+terminal. Subsequent invocations read the saved value.
 
 **Agent-time prompts (remembered in skill memory):**
 
@@ -305,11 +312,14 @@ payload.
 - This orchestrator does NOT invoke any user-facing MCP tool other
   than `ask_once` in precheck and (implicit) `ask` calls from
   inside `ask_once` if needed.
-- HITL phases (precheck) MUST NOT call `mcp__zipsa__run_skill` —
-  the launcher's per-phase manifest enforces this via separate
-  phase IDs.
+- Phase isolation convention: a phase that uses HITL (precheck) does
+  not also call `mcp__zipsa__run_skill`, and vice versa. The launcher
+  does not enforce this — both tool families are always available —
+  but mixing them in one phase tangles user-interaction policy with
+  child-skill orchestration. Keep them in separate phases for
+  reviewability.
 - This orchestrator does NOT modify Claude session files (it never
-  invokes agenthud directly).
+  invokes agenthud directly — `agenthud-report` does).
 - This orchestrator only touches the Notion database named by
   `notion_db_name` and (if needed) the parent page named by
   `notion_workspace`. Never touch other databases or pages.

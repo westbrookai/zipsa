@@ -5,14 +5,23 @@ Atomic publish skill — no drafting, no review, no voice.
 
 ## Atomic skill contract
 
-This is an **atomic** skill:
+This is an **atomic** skill: a leaf in the call graph — it does NOT
+call `mcp__zipsa__run_skill`. Single-responsibility: publish one
+approved tweet, nothing else (no drafting, no review loop, no voice).
+
+For this particular skill:
 
 - One input: the exact tweet text to publish.
 - One output: a JSON artifact at `artifacts/tweet-result.json` with
   the resulting tweet's id and URL.
-- NO ask, ask_once, confirm, choose, or any user prompts.
-- NO drafting, summarization, or content transformation.
-- Stateless across runs — no skill memory.
+- All content decisions (voice, drafting, review/approval) live in
+  the caller. This skill receives a finished string and publishes it.
+- No agent-time HITL or skill memory needed: the caller passes the
+  text each call. X credentials come from `~/.zipsa/.env` (launcher
+  injects automatically).
+
+(Atomic skills MAY use HITL or memory in general — per-caller
+routing namespaces them safely. This one just doesn't need to.)
 
 Orchestrator skills compose this for "I have an approved tweet text;
 publish it."
@@ -106,9 +115,9 @@ problem.
 
 ## Constraints
 
-- This skill does NOT call any user-facing MCP tool.
-- This skill does NOT read or write skill memory.
+- This skill does NOT call `mcp__zipsa__run_skill` (atomic = leaf).
 - This skill does NOT modify the tweet text (no trimming beyond
-  whitespace boundaries, no character substitution).
+  whitespace boundaries, no character substitution). The caller's
+  approved text is published verbatim.
 - Single tweet only — no threads, no replies, no media.
 - Output language is English.
