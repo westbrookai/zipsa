@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-notion-log
-  version: 0.2.0
+  version: 0.2.1
   author: westbrookai
   description: |
     Orchestrator: fetch a day's Claude Code activity via the atomic
