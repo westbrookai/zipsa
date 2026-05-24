@@ -196,8 +196,37 @@ and read its artifact.
    }
    ```
 
-   Group `art.content.sessions[]` by `.project`, scan
-   `activities[]`, filter by `icon` to populate each bucket.
+   A single jq one-liner produces this shape; run it and capture
+   stdout, then put the parsed result into `next_phase_input`:
+
+   ```bash
+   jq '{
+     commits: [.sessions[] as $s | $s.activities[]
+                | select(.icon == "◆")
+                | {project: $s.project, sha: .label, subject: .detail}],
+     by_project: (
+       [.sessions[] | {project, activities}]
+       | group_by(.project) | map({
+           project: .[0].project,
+           activities: [.[].activities[]]
+         }) | map({
+           key: .project,
+           value: {
+             edit_count:     ([.activities[] | select(.icon == "~")] | length),
+             bash_count:     ([.activities[] | select(.icon == "$")] | length),
+             response_count: ([.activities[] | select(.icon == "<")] | length),
+             sample_responses: ([.activities[] | select(.icon == "<") | .detail[:200]] | .[:3]),
+             sample_edits:     ([.activities[] | select(.icon == "~") | .detail] | unique | .[:3])
+           }
+         }) | from_entries
+     )
+   }' "$ART"
+   ```
+
+   Shell-quoting: the whole filter is single-quoted; the `$s`
+   inside is jq's variable syntax, not a shell variable — it stays
+   intact. Use **explicit `{key: .key}` form** as in agenthud-report —
+   the `{key1, key2}` shorthand can be mangled by some wrappers.
 
 6. Output `next_phase_input`:
    ```json
