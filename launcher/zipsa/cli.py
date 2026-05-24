@@ -633,6 +633,14 @@ def list_installed():
         else:
             label = ""
 
+        # Orchestrator label: any skill that declares spec.children
+        # is a composer. Surfacing this at-a-glance + listing the
+        # children with their installed versions lets the user spot
+        # missing children before runtime (vs the exit-4 from #83
+        # which only fires at `zipsa run`).
+        children_names: list[str] = list(skill.manifest.spec.children or [])
+        orch_label = typer.style(" (orchestrator)", fg=typer.colors.BRIGHT_MAGENTA) if children_names else ""
+
         if health.requires_total > 0 and health.requires_set < health.requires_total:
             warn = typer.style(
                 f"  ⚠ needs configure ({health.requires_total} required, "
@@ -642,7 +650,7 @@ def list_installed():
         else:
             warn = ""
 
-        typer.echo(f"  {name}{version}{label}{warn}")
+        typer.echo(f"  {name}{version}{orch_label}{label}{warn}")
 
         if entry["total_runs"] == 0:
             typer.echo(typer.style("    never run", fg=typer.colors.BRIGHT_BLACK))
@@ -652,6 +660,38 @@ def list_installed():
             runs_str = typer.style(f"{entry['total_runs']} runs", fg=typer.colors.WHITE)
             pct_str = typer.style(f"{success_pct}% success", fg=pct_color)
             typer.echo(f"    {runs_str} · {pct_str}")
+
+        # Children tree (orchestrators only). Box-drawing prefixes:
+        # ├─ for non-last, └─ for last. Each line shows the child's
+        # installed @version or a red "not installed" marker.
+        if children_names:
+            for idx, child_name in enumerate(children_names):
+                is_last = idx == len(children_names) - 1
+                prefix = "└─" if is_last else "├─"
+                child_dir = sd / child_name
+                child_health = check_install(child_dir) if child_dir.exists() else None
+                if child_health is None or not child_health.ok:
+                    marker = typer.style("✗ not installed", fg=typer.colors.RED)
+                    typer.echo(
+                        f"    {typer.style(prefix, fg=typer.colors.BRIGHT_BLACK)} "
+                        f"{typer.style(child_name, fg=typer.colors.WHITE)}  {marker}"
+                    )
+                else:
+                    try:
+                        child_skill = Skill.load(child_dir)
+                        child_ver = child_skill.manifest.metadata.version
+                        ver_str = typer.style(f"@{child_ver}", fg=typer.colors.CYAN)
+                        ok = typer.style("✓", fg=typer.colors.GREEN)
+                        typer.echo(
+                            f"    {typer.style(prefix, fg=typer.colors.BRIGHT_BLACK)} "
+                            f"{typer.style(child_name, fg=typer.colors.WHITE)}{ver_str}  {ok}"
+                        )
+                    except Exception as e:
+                        err = typer.style(f"✗ load failed: {str(e).splitlines()[0]}", fg=typer.colors.RED)
+                        typer.echo(
+                            f"    {typer.style(prefix, fg=typer.colors.BRIGHT_BLACK)} "
+                            f"{typer.style(child_name, fg=typer.colors.WHITE)}  {err}"
+                        )
 
         if entry["is_link"]:
             path_str = typer.style(str(entry["item"].resolve()), fg=typer.colors.BRIGHT_BLACK)
@@ -667,6 +707,34 @@ def list_installed():
         typer.echo(f"    {reason}")
         typer.echo(f"    Fix: zipsa install --link <new-path>  (or: zipsa uninstall {entry_name})")
         typer.echo()
+
+
+@app.command(name="where")
+def where(
+    name: Annotated[
+        str,
+        typer.Argument(help="Installed skill name"),
+    ],
+):
+    """Print the install directory of a named skill.
+
+    For linked installs, returns the source path the symlink points
+    to (so editing the file there persists). For copy installs,
+    returns the install dir itself.
+
+    Composable with shell — e.g.
+
+        cat $(zipsa where my-skill)/manifest.yaml
+        vim $(zipsa where my-skill)/SKILL.md
+
+    avoids having to type the long ~/.zipsa/skills/... path.
+    """
+    install_dir = installed_skill_dir(name)
+    if not install_dir.exists():
+        typer.echo(f"Error: skill '{name}' not installed", err=True)
+        raise typer.Exit(1)
+    # symlink → resolve to real source; regular dir → return as-is.
+    typer.echo(str(install_dir.resolve()))
 
 
 @app.command(name="discover")
