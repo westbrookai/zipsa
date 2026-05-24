@@ -335,10 +335,13 @@ class DockerExecutor:
             if skill.manifest.spec.phases:
                 # Multi-phase path: _execute_phases tracks status internally and
                 # yields a zipsa_run_complete event as its last event.
+                # phase_summaries is shared so the finally-block summary
+                # is accurate even when the run is interrupted mid-stream.
                 for event in self._execute_phases(
                     skill, user_input, env, run_dir, claude_json_path,
                     mcp_debug_host is not None, extra_docker_opts,
                     _limits_state_ref=_limits_state_ref,
+                    _phase_summaries_ref=phase_summaries,
                     resume_from=resume_from,
                     resume_from_run_dir=resume_from_run_dir,
                 ):
@@ -516,6 +519,28 @@ class DockerExecutor:
             final_status = "infra_failed"
             final_exit_code = 5
             final_error = {"code": "docker_failed", "message": "Docker exited with non-zero code"}
+            raise
+        except KeyboardInterrupt:
+            # User pressed Ctrl+C — record the run as deliberately ended
+            # by the user (not a crash). The finally below writes
+            # summary.json with these fields, so the run record reflects
+            # actual intent. Also append a synthetic PhaseSummary for
+            # whatever phase was in-flight so cost_usd / turns reflect
+            # the budget actually burned (not 0 from an empty phase list).
+            final_status = "user_declined"
+            final_exit_code = 130
+            final_error = {
+                "code": "user_interrupted",
+                "message": "Run interrupted by user (Ctrl+C)",
+            }
+            ls = _limits_state_ref[0]
+            if ls is not None and ls.phase_turns > 0:
+                phase_summaries.append(PhaseSummary(
+                    id=ls.phase_id,
+                    status="user_declined",
+                    cost_usd=ls.phase_cost_usd,
+                    turns=ls.phase_turns,
+                ))
             raise
         finally:
             if hitl_server is not None:
@@ -935,6 +960,7 @@ class DockerExecutor:
         mcp_debug: bool,
         extra_docker_opts: Optional[list[str]],
         _limits_state_ref: Optional[list] = None,
+        _phase_summaries_ref: Optional[list] = None,
         resume_from: Optional[int] = None,
         resume_from_run_dir: Optional[Path] = None,
     ) -> Iterator[dict]:
@@ -973,8 +999,15 @@ class DockerExecutor:
         if _limits_state_ref is not None:
             _limits_state_ref[0] = shared_limits_state
 
-        # Per-phase rollup for summary.json
-        phase_summaries: list[PhaseSummary] = []
+        # Per-phase rollup for summary.json. Shared via ref with the
+        # caller so that on KeyboardInterrupt mid-run, the caller's
+        # finally-block summary builder sees the phases that completed
+        # before the interrupt — not the empty list it'd see if we
+        # only delivered phase_summaries via the final zipsa_run_complete
+        # event (which never fires when the user hits Ctrl+C).
+        phase_summaries: list[PhaseSummary] = (
+            _phase_summaries_ref if _phase_summaries_ref is not None else []
+        )
 
         # Resume support: when resume_from is set, skip phases
         # 0..resume_from-1 and seed previous_output from the persisted
