@@ -380,6 +380,175 @@ class TestListCommand:
         assert "66%" in result.output
 
 
+class TestListOrchestratorTree:
+    """When a skill declares spec.children, list shows them as an
+    indented tree below the parent with each child's @version and an
+    install-status marker. Lets the user spot missing children at a
+    glance (they'd otherwise only learn at run-time via the
+    `_validate_children` exit-4 from #83)."""
+
+    def _write_skill(self, skills_dir, name: str, version: str = "0.1.0",
+                     children=None):
+        import yaml
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        spec = {
+            "purpose": "x", "instructions": "./SKILL.md",
+            "mcp": [], "tools": {"builtin": []},
+        }
+        if children:
+            spec["children"] = children
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "version": version},
+            "spec": spec,
+        }))
+        (skill_dir / "SKILL.md").write_text(f"# {name}")
+        return skill_dir
+
+    def test_list_shows_children_with_version_under_orchestrator(self, tmp_path):
+        # Pick a parent name without the substring "orchestrator" so
+        # the marker assertion below isn't satisfied by the skill name.
+        zipsa_home = tmp_path / ".zipsa"
+        skills_dir = zipsa_home / "skills"
+        skills_dir.mkdir(parents=True)
+        self._write_skill(skills_dir, "child-a", version="1.2.3")
+        self._write_skill(skills_dir, "child-b", version="0.4.0")
+        self._write_skill(
+            skills_dir, "compose-parent", version="0.1.0",
+            children=["child-a", "child-b"],
+        )
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0, result.output
+        # The literal "(orchestrator)" label — distinct from any skill name
+        assert "(orchestrator)" in result.output
+        # Children appear with their installed versions under the
+        # orchestrator's tree — match the box-drawing prefix
+        # specifically so we're not just catching the top-level
+        # alphabetical listing of each child as its own entry.
+        assert "├─ child-a" in result.output or "├─ \x1b" in result.output  # ANSI may wrap the name
+        assert "child-a" in result.output and "1.2.3" in result.output
+        assert "child-b" in result.output and "0.4.0" in result.output
+        # Tree marker (last child uses └─, not ├─)
+        assert "└─" in result.output
+
+    def test_list_marks_missing_child(self, tmp_path):
+        """An orchestrator whose child isn't installed should be
+        visible at-a-glance (red ✗ or similar marker) so the user
+        fixes it before invoking — without waiting for the run-time
+        exit-4 from _validate_children."""
+        zipsa_home = tmp_path / ".zipsa"
+        skills_dir = zipsa_home / "skills"
+        skills_dir.mkdir(parents=True)
+        # Note: NOT installing 'missing-child'
+        self._write_skill(
+            skills_dir, "orch", version="0.1.0",
+            children=["missing-child"],
+        )
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0, result.output
+        assert "missing-child" in result.output
+        # Some clear marker — ✗ or 'not installed'
+        assert ("✗" in result.output) or ("not installed" in result.output.lower())
+
+    def test_list_atomic_skill_has_no_tree(self, tmp_path):
+        """A skill with empty spec.children stays simple — no
+        '(orchestrator)' label, no tree indentation."""
+        zipsa_home = tmp_path / ".zipsa"
+        skills_dir = zipsa_home / "skills"
+        skills_dir.mkdir(parents=True)
+        self._write_skill(skills_dir, "atomic-skill", version="0.1.0")
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0, result.output
+        assert "atomic-skill" in result.output
+        assert "orchestrator" not in result.output.lower()
+
+
+class TestWhereCommand:
+    """Test where command (print install dir path of a named skill).
+
+    Purpose: composable with shell so the user can do
+        cat $(zipsa where <name>)/manifest.yaml
+    or
+        vim $(zipsa where <name>)/SKILL.md
+    without typing the long ~/.zipsa/skills/... path each time.
+    """
+
+    def _install_link(self, tmp_path, name: str = "linked-skill"):
+        """Create a linked install: ZIPSA_HOME/skills/<name> → source/<name>."""
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        source_dir = tmp_path / "source" / name
+        source_dir.mkdir(parents=True)
+        (source_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "version": "0.1.0"},
+            "spec": {"purpose": "x", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (source_dir / "SKILL.md").write_text("# x")
+        skills_dir_path = zipsa_home / "skills"
+        skills_dir_path.mkdir(parents=True)
+        (skills_dir_path / name).symlink_to(source_dir)
+        return zipsa_home, source_dir
+
+    def _install_copy(self, tmp_path, name: str = "copy-skill"):
+        """Create a copy install: ZIPSA_HOME/skills/<name> is the actual dir."""
+        import yaml
+        zipsa_home = tmp_path / ".zipsa"
+        skill_dir = zipsa_home / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "version": "0.1.0"},
+            "spec": {"purpose": "x", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (skill_dir / "SKILL.md").write_text("# x")
+        return zipsa_home, skill_dir
+
+    def test_where_linked_returns_source_path(self, tmp_path):
+        """For a linked install, `where` returns the SOURCE path the
+        symlink points to (not the symlink itself) — so the user can
+        edit the file at its real location and have their changes stick."""
+        zipsa_home, source_dir = self._install_link(tmp_path, "linked-skill")
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["where", "linked-skill"])
+        assert result.exit_code == 0, result.output
+        # Output must be a single line: the resolved path
+        assert result.stdout.strip() == str(source_dir)
+
+    def test_where_copy_returns_install_path(self, tmp_path):
+        """For a copy install, `where` returns the install dir directly."""
+        zipsa_home, skill_dir = self._install_copy(tmp_path, "copy-skill")
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["where", "copy-skill"])
+        assert result.exit_code == 0, result.output
+        assert result.stdout.strip() == str(skill_dir)
+
+    def test_where_missing_skill_exits_nonzero(self, tmp_path):
+        """Unknown skill name → exit 1 with error on stderr.
+        Important: stdout must remain empty so command substitution
+        like `cat $(zipsa where X)/...` produces a clean error path
+        (cat will then fail with /manifest.yaml, surfacing the issue)."""
+        zipsa_home = tmp_path / ".zipsa"
+        (zipsa_home / "skills").mkdir(parents=True)
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
+            result = runner.invoke(app, ["where", "no-such-skill"])
+        assert result.exit_code == 1
+        assert "no-such-skill" in result.stderr
+        assert result.stdout == ""
+
+
 class TestDiscoverCommand:
     """Test discover command (scan directory for skills)."""
 
