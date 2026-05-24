@@ -1614,7 +1614,7 @@ class TestLimitsIntegration:
             "type": "assistant",
             "message": {
                 "content": [
-                    {"type": "tool_use", "name": "mcp__zipsa__ask", "input": {}},
+                    {"type": "tool_use", "id": "tu_1", "name": "mcp__zipsa__ask", "input": {}},
                 ],
                 "usage": {"input_tokens": 1},
             },

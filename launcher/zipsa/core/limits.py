@@ -53,8 +53,17 @@ class LimitsState:
     run_turns: int = 0
     run_cost_usd: float = 0.0
 
-    # HITL pause tracking — private
+    # HITL pause tracking — private.
+    # _hitl_pending_ids holds the tool_use_ids of currently-open HITL
+    # calls. The wall-clock pause spans from the FIRST id being added
+    # (set was empty) to the LAST id being removed (set becomes empty
+    # again). This correctly handles BOTH serial calls (open→close→
+    # open→close, two distinct pauses summed) AND parallel calls (open
+    # id_A→open id_B→close id_A→close id_B, one pause spanning the
+    # whole pending period — what Claude SDK does when the agent
+    # issues several HITL tools in a single turn).
     _hitl_open_at: Optional[float] = None
+    _hitl_pending_ids: set = field(default_factory=set)
     _phase_hitl_paused: float = 0.0
     _run_hitl_paused: float = 0.0
 
@@ -142,24 +151,37 @@ def update_for_event(state: LimitsState, event: dict, model: str) -> None:
                 state.run_cost_usd += cost
                 if msg_id is not None:
                     state._counted_message_ids.add(msg_id)
-        # HITL pause start: tool_use for an ask/confirm/choose/ask_once
+        # HITL pause start: tool_use for any ask/confirm/choose/ask_once.
+        # Track each tool_use_id; open the pause when the set transitions
+        # from empty to non-empty (handles parallel HITL in one event).
         for block in content:
             if block.get("type") == "tool_use" and block.get("name") in _HITL_TOOL_NAMES:
-                if state._hitl_open_at is None:
+                tid = block.get("id")
+                if tid is None:
+                    continue
+                if not state._hitl_pending_ids and state._hitl_open_at is None:
                     state._hitl_open_at = time.monotonic()
-                break
+                state._hitl_pending_ids.add(tid)
         return
 
     if etype == "user":
-        # HITL pause end: tool_result for the open ask
+        # HITL pause end: each tool_result removes its id from the
+        # pending set. Close the pause when the set becomes empty.
         msg = event.get("message", {}) or {}
         content = msg.get("content") or []
-        if content and content[0].get("type") == "tool_result" and state._hitl_open_at is not None:
-            now = time.monotonic()
-            paused = now - state._hitl_open_at
-            state._phase_hitl_paused += paused
-            state._run_hitl_paused += paused
-            state._hitl_open_at = None
+        for block in content:
+            if block.get("type") != "tool_result":
+                continue
+            tid = block.get("tool_use_id")
+            if tid is None or tid not in state._hitl_pending_ids:
+                continue
+            state._hitl_pending_ids.discard(tid)
+            if not state._hitl_pending_ids and state._hitl_open_at is not None:
+                now = time.monotonic()
+                paused = now - state._hitl_open_at
+                state._phase_hitl_paused += paused
+                state._run_hitl_paused += paused
+                state._hitl_open_at = None
         # Hook-denial detection: any tool_result whose content starts with
         # [HOOK_DENIAL] is the launcher hook's denial response. Counter is
         # checked in check_limits → LimitBreach(kind="hook_denials").
