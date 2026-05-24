@@ -31,17 +31,30 @@ def _assistant_event(model: str, usage: dict, has_thinking: bool = True, msg_id:
     return {"type": "assistant", "message": msg}
 
 
-def _tool_use(name: str) -> dict:
+def _tool_use(name: str, tool_use_id: str = "tu_1") -> dict:
     return {
         "type": "assistant",
-        "message": {"content": [{"type": "tool_use", "name": name, "input": {}}]},
+        "message": {"content": [{"type": "tool_use", "id": tool_use_id, "name": name, "input": {}}]},
     }
 
 
-def _tool_result() -> dict:
+def _tool_result(tool_use_id: str = "tu_1") -> dict:
     return {
         "type": "user",
-        "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_1"}]},
+        "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]},
+    }
+
+
+def _parallel_tool_use(*name_and_ids: tuple) -> dict:
+    """Build an assistant event whose content is multiple tool_use
+    blocks issued together — what Claude SDK emits when the agent
+    asks for several tools in parallel in a single turn."""
+    return {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": {}}
+            for name, tid in name_and_ids
+        ]},
     }
 
 
@@ -192,6 +205,55 @@ class TestUpdateForEvent:
             elapsed = s.phase_compute_elapsed()
         # Wall 30s, no HITL pause -> compute 30s
         assert elapsed == pytest.approx(30.0)
+
+    def test_two_serial_hitl_calls_both_excluded(self):
+        """Two ask_once calls in separate assistant events (e.g.
+        precheck asking voice then interests via two turns). Each
+        ask's wait must be subtracted — previously the second one
+        was silently counted because _hitl_open_at had been cleared
+        by the first close."""
+        s = new_state("p")
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+        # First ask
+        with patch("zipsa.core.limits.time.monotonic", return_value=110.0):
+            update_for_event(s, _tool_use("mcp__zipsa__ask_once", "tu_v"), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=160.0):
+            update_for_event(s, _tool_result("tu_v"), PRICING_MODEL)
+        # Second ask
+        with patch("zipsa.core.limits.time.monotonic", return_value=165.0):
+            update_for_event(s, _tool_use("mcp__zipsa__ask_once", "tu_i"), PRICING_MODEL)
+        with patch("zipsa.core.limits.time.monotonic", return_value=220.0):
+            update_for_event(s, _tool_result("tu_i"), PRICING_MODEL)
+        # Wall: 120s. HITL waits: 50 + 55 = 105s. Compute: 15s.
+        with patch("zipsa.core.limits.time.monotonic", return_value=220.0):
+            elapsed = s.phase_compute_elapsed()
+        assert elapsed == pytest.approx(15.0)
+
+    def test_two_parallel_hitl_calls_both_excluded(self):
+        """Two HITL tool_use blocks in the SAME assistant event
+        (parallel — what Claude SDK emits when agent asks for both
+        at once). Wall-clock pause spans from first open to last
+        close; both waits are excluded, not just the first."""
+        s = new_state("p")
+        with patch("zipsa.core.limits.time.monotonic", return_value=100.0):
+            s.phase_compute_started_at = 100.0
+        # Parallel: voice + interests issued together
+        with patch("zipsa.core.limits.time.monotonic", return_value=110.0):
+            update_for_event(s, _parallel_tool_use(
+                ("mcp__zipsa__ask_once", "tu_v"),
+                ("mcp__zipsa__ask_once", "tu_i"),
+            ), PRICING_MODEL)
+        # User responds to voice
+        with patch("zipsa.core.limits.time.monotonic", return_value=170.0):
+            update_for_event(s, _tool_result("tu_v"), PRICING_MODEL)
+        # User responds to interests
+        with patch("zipsa.core.limits.time.monotonic", return_value=290.0):
+            update_for_event(s, _tool_result("tu_i"), PRICING_MODEL)
+        # Wall: 190s. HITL pause spans 110→290 = 180s. Compute: 10s.
+        with patch("zipsa.core.limits.time.monotonic", return_value=290.0):
+            elapsed = s.phase_compute_elapsed()
+        assert elapsed == pytest.approx(10.0)
 
     def test_ask_once_cached_brief_pause_still_excluded(self):
         """ask_once cache hit: tool_use and tool_result come ~ms apart."""
