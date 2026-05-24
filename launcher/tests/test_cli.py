@@ -1462,8 +1462,13 @@ class TestChildrenValidation:
         (child_dir / "SKILL.md").write_text(f"# {name}")
         return child_dir
 
-    def test_missing_child_emits_warning(self, tmp_path, monkeypatch):
-        """Parent declares a child that isn't installed: warning on stderr."""
+    def test_missing_child_exits_with_error(self, tmp_path, monkeypatch):
+        """Parent declares a child that isn't installed: hard-fail BEFORE
+        spawning the container. Previously this was only a warning, which
+        wasted precheck cost: the orchestrator would run to a phase that
+        eventually called run_skill(missing_child) and only THEN fail
+        with child_not_installed — after the user had already paid for
+        precheck reasoning. Catch it at orchestrator-load time."""
         from typer.testing import CliRunner
         from zipsa.cli import app
 
@@ -1485,9 +1490,14 @@ class TestChildrenValidation:
             ])
             result = runner.invoke(app, ["run", "parent-skill", "hello"])
 
-        assert result.exit_code == 0, result.output
-        assert "Warning" in result.stderr
+        # Hard fail: exit 4 (same code as RequiresUnsetError uses for
+        # "missing configuration before container start").
+        assert result.exit_code == 4, result.output
         assert "missing-child" in result.stderr
+        # Error message must include actionable install hint
+        assert "zipsa install" in result.stderr
+        # Executor must NOT have been called — fail before spawn.
+        executor.run.assert_not_called()
 
     def test_budget_sum_warning(self, tmp_path, monkeypatch):
         """Parent has max_cost_usd=0.05; children sum to $0.10 → budget warning."""

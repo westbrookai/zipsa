@@ -106,9 +106,20 @@ _RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_\d{5}$")
 
 
 def _validate_children(parent: Skill) -> None:
-    """Warn (on stderr) about (a) declared children that aren't installed,
-    (b) sum of children's max_cost_usd / timeout_seconds exceeding
-    parent's. Never raises."""
+    """Validate the parent's declared spec.children.
+
+    Missing/unloadable children are a HARD ERROR (typer.Exit(4)) — the
+    orchestrator cannot complete its job without them, and discovering
+    the gap mid-run wastes precheck budget on reasoning that's destined
+    to fail at the first run_skill call (with child_not_installed from
+    RunSkillHandler). Catch it at load-time so the user gets a clean
+    install hint instead of a confused half-run.
+
+    Budget mismatches (children's max_cost_usd / timeout_seconds sum
+    exceeds parent's) stay as warnings — the run may still complete
+    if the agent stays under budget, and these aren't always wrong
+    (parent might intentionally over-budget for safety margin).
+    """
     skills_dir = zipsa_home() / "skills"
 
     missing = []
@@ -126,10 +137,16 @@ def _validate_children(parent: Skill) -> None:
 
     if missing:
         typer.echo(
-            f"Warning: {parent.name} declares children that can't be loaded:", err=True
+            f"Error: {parent.name} declares children that can't be loaded:",
+            err=True,
         )
         for child_name, reason in missing:
             typer.echo(f"  {child_name}: {reason}", err=True)
+        typer.echo(
+            f"  Run: zipsa install --link skills/<name>  (or zipsa install <source>)",
+            err=True,
+        )
+        raise typer.Exit(4)
 
     parent_limits = parent.manifest.spec.limits
     if parent_limits and child_skills:
