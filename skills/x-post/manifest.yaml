@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: x-post
-  version: 0.1.0
+  version: 0.1.1
   author: westbrookai
   description: |
     Atomic skill: post a single approved tweet text to X via OAuth
@@ -37,9 +37,14 @@ spec:
         Validate tweet text (non-empty, ≤280 chars), run
         /skill/scripts/post.py, parse JSON output, write
         artifacts/tweet-result.json.
+      # Bash(python3) covers the actual X API call; Write is added
+      # defensively so the agent's natural-first-choice tool for
+      # emitting the artifact isn't denied by the hook (same trap
+      # notion-page-write hit in v0.1.0; see #77).
       allowed_tools:
         - Bash(python3:*)
         - Bash(mkdir:*)
+        - Write
       limits:
         max_turns: 6
         max_cost_usd: 0.05
