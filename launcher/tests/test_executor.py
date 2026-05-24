@@ -1906,6 +1906,69 @@ class TestSummaryWritten:
         assert s["error"]["code"] == "some_error"
 
     @patch("zipsa.core.executor.subprocess.Popen")
+    def test_summary_written_on_keyboard_interrupt(self, mock_popen, tmp_path):
+        """Ctrl+C during a run must produce summary.json with
+        status=user_declined, exit_code=130, error.code=user_interrupted —
+        NOT the default infra_failed/5 (which means 'launcher crashed').
+        The user pressed Ctrl+C deliberately; the run record should
+        reflect that, not look like a bug."""
+        from unittest.mock import MagicMock
+        import json as _json
+        import pytest as _pytest
+
+        # First yield a valid assistant message with non-zero usage so
+        # phase_cost > 0, then raise KeyboardInterrupt on the next
+        # readline (simulates the user hitting Ctrl+C mid-run after the
+        # agent has already burned some budget).
+        valid_line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "..."}],
+                "usage": {"input_tokens": 100},
+            },
+        }) + "\n"
+
+        readline_calls = {"n": 0}
+
+        def readline_then_interrupt():
+            readline_calls["n"] += 1
+            if readline_calls["n"] == 1:
+                return valid_line
+            raise KeyboardInterrupt()
+
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = readline_then_interrupt
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.terminate = Mock()
+        mock_process.wait = Mock(return_value=0)
+        mock_process.kill = Mock()
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor = DockerExecutor()
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            with _pytest.raises(KeyboardInterrupt):
+                list(executor.run(skill, "Hi", env={}))
+
+        summary_path = next((tmp_path / "runs").glob("*/summary.json"))
+        s = _json.loads(summary_path.read_text())
+        assert s["status"] == "user_declined", s
+        assert s["exit_code"] == 130, s
+        assert s["error"] is not None
+        assert s["error"]["code"] == "user_interrupted", s["error"]
+        # Cost/turns must reflect what was burned before the interrupt,
+        # not 0. (The default phase_summaries-based total is 0 because
+        # phase_summaries.append() only runs after _execute_skill
+        # returns cleanly. On interrupt, fall back to limits_state.)
+        assert s["cost_usd"] > 0, s
+        assert s["turns"] > 0, s
+
+    @patch("zipsa.core.executor.subprocess.Popen")
     def test_multi_phase_breach_emits_run_complete(self, mock_popen, tmp_path):
         """Multi-phase skill that breaches limits in phase 2 must emit
         zipsa_run_complete with status=limits_exceeded and exit_code=3.

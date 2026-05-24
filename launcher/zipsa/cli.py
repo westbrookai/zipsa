@@ -409,7 +409,23 @@ def run(
         # below (which would print "Error: <exit-code>" as a double message).
         raise
     except KeyboardInterrupt:
-        # Ctrl+C — exit 130 (canonical SIGINT convention).
+        # Ctrl+C — exit 130 (canonical SIGINT convention). The executor's
+        # finally already wrote summary.json with status=user_declined +
+        # the cost/turns that actually got burned; print a one-liner
+        # pointer to it so the user can see what they spent without
+        # having to dig through ~/.zipsa/<skill>@*/runs/ themselves.
+        try:
+            data_dir = _skill_data_dir(skill.name, skill.manifest.metadata.version)
+            runs_dir = data_dir / "runs"
+            if runs_dir.exists():
+                latest = _find_run_dir(runs_dir)
+                typer.echo(
+                    f"\nInterrupted. Summary at: {latest}/summary.json",
+                    err=True,
+                )
+        except (NameError, ValueError, OSError, AttributeError):
+            # Skill load may have failed before run_dir existed.
+            pass
         raise typer.Exit(130)
     except SkillNotInstalledError as e:
         typer.echo(f"Error: {e}", err=True)
