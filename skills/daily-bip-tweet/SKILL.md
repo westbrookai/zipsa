@@ -88,12 +88,24 @@ verifies their presence in precheck before doing expensive work.
 Verify X credentials, ensure `voice` and `interests` are remembered,
 resolve target date.
 
-1. Verify all 4 X env vars are present. Inspect `execution_context`
-   for them (the launcher injects via `~/.zipsa/.env`). If any are
-   missing, stop with `status="failed"`,
-   `error.code="x_credentials_missing"`,
-   `user_facing_summary` (Korean):
-   `"X 환경변수 누락: <comma-separated missing var names>"`.
+1. Verify all 4 X env vars are present. The launcher injects them
+   via `--env-file ~/.zipsa/.env` into the container's environment;
+   they are NOT exposed inside the `execution_context` JSON, so you
+   must read them via a shell call. Run exactly:
+
+   ```bash
+   python3 -c 'import os; missing = [k for k in ("X_API_KEY","X_API_SECRET","X_ACCESS_TOKEN","X_ACCESS_SECRET") if not os.environ.get(k)]; print(",".join(missing) if missing else "OK")'
+   ```
+
+   - Output `OK` → continue to step 2.
+   - Output is a comma-separated list of variable names → stop with
+     `status="failed"`, `error.code="x_credentials_missing"`,
+     `user_facing_summary` (Korean):
+     `"X 환경변수 누락: <the comma-separated list from stdout>"`.
+
+   Do NOT decide the env vars are missing based on the JSON
+   `execution_context` alone — that block doesn't carry process
+   environment.
 
 2. Call `mcp__zipsa__ask_once` with key=`voice` (EXACTLY that — not
    `x_voice`, `tweet_voice`, etc.). Prompt (Korean):

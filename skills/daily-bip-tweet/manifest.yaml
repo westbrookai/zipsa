@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: daily-bip-tweet
-  version: 0.2.1
+  version: 0.2.2
   author: westbrookai
   description: |
     Orchestrator: fetch a day's Claude Code activity via the atomic
@@ -70,11 +70,16 @@ spec:
   phases:
     - id: precheck
       goal: |
-        Verify 4 X env vars are present, ensure voice and interests
-        are remembered, resolve target_date from user_query.
+        Verify 4 X env vars are present (via Bash python3 inline
+        check — they are NOT in execution_context JSON), ensure
+        voice and interests are remembered, resolve target_date
+        from user_query.
       model:
         name: claude-haiku-4-5-20251001
-      allowed_tools: []
+      # Bash(python3) is the only way to inspect container env vars;
+      # X creds live in the process environment, not the JSON context.
+      allowed_tools:
+        - Bash(python3:*)
       limits:
         max_turns: 8
         max_cost_usd: 0.10
