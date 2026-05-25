@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 import uuid
 from datetime import datetime
@@ -54,10 +55,16 @@ class RunStartResponse(BaseModel):
 @router.post("", response_model=RunStartResponse)
 async def start_run(req: RunStartRequest) -> RunStartResponse:
     cmd = _build_run_command(req.skill, req.args)
+    # ZIPSA_FORCE_INTERACTIVE tells the launcher to honor HITL prompts
+    # even though stdin is a pipe (not a TTY) — otherwise ask/confirm/
+    # choose immediately raise HitlUnattended and the run fails.
+    env = {**os.environ, "ZIPSA_FORCE_INTERACTIVE": "1"}
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     run_id = uuid.uuid4().hex[:12]
     _runs[run_id] = {
@@ -68,6 +75,28 @@ async def start_run(req: RunStartRequest) -> RunStartResponse:
         "exit_code": None,
     }
     return RunStartResponse(run_id=run_id)
+
+
+class StdinRequest(BaseModel):
+    text: str
+
+
+@router.post("/{run_id}/stdin")
+async def write_stdin(run_id: str, req: StdinRequest) -> dict:
+    """Feed a line to the subprocess's stdin.
+
+    The web UI calls this when the user answers a HITL prompt.
+    Appends a newline so the launcher's `stdin.readline()` returns.
+    """
+    entry = _runs.get(run_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    proc: asyncio.subprocess.Process = entry["process"]
+    if proc.stdin is None or proc.stdin.is_closing():
+        raise HTTPException(status_code=410, detail="stdin_closed")
+    proc.stdin.write((req.text + "\n").encode("utf-8"))
+    await proc.stdin.drain()
+    return {"ok": True}
 
 
 async def _pump(stream: asyncio.StreamReader, kind: str, queue: asyncio.Queue) -> None:

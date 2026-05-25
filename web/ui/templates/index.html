@@ -65,7 +65,69 @@
         </table>
     </main>
 
+    <!-- HITL modal: shown when the running subprocess prints a
+         `[ask] / [confirm] / [choose]` prompt block. -->
+    <div x-show="hitlPrompt !== null" class="modal-overlay" @keydown.escape="cancelHitl()">
+        <div class="modal" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-header">
+                <span class="hitl-tag" x-text="hitlPrompt?.type"></span>
+                <span class="muted">input needed</span>
+            </div>
+            <p class="hitl-prompt" x-text="hitlPrompt?.text"></p>
+
+            <!-- ask: free-form text -->
+            <template x-if="hitlPrompt?.type === 'ask'">
+                <form @submit.prevent="submitHitl(hitlInput)">
+                    <input
+                        type="text"
+                        class="hitl-input"
+                        x-model="hitlInput"
+                        x-ref="hitlInputRef"
+                        autofocus
+                        placeholder="Type your answer">
+                    <div class="modal-actions">
+                        <button type="submit" class="btn">Send</button>
+                    </div>
+                </form>
+            </template>
+
+            <!-- confirm: yes/no -->
+            <template x-if="hitlPrompt?.type === 'confirm'">
+                <div class="modal-actions">
+                    <button class="btn" @click="submitHitl('y')">Yes</button>
+                    <button class="btn btn-secondary" @click="submitHitl('n')">No</button>
+                </div>
+            </template>
+
+            <!-- choose: radio list -->
+            <template x-if="hitlPrompt?.type === 'choose'">
+                <form @submit.prevent="submitHitl(hitlInput)">
+                    <ul class="choose-options">
+                        <template x-for="(opt, idx) in (hitlPrompt?.options || [])" :key="idx">
+                            <li>
+                                <label>
+                                    <input
+                                        type="radio"
+                                        :value="(idx + 1).toString()"
+                                        x-model="hitlInput"
+                                        name="choose">
+                                    <span x-text="opt"></span>
+                                </label>
+                            </li>
+                        </template>
+                    </ul>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn" :disabled="!hitlInput">Submit</button>
+                    </div>
+                </form>
+            </template>
+        </div>
+    </div>
+
     <script>
+        const PROMPT_OPEN = '──── User input needed ────';
+        const PROMPT_CLOSE = '──── Resuming ────';
+
         function zipsaApp() {
             return {
                 loading: true,
@@ -75,6 +137,11 @@
                 output: [],
                 exitCode: null,
                 eventSource: null,
+                currentRunId: null,
+                // HITL state
+                hitlActive: false,
+                hitlPrompt: null,   // {type: 'ask'|'confirm'|'choose', text, options?}
+                hitlInput: '',
 
                 async loadSkills() {
                     try {
@@ -90,14 +157,13 @@
 
                 async startRun(skillName) {
                     if (this.running) return;
-                    // Reset output
                     this.output = [];
                     this.exitCode = null;
                     this.running = true;
                     this.currentSkill = skillName;
-                    // Scroll to top — output panel now lives ABOVE the
-                    // skill table, so first-run UX is "see the panel
-                    // immediately."
+                    this.hitlPrompt = null;
+                    this.hitlActive = false;
+                    this.hitlInput = '';
                     window.scrollTo({top: 0, behavior: 'smooth'});
                     try {
                         const resp = await fetch('/api/runs', {
@@ -105,10 +171,9 @@
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({skill: skillName}),
                         });
-                        if (!resp.ok) {
-                            throw new Error(`POST /api/runs ${resp.status}`);
-                        }
+                        if (!resp.ok) throw new Error(`POST /api/runs ${resp.status}`);
                         const {run_id} = await resp.json();
+                        this.currentRunId = run_id;
                         this.subscribe(run_id);
                     } catch (e) {
                         console.error('run start failed', e);
@@ -118,35 +183,99 @@
                 },
 
                 subscribe(runId) {
-                    if (this.eventSource) {
-                        this.eventSource.close();
-                    }
+                    if (this.eventSource) this.eventSource.close();
                     const es = new EventSource(`/api/runs/${runId}/stream`);
                     this.eventSource = es;
 
                     es.addEventListener('line', (e) => {
                         const data = JSON.parse(e.data);
-                        // Strip ANSI color codes — renderer always emits them
-                        // since it doesn't detect TTY in subprocess context.
+                        // Strip ANSI before HITL detection — markers contain unicode but no ANSI.
                         data.text = data.text.replace(/\x1b\[[0-9;]*m/g, '');
-                        this.output.push(data);
-                        this.$nextTick(() => this.scrollToBottom());
+                        this.handleStreamLine(data);
                     });
                     es.addEventListener('exit', (e) => {
                         const data = JSON.parse(e.data);
                         this.exitCode = data.exit_code;
                         this.running = false;
+                        this.hitlPrompt = null;
                         es.close();
                         this.eventSource = null;
                     });
                     es.addEventListener('error', (e) => {
-                        // EventSource fires generic 'error' on disconnect.
-                        // If we haven't received exit yet, that's actually
-                        // a disconnect — surface it but don't crash.
-                        if (this.running) {
-                            console.warn('SSE error', e);
-                        }
+                        if (this.running) console.warn('SSE error', e);
                     });
+                },
+
+                handleStreamLine(data) {
+                    const text = data.text;
+
+                    // HITL block start
+                    if (text.includes(PROMPT_OPEN)) {
+                        this.hitlActive = true;
+                        this.hitlInput = '';
+                        return;  // suppress marker
+                    }
+                    // HITL block end (may be merged with leftover `> ` prompt)
+                    if (text.includes(PROMPT_CLOSE)) {
+                        this.hitlActive = false;
+                        this.hitlPrompt = null;
+                        return;
+                    }
+                    if (this.hitlActive) {
+                        const m1 = text.match(/^\[ask\]\s*(.*)$/);
+                        if (m1) {
+                            this.hitlPrompt = {type: 'ask', text: m1[1]};
+                            this.$nextTick(() => this.$refs.hitlInputRef?.focus());
+                            return;
+                        }
+                        const m2 = text.match(/^\[confirm\]\s*(.*?)(?:\s*\[[YyNn/]+\])?$/);
+                        if (m2 && text.startsWith('[confirm]')) {
+                            this.hitlPrompt = {type: 'confirm', text: m2[1].trim()};
+                            return;
+                        }
+                        const m3 = text.match(/^\[choose\]\s*(.*)$/);
+                        if (m3) {
+                            this.hitlPrompt = {type: 'choose', text: m3[1], options: []};
+                            return;
+                        }
+                        const m4 = text.match(/^\s+\d+\)\s*(.*)$/);
+                        if (m4 && this.hitlPrompt && this.hitlPrompt.type === 'choose') {
+                            this.hitlPrompt.options.push(m4[1]);
+                            return;
+                        }
+                        // Other lines inside a HITL block (`> ` prompt, hint lines) — suppress
+                        return;
+                    }
+
+                    // Normal output
+                    this.output.push(data);
+                    this.$nextTick(() => this.scrollToBottom());
+                },
+
+                async submitHitl(answer) {
+                    if (!this.currentRunId) return;
+                    const payload = String(answer).trim();
+                    try {
+                        const resp = await fetch(`/api/runs/${this.currentRunId}/stdin`, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({text: payload}),
+                        });
+                        if (!resp.ok) throw new Error(`POST stdin ${resp.status}`);
+                    } catch (e) {
+                        console.error('HITL submit failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] HITL submit failed: ${e}`});
+                    } finally {
+                        // Modal closes once we see PROMPT_CLOSE on the stream;
+                        // also close optimistically so the user sees feedback.
+                        this.hitlPrompt = null;
+                        this.hitlInput = '';
+                    }
+                },
+
+                cancelHitl() {
+                    this.hitlPrompt = null;
+                    this.hitlInput = '';
                 },
 
                 scrollToBottom() {

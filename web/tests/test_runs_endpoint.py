@@ -106,3 +106,43 @@ def test_multiple_runs_get_unique_ids(client):
     a = client.post("/api/runs", json={"skill": "x"}).json()["run_id"]
     b = client.post("/api/runs", json={"skill": "x"}).json()["run_id"]
     assert a != b
+
+
+def test_stdin_endpoint_returns_404_for_unknown(client):
+    resp = client.post(
+        "/api/runs/does-not-exist/stdin",
+        json={"text": "hello"},
+    )
+    assert resp.status_code == 404
+
+
+def test_stdin_endpoint_feeds_subprocess(monkeypatch):
+    """Spawn a subprocess that reads ONE line from stdin and echoes
+    it back, then verify POST /stdin actually delivers."""
+    import asyncio
+    import sys
+    from api import runs as runs_mod
+
+    def fake_cmd(skill, args):
+        # Read one line, echo it, exit.
+        script = 'import sys; line = sys.stdin.readline().strip(); print(f"got:{line}")'
+        return [sys.executable, "-c", script]
+    monkeypatch.setattr("api.runs._build_run_command", fake_cmd)
+
+    async def run_full() -> list[tuple[str, dict]]:
+        runs_mod._runs.clear()
+        resp = await runs_mod.start_run(runs_mod.RunStartRequest(skill="x"))
+        rid = resp.run_id
+        # Feed stdin
+        await runs_mod.write_stdin(rid, runs_mod.StdinRequest(text="Sydney"))
+        out: list[tuple[str, dict]] = []
+        async for evt in runs_mod._event_stream(rid):
+            payload = json.loads(evt["data"])
+            out.append((evt["event"], payload))
+        return out
+
+    events = asyncio.run(run_full())
+    line_events = [p for e, p in events if e == "line"]
+    assert any("got:Sydney" in p["text"] for p in line_events)
+    exit_evt = next(p for e, p in events if e == "exit")
+    assert exit_evt["exit_code"] == 0

@@ -351,7 +351,10 @@ def run(
                     skill.manifest.spec.requires,
                     sys.stdin,
                     sys.stdout,
-                    is_interactive=sys.stdin.isatty(),
+                    is_interactive=(
+                        sys.stdin.isatty()
+                        or os.environ.get("ZIPSA_FORCE_INTERACTIVE") == "1"
+                    ),
                 )
             except RequiresError as e:
                 typer.echo(f"Error: {e}", err=True)
