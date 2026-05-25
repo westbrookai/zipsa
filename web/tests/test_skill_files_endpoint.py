@@ -61,3 +61,26 @@ def test_path_traversal_is_404(client):
 def test_unknown_skill_is_404(client):
     resp = client.get("/api/skills/never-installed/files/manifest.yaml")
     assert resp.status_code == 404
+
+
+# -- /view/skills/{name}/files/{filename} (Jinja shell) -------------------
+
+
+def test_view_route_renders_html_shell(client):
+    """The view route returns an HTML page that fetches the raw API and
+    renders MD client-side via marked.js. Smoke test: 200 HTML with the
+    expected file URL embedded."""
+    resp = client.get("/view/skills/demo/files/SKILL.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    body = resp.text
+    # The raw-API URL the JS fetches must be on the page
+    assert "/api/skills/demo/files/SKILL.md" in body
+    # marked.js CDN included for the rendering
+    assert "marked" in body
+
+
+def test_view_route_works_for_manifest_too(client):
+    resp = client.get("/view/skills/demo/files/manifest.yaml")
+    assert resp.status_code == 200
+    assert "/api/skills/demo/files/manifest.yaml" in resp.text

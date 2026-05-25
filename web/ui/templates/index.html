@@ -115,9 +115,9 @@
                         <td class="mono muted" x-text="skill.model || '—'"></td>
                         <td class="muted" x-html="runStatsLabel(skill)"></td>
                         <td class="file-links">
-                            <a target="_blank" :href="`/api/skills/${skill.name}/files/manifest.yaml`">manifest</a>
+                            <a target="_blank" :href="`/view/skills/${skill.name}/files/manifest.yaml`">manifest</a>
                             <span class="muted">·</span>
-                            <a target="_blank" :href="`/api/skills/${skill.name}/files/SKILL.md`">SKILL</a>
+                            <a target="_blank" :href="`/view/skills/${skill.name}/files/SKILL.md`">SKILL</a>
                         </td>
                         <td x-text="skill.purpose"></td>
                         <td>
