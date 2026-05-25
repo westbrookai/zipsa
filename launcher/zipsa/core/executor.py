@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 from .dev_overlay import load_dev_overlay
 from .limits import LimitBreach, LimitsState, SkillLimits, check_limits, new_state, update_for_event
-from .output_parser import extract_skill_output as _extract_skill_output_impl
+from .envelope import EnvelopeError, parse_envelope_strict
 from .phase_allow import (
     ALWAYS_ON_TOOLS as _ALWAYS_ON_TOOLS_LIST,
     merge_always_on_tools as _merge_always_on_tools_impl,
@@ -1116,13 +1116,13 @@ class DockerExecutor:
                     if limits_breached:
                         return
 
-                    # Extract and validate skill output
-                    phase_out = _extract_skill_output_impl(last_assistant_text)
-
-                    if phase_out is None:
-                        # Parse failed — record the real cause (the agent
-                        # didn't emit a valid envelope). Preserve the raw
-                        # text so the user can see what the agent produced.
+                    # Strict envelope parsing — the runtime contract is law.
+                    # Any text outside the JSON envelope, malformed JSON, or
+                    # schema mismatch halts the run with contract_violation.
+                    try:
+                        envelope = parse_envelope_strict(last_assistant_text)
+                        phase_out = envelope.model_dump()
+                    except EnvelopeError as e:
                         phase_out = {
                             "status": "failed",
                             "phase": phase.id,
@@ -1130,33 +1130,36 @@ class DockerExecutor:
                             "state_updates": None,
                             "next_phase_input": None,
                             "user_facing_summary": (
-                                "Skill output could not be parsed."
+                                "Skill output violated the runtime contract."
                             ),
                             "error": {
-                                "code": "invalid_output_format",
-                                "raw_output": (last_assistant_text or "")[:2000],
+                                "code": "contract_violation",
+                                "subcode": e.subcode,
+                                "message": str(e),
+                                "excerpt": e.excerpt,
+                                "remediation": (
+                                    "Every phase must end with ONLY the envelope "
+                                    "JSON. See runtime-contract.md → 'Output format'."
+                                ),
                             },
                         }
-                    else:
-                        # Phase field validation — only runs when parse
-                        # succeeded. (Pre-fix, _extract_skill_output
-                        # returned a synthetic envelope with
-                        # phase="unknown" which then tripped this check
-                        # and clobbered the real invalid_output_format
-                        # error code.)
-                        reported_phase = phase_out.get("phase")
-                        if reported_phase and reported_phase != phase.id:
-                            phase_out = {
-                                "status": "failed",
-                                "phase": phase.id,
-                                "result": None,
-                                "state_updates": None,
-                                "next_phase_input": None,
-                                "user_facing_summary": (
-                                    f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
-                                ),
-                                "error": {"code": "phase_id_mismatch"},
-                            }
+
+                    # Phase field validation — only meaningful when parse
+                    # succeeded (otherwise phase is already set to phase.id
+                    # in the synthesized contract_violation envelope above).
+                    reported_phase = phase_out.get("phase")
+                    if reported_phase and reported_phase != phase.id:
+                        phase_out = {
+                            "status": "failed",
+                            "phase": phase.id,
+                            "result": None,
+                            "state_updates": None,
+                            "next_phase_input": None,
+                            "user_facing_summary": (
+                                f"Phase ID mismatch: expected '{phase.id}', got '{reported_phase}'"
+                            ),
+                            "error": {"code": "phase_id_mismatch"},
+                        }
 
                     status = phase_out.get("status", "failed")
 
@@ -1581,10 +1584,7 @@ class DockerExecutor:
 
         return cmd
 
-    # Backward-compat shims: existing tests call these via the class.
-    # Real implementations live in core.output_parser and core.prompts.
-    _extract_skill_output = staticmethod(_extract_skill_output_impl)
-
+    # Backward-compat shim: existing tests call this via the class.
     def _build_system_prompt(self, skill: Skill) -> str:
         return _build_system_prompt_impl(skill)
 
