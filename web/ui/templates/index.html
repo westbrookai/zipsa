@@ -205,10 +205,19 @@
                 summary: null,
                 runDir: null,
                 history: [],   // [{run_id, skill, exit_code, ended_at, cost_usd}, ...]
+                // Refreshed every 5s — formatTimeAgo() reads this so
+                // Alpine re-renders history rows as time passes.
+                now: Date.now(),
                 // HITL state
                 hitlActive: false,
                 hitlPrompt: null,   // {type: 'ask'|'confirm'|'choose', text, options?}
                 hitlInput: '',
+
+                init() {
+                    // Tick `now` every 5s so the "time ago" labels
+                    // refresh without a state change elsewhere.
+                    setInterval(() => { this.now = Date.now(); }, 5000);
+                },
 
                 async loadSkills() {
                     try {
@@ -445,7 +454,9 @@
 
                 formatTimeAgo(ts) {
                     if (!ts) return '';
-                    const secs = Math.floor((Date.now() - ts) / 1000);
+                    // Read `this.now` (not Date.now()) so Alpine tracks
+                    // it as a reactive dep — labels refresh on each tick.
+                    const secs = Math.floor((this.now - ts) / 1000);
                     if (secs < 60) return `${secs}s ago`;
                     if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
                     return `${Math.floor(secs / 3600)}h ago`;
