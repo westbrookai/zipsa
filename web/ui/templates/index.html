@@ -7,13 +7,13 @@
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
 </head>
-<body>
+<body x-data="zipsaApp()" x-init="loadSkills()">
     <header>
         <h1>zipsa</h1>
         <p class="subtitle">Installed skills</p>
     </header>
 
-    <main x-data="skillList()" x-init="load()">
+    <main>
         <div x-show="loading" class="state-msg">Loading…</div>
         <div x-show="!loading && skills.length === 0" class="state-msg">
             No installed skills. Try <code>zipsa install &lt;source&gt;</code> from the CLI.
@@ -26,6 +26,7 @@
                     <th>Version</th>
                     <th>Model</th>
                     <th>Purpose</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -35,29 +36,128 @@
                         <td class="mono" x-text="skill.version"></td>
                         <td class="mono muted" x-text="skill.model || '—'"></td>
                         <td x-text="skill.purpose"></td>
+                        <td>
+                            <button
+                                class="btn"
+                                @click="startRun(skill.name)"
+                                :disabled="running">
+                                Run
+                            </button>
+                        </td>
                     </tr>
                 </template>
             </tbody>
         </table>
+
+        <section x-show="output.length > 0 || running" class="output-panel">
+            <header class="output-header">
+                <h3>
+                    Output<span x-show="currentSkill"> — <span class="mono" x-text="currentSkill"></span></span>
+                </h3>
+                <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
+            </header>
+            <pre x-ref="outBox" class="output-box"><template x-for="(line, idx) in output" :key="idx"><div :class="line.stream === 'stderr' ? 'log-line stderr' : 'log-line'" x-text="line.text"></div></template></pre>
+        </section>
     </main>
 
     <script>
-        function skillList() {
+        function zipsaApp() {
             return {
                 loading: true,
                 skills: [],
-                async load() {
+                running: false,
+                currentSkill: null,
+                output: [],
+                exitCode: null,
+                eventSource: null,
+
+                async loadSkills() {
                     try {
                         const resp = await fetch('/api/skills');
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                         const data = await resp.json();
                         this.skills = data.skills;
                     } catch (e) {
-                        console.error('failed to load skills', e);
+                        console.error('skills load failed', e);
                     } finally {
                         this.loading = false;
                     }
-                }
+                },
+
+                async startRun(skillName) {
+                    if (this.running) return;
+                    // Reset output
+                    this.output = [];
+                    this.exitCode = null;
+                    this.running = true;
+                    this.currentSkill = skillName;
+                    try {
+                        const resp = await fetch('/api/runs', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({skill: skillName}),
+                        });
+                        if (!resp.ok) {
+                            throw new Error(`POST /api/runs ${resp.status}`);
+                        }
+                        const {run_id} = await resp.json();
+                        this.subscribe(run_id);
+                    } catch (e) {
+                        console.error('run start failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] failed to start run: ${e}`});
+                        this.running = false;
+                    }
+                },
+
+                subscribe(runId) {
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                    }
+                    const es = new EventSource(`/api/runs/${runId}/stream`);
+                    this.eventSource = es;
+
+                    es.addEventListener('line', (e) => {
+                        const data = JSON.parse(e.data);
+                        // Strip ANSI color codes — renderer always emits them
+                        // since it doesn't detect TTY in subprocess context.
+                        data.text = data.text.replace(/\x1b\[[0-9;]*m/g, '');
+                        this.output.push(data);
+                        this.$nextTick(() => this.scrollToBottom());
+                    });
+                    es.addEventListener('exit', (e) => {
+                        const data = JSON.parse(e.data);
+                        this.exitCode = data.exit_code;
+                        this.running = false;
+                        es.close();
+                        this.eventSource = null;
+                    });
+                    es.addEventListener('error', (e) => {
+                        // EventSource fires generic 'error' on disconnect.
+                        // If we haven't received exit yet, that's actually
+                        // a disconnect — surface it but don't crash.
+                        if (this.running) {
+                            console.warn('SSE error', e);
+                        }
+                    });
+                },
+
+                scrollToBottom() {
+                    const box = this.$refs.outBox;
+                    if (box) box.scrollTop = box.scrollHeight;
+                },
+
+                statusClass() {
+                    if (this.running) return 'status-running';
+                    if (this.exitCode === 0) return 'status-ok';
+                    if (this.exitCode != null && this.exitCode !== 0) return 'status-error';
+                    return '';
+                },
+
+                statusLabel() {
+                    if (this.running) return 'running…';
+                    if (this.exitCode === 0) return 'exit 0';
+                    if (this.exitCode != null) return `exit ${this.exitCode}`;
+                    return '';
+                },
             }
         }
     </script>

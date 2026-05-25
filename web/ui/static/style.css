@@ -82,3 +82,93 @@ code {
     border-radius: 3px;
     font-size: 0.85em;
 }
+
+.btn {
+    padding: 0.35rem 0.85rem;
+    background: var(--accent);
+    color: white;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.btn:hover:not(:disabled) {
+    filter: brightness(0.95);
+}
+
+.btn:disabled {
+    background: #ddd;
+    border-color: #ddd;
+    color: #999;
+    cursor: not-allowed;
+}
+
+.output-panel {
+    margin-top: 2rem;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.output-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #f8f8f8;
+    border-bottom: 1px solid var(--border);
+    margin: 0;
+}
+
+.output-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.status {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-weight: 500;
+}
+
+.status-running {
+    background: #fff4d6;
+    color: #8a6d00;
+}
+
+.status-ok {
+    background: #def0d8;
+    color: #2c5f2c;
+}
+
+.status-error {
+    background: #fbe2e0;
+    color: #a23226;
+}
+
+.output-box {
+    margin: 0;
+    padding: 1rem;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    max-height: 550px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-line {
+    white-space: pre-wrap;
+}
+
+.log-line.stderr {
+    color: #c87a7a;
+}
