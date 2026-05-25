@@ -31,18 +31,24 @@ def _extract_envelope(text: Optional[str]) -> Optional[dict]:
     explicitly produced for the user — not just SDK metrics.
 
     Returns the parsed dict if found, else None. Tolerant of either a
-    ```json fenced block or raw text body.
+    fenced block or raw text body. When the agent emits multiple fenced
+    blocks (e.g. a SKILL's Output Format block followed by the envelope),
+    every fence is tried — first one that parses as a JSON object wins.
+    ```json-tagged fences are tried before untagged ones to prefer the
+    envelope over an incidentally-valid output block.
     """
     if not text:
         return None
-    m = re.search(r"```(?:json)?\s*\n(.+?)\n\s*```", text, re.DOTALL)
-    if m:
+    fence_re = re.compile(r"```(json)?\s*\n(.+?)\n\s*```", re.DOTALL)
+    matches = list(fence_re.finditer(text))
+    # Prefer ```json fences (explicit envelope marker) over untagged ones.
+    for m in sorted(matches, key=lambda m: 0 if m.group(1) else 1):
         try:
-            obj = json.loads(m.group(1))
+            obj = json.loads(m.group(2))
             if isinstance(obj, dict):
                 return obj
         except json.JSONDecodeError:
-            pass
+            continue
     try:
         obj = json.loads(text.strip())
         if isinstance(obj, dict):
