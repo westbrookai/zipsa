@@ -1903,6 +1903,56 @@ class TestSummaryWritten:
         assert s["schema_version"] == 1
 
     @patch("zipsa.core.executor.subprocess.Popen")
+    def test_no_phases_skill_persists_state_updates(self, mock_popen, tmp_path):
+        """After consolidating single-phase into _execute_phases'
+        synthetic-1 path, a single-shot skill that emits
+        `state_updates` in its envelope now persists them to state.json
+        (was silently dropped in the legacy single-phase branch).
+        This is a positive behavior change — single-shot skills can
+        finally remember things across runs via state_updates, matching
+        the multi-phase contract."""
+        from unittest.mock import MagicMock
+        import json as _json
+
+        # Single-shot skill emits status=ok with state_updates.
+        envelope = _json.dumps({
+            "status": "ok",
+            "phase": "main",
+            "result": {"done": True},
+            "state_updates": {"last_city": "Sydney", "run_count": 7},
+        })
+        line = _json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": envelope}],
+                "usage": {"input_tokens": 50},
+            },
+        }) + "\n"
+        mock_stdout = MagicMock()
+        mock_stdout.readline.side_effect = [line, ""]
+        mock_process = Mock()
+        mock_process.stdout = mock_stdout
+        mock_process.poll.return_value = None
+        mock_process.wait = Mock(return_value=0)
+        mock_process.returncode = 0
+        mock_popen.return_value = mock_process
+
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+        executor = DockerExecutor()
+
+        with patch("zipsa.core.executor.zipsa_paths.skill_data_dir", return_value=tmp_path):
+            list(executor.run(skill, "Sydney", env={}))
+
+        state_file = tmp_path / "state.json"
+        assert state_file.exists(), (
+            "state.json should be written when single-shot skill "
+            "emits state_updates (was silently dropped pre-consolidation)"
+        )
+        saved = _json.loads(state_file.read_text())
+        assert saved == {"last_city": "Sydney", "run_count": 7}
+
+    @patch("zipsa.core.executor.subprocess.Popen")
     def test_summary_written_on_limit_breach(self, mock_popen, tmp_path):
         """A run that hits the cost limit ends with status=limits_exceeded, exit_code=3."""
         from unittest.mock import MagicMock

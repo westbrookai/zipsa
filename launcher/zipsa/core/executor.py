@@ -332,83 +332,23 @@ class DockerExecutor:
                 mcp_token_override=mcp_token_override,
             )
 
-            if skill.manifest.spec.phases:
-                # Multi-phase path: _execute_phases tracks status internally and
-                # yields a zipsa_run_complete event as its last event.
-                # phase_summaries is shared so the finally-block summary
-                # is accurate even when the run is interrupted mid-stream.
-                for event in self._execute_phases(
-                    skill, user_input, env, run_dir, claude_json_path,
-                    mcp_debug_host is not None, extra_docker_opts,
-                    _limits_state_ref=_limits_state_ref,
-                    _phase_summaries_ref=phase_summaries,
-                    resume_from=resume_from,
-                    resume_from_run_dir=resume_from_run_dir,
-                ):
-                    # Capture final status from the complete event or breach event
-                    etype = event.get("type")
-                    if etype == "result":
-                        last_result_event = event
-                    elif etype == "system" and event.get("subtype") == "init":
-                        if not actual_model:
-                            actual_model = event.get("model")
-                        if not actual_claude_version:
-                            actual_claude_version = event.get("claude_code_version")
-                    elif etype == "zipsa_limits_breach":
-                        final_status = "limits_exceeded"
-                        final_exit_code = 3
-                        final_error = {
-                            "code": "limits_exceeded",
-                            "message": (
-                                f"phase {event.get('kind')}: "
-                                f"{event.get('value')} > {event.get('limit')}"
-                            ),
-                            "details": {
-                                "scope": event.get("scope"),
-                                "kind": event.get("kind"),
-                                "value": event.get("value"),
-                                "limit": event.get("limit"),
-                                "phase": event.get("phase"),
-                            },
-                        }
-                    elif etype == "zipsa_run_complete":
-                        final_status = event.get("status", "infra_failed")
-                        final_exit_code = event.get("exit_code", 5)
-                        final_result = event.get("result")
-                        final_error = event.get("error")
-                        phase_summaries = event.get("_phase_summaries", [])
-                        chain_started_at = event.get("_chain_started_at")
-                        resumed_from_id = event.get("_resumed_from")
-                        accumulated_hitl_wait = event.get("_accumulated_hitl_wait", 0.0)
-                    yield event
-                return
-
-            # Single-phase path: execute skill directly.
-            # PreToolUse hook needs phase-allow.json too.
-            _write_default_phase_allow_file_impl(claude_json_path.parent, skill)
-            docker_cmd = self._build_docker_command(
-                skill, user_input, claude_json_path, env,
-                mcp_debug_host=mcp_debug_host,
-                extra_docker_opts=extra_docker_opts,
-                requires_values=self._requires_values,
-                run_dir=run_dir,
-            )
-            # Shared limits state for the single phase — needed for summary cost/turns.
-            single_limits_state = new_state("main")
-            _limits_state_ref[0] = single_limits_state
-            last_assistant_text = None
-            for event in self._execute_skill(
-                docker_cmd, claude_json_path, skill, run_dir, env_file, user_input,
-                limits_state=single_limits_state,
+            # Unified execution path. _execute_phases handles both
+            # multi-phase skills (spec.phases declared) and single-phase
+            # skills (no phases — synthesizes one main phase from
+            # spec.purpose + spec.tools + spec.limits at line 967-977).
+            # phase_summaries is shared so the finally-block summary is
+            # accurate even when the run is interrupted mid-stream.
+            for event in self._execute_phases(
+                skill, user_input, env, run_dir, claude_json_path,
+                mcp_debug_host is not None, extra_docker_opts,
+                _limits_state_ref=_limits_state_ref,
+                _phase_summaries_ref=phase_summaries,
+                resume_from=resume_from,
+                resume_from_run_dir=resume_from_run_dir,
             ):
+                # Capture final status from the complete event or breach event
                 etype = event.get("type")
-                if etype == "assistant":
-                    content = event.get("message", {}).get("content", [])
-                    for block in content:
-                        if block.get("type") == "text":
-                            last_assistant_text = block.get("text", "")
-                            break
-                elif etype == "result":
+                if etype == "result":
                     last_result_event = event
                 elif etype == "system" and event.get("subtype") == "init":
                     if not actual_model:
@@ -432,87 +372,16 @@ class DockerExecutor:
                             "phase": event.get("phase"),
                         },
                     }
-                    phase_summaries.append(PhaseSummary(
-                        id="main",
-                        status="limits_exceeded",
-                        cost_usd=single_limits_state.phase_cost_usd,
-                        turns=single_limits_state.phase_turns,
-                    ))
-                    yield event
-                    # Breach terminates the run — emit run_complete and return
-                    complete_event = {
-                        "type": "zipsa_run_complete",
-                        "status": final_status,
-                        "exit_code": final_exit_code,
-                        "run_dir": str(run_dir) if run_dir else None,
-                    }
-                    yield complete_event
-                    return
+                elif etype == "zipsa_run_complete":
+                    final_status = event.get("status", "infra_failed")
+                    final_exit_code = event.get("exit_code", 5)
+                    final_result = event.get("result")
+                    final_error = event.get("error")
+                    phase_summaries = event.get("_phase_summaries", [])
+                    chain_started_at = event.get("_chain_started_at")
+                    resumed_from_id = event.get("_resumed_from")
+                    accumulated_hitl_wait = event.get("_accumulated_hitl_wait", 0.0)
                 yield event
-
-            # Determine final status from skill's contract JSON output
-            phase_out = _extract_skill_output_impl(last_assistant_text)
-            if phase_out is None:
-                # Parse failed — preserve the real cause + raw text.
-                phase_out = {
-                    "status": "failed",
-                    "phase": "main",
-                    "result": None,
-                    "state_updates": None,
-                    "next_phase_input": None,
-                    "user_facing_summary": (
-                        "Skill output could not be parsed."
-                    ),
-                    "error": {
-                        "code": "invalid_output_format",
-                        "raw_output": (last_assistant_text or "")[:2000],
-                    },
-                }
-            status = phase_out.get("status", "failed")
-
-            # Map HITL-related error codes to user_declined (exit 4)
-            error_code = (phase_out.get("error") or {}).get("code", "")
-            if status in ("failed", "out_of_scope"):
-                if error_code in ("hitl_unattended", "user_declined"):
-                    final_status = "user_declined"
-                    final_exit_code = 4
-                    final_error = phase_out.get("error")
-                elif status == "out_of_scope":
-                    final_status = "out_of_scope"
-                    final_exit_code = 2
-                    final_error = phase_out.get("error") or {
-                        "code": "out_of_scope",
-                        "message": phase_out.get("user_facing_summary", ""),
-                    }
-                else:
-                    final_status = "failed"
-                    final_exit_code = 1
-                    final_error = phase_out.get("error") or {
-                        "code": "failed",
-                        "message": phase_out.get("user_facing_summary", ""),
-                    }
-            elif status == "ok":
-                final_status = "ok"
-                final_exit_code = 0
-                final_result = phase_out.get("result")
-                final_error = None
-            # else: stays infra_failed (should not happen if Docker returned 0)
-
-            # Append single-phase summary
-            phase_summaries.append(PhaseSummary(
-                id="main",
-                status=final_status,
-                cost_usd=single_limits_state.phase_cost_usd,
-                turns=single_limits_state.phase_turns,
-            ))
-
-            complete_event = {
-                "type": "zipsa_run_complete",
-                "status": final_status,
-                "exit_code": final_exit_code,
-                "run_dir": str(run_dir) if run_dir else None,
-            }
-            yield complete_event
 
         except RuntimeError:
             # Docker non-zero exit (not breach-terminated) → infra_failed
@@ -967,8 +836,19 @@ class DockerExecutor:
         from .models import PhaseSpec
 
         phases = skill.manifest.spec.phases
-        if not phases:
-            # Implicit single-phase wrapper for legacy skills
+        # Tracks whether the skill author declared phases or we
+        # synthesized a single one. Affects log layout below: single-
+        # shot skills keep their flat run_dir/output.jsonl path (vs
+        # the phases/0-main/ nesting multi-phase uses) for backwards
+        # compatibility with `zipsa view`, docs, and any user tooling
+        # that reads `~/.zipsa/<skill>@<ver>/runs/<ts>/output.jsonl`
+        # directly.
+        is_synthetic_single_phase = not phases
+        if is_synthetic_single_phase:
+            # Implicit single-phase wrapper for skills that didn't
+            # declare spec.phases. Same code path as multi-phase
+            # from here on; the only divergence is the log layout
+            # (flat vs phases/<i>-<id>/).
             phases = [PhaseSpec(
                 id="main",
                 goal=skill.manifest.spec.purpose,
@@ -1102,8 +982,15 @@ class DockerExecutor:
                         run_id=run_dir.name if run_dir else "unknown",
                     )
 
-                    # Per-phase artifact directory
-                    phase_dir = (run_dir / "phases" / f"{phase_idx}-{phase.id}") if run_dir else None
+                    # Per-phase artifact directory. Synthetic single-
+                    # phase skills use run_dir directly (flat layout —
+                    # matches the pre-consolidation behavior so external
+                    # tooling like `zipsa view` keeps working without
+                    # changes).
+                    if is_synthetic_single_phase:
+                        phase_dir = run_dir
+                    else:
+                        phase_dir = (run_dir / "phases" / f"{phase_idx}-{phase.id}") if run_dir else None
                     if phase_dir:
                         phase_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1304,7 +1191,10 @@ class DockerExecutor:
                     "type": "zipsa_run_complete",
                     "status": run_final_status,
                     "exit_code": run_final_exit_code,
-                    "result": last_phase_out,
+                    # The skill's inner `result` field — NOT the full
+                    # envelope. status/phase/etc are launcher metadata,
+                    # already on summary.json's top level.
+                    "result": run_final_result,
                     "error": None,
                     "run_dir": str(run_dir) if run_dir else None,
                     "_phase_summaries": phase_summaries,
