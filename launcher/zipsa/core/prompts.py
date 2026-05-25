@@ -14,11 +14,56 @@ previous_phase_output, skill_state, ...).
 from __future__ import annotations
 
 import json
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .skill import Skill
+
+# Placeholder POSIX locales that don't carry language preference info —
+# `C` is the historical "C / POSIX" default; `POSIX` is its alias. Both
+# should fall back to the launcher's default language rather than be
+# treated as their literal first letters.
+_POSIX_PLACEHOLDER_LOCALES = frozenset({"c", "posix"})
+# Default for fresh users on systems where no locale is set, or where
+# the locale is a placeholder like `C`. English chosen because the
+# tool's own docs and most skill source code are in English — safer
+# bet for a stranger than guessing.
+_DEFAULT_LANGUAGE = "en"
+# Strict shape: 2-3 lowercase ASCII letters. Catches typos and garbage
+# (e.g. `LANG=zh_CN_garbage`) instead of passing them downstream.
+_LANGUAGE_CODE_RE = re.compile(r"^[a-z]{2,3}$")
+
+
+def _detect_user_language() -> str:
+    """Return a 2-3 letter ISO language code from POSIX locale env vars.
+
+    Reads `LC_ALL` first (the POSIX override), then `LANG`. Strips the
+    region and encoding suffix:
+      `ko_KR.UTF-8`  → `ko`
+      `en_US.UTF-8`  → `en`
+      `ja`           → `ja`
+      `C` / `POSIX`  → fallback (`en`)
+      missing/empty  → fallback (`en`)
+      garbage shape  → fallback (`en`)
+
+    The detected value lands in `execution_context.user_language` so
+    the agent can localize all user-facing strings. Users on hosts with
+    a misleading $LANG can override later via the global skill memory
+    (ask_once / remember with scope="global", key="user_language").
+    """
+    raw = (os.environ.get("LC_ALL") or os.environ.get("LANG") or "").strip()
+    if not raw:
+        return _DEFAULT_LANGUAGE
+    # ko_KR.UTF-8 → ko_KR → ko
+    code = raw.split(".", 1)[0].split("_", 1)[0].lower()
+    if code in _POSIX_PLACEHOLDER_LOCALES:
+        return _DEFAULT_LANGUAGE
+    if not _LANGUAGE_CODE_RE.match(code):
+        return _DEFAULT_LANGUAGE
+    return code
 
 CONTAINER_WORKSPACE = "/home/agent/workspace"
 
@@ -98,6 +143,7 @@ def build_user_message(
         time=now.strftime("%H:%M:%S"),
         timezone=f"{now.strftime('%Z')} ({tz_offset_fmt})",
         tz_iana=tz_iana,
+        user_language=_detect_user_language(),
         run_id=run_id,
         phase_id=phase_id,
         phase_goal=phase_goal,

@@ -34,13 +34,14 @@ call it (BACKLOG until that second orchestrator exists).
 
 - Agent reasoning, phase goals, field names: **English**.
 - All user-facing strings (prompts, error messages,
-  `user_facing_summary`): **Korean**.
-- The final tweet text: **English** (it is the deliverable).
-
-Example user-facing Korean strings quoted below are **verbatim** —
-do not paraphrase, do not translate. Brace-delimited tokens like
-`{N}` or `{target_date}` are placeholders — substitute with the
-actual runtime value.
+  `user_facing_summary`): **`execution_context.user_language`** —
+  see the runtime contract's `user_language` description. Localize
+  every prompt and summary into that language. The English phrasings
+  shown below in this SKILL.md are *intent descriptions* — phrase
+  the actual prompt naturally in the user's language, do NOT translate
+  these English strings word-for-word.
+- The final tweet text: **English** (it is the deliverable, regardless
+  of UI language).
 
 ## State carryover
 
@@ -100,27 +101,26 @@ resolve target date.
    - Output `OK` → continue to step 2.
    - Output is a comma-separated list of variable names → stop with
      `status="failed"`, `error.code="x_credentials_missing"`,
-     `user_facing_summary` (Korean):
-     `"X 환경변수 누락: <the comma-separated list from stdout>"`.
+     `user_facing_summary` localized in `user_language`, intent:
+     "X env vars missing: <the comma-separated list from stdout>".
 
    Do NOT decide the env vars are missing based on the JSON
    `execution_context` alone — that block doesn't carry process
    environment.
 
 2. Call `mcp__zipsa__ask_once` with key=`voice` (EXACTLY that — not
-   `x_voice`, `tweet_voice`, etc.). Prompt (Korean):
-   `"1–2 문장으로 트윗 톤을 알려주세요."`
+   `x_voice`, `tweet_voice`, etc.). Prompt phrased in `user_language`,
+   intent: "Tell me your tweet tone in 1-2 sentences."
    Cached answer is reused on subsequent runs.
 
-3. Call `mcp__zipsa__ask_once` with key=`interests`. Build the
-   Korean prompt at runtime by joining `config.default_interests`
-   with `, ` and substituting into:
-   `"관심 주제 3-5개를 쉼표로 입력해주세요. 예: {example}"`
-   (so when the manifest's `default_interests` changes, the prompt's
-   example stays in sync — do not hardcode the items).
-   Parse the user's response into a list of trimmed non-empty
-   strings. Store the raw response into ask_once memory under
-   key=`interests`; pass the parsed list downstream as
+3. Call `mcp__zipsa__ask_once` with key=`interests`. Build the prompt
+   in `user_language` at runtime — intent: "Enter 3-5 interest topics
+   separated by commas. e.g. {example}" — where `{example}` is
+   `config.default_interests` joined with `, ` (so when the manifest's
+   `default_interests` changes, the prompt's example stays in sync —
+   do not hardcode the items). Parse the user's response into a list
+   of trimmed non-empty strings. Store the raw response into ask_once
+   memory under key=`interests`; pass the parsed list downstream as
    `next_phase_input.interests`.
 
 4. Resolve `target_date` from `user_query`:
@@ -139,8 +139,8 @@ resolve target date.
    }
    ```
 
-   `user_facing_summary` (Korean):
-   `"프리체크 완료 — voice/interests 로드, target {target_date}"`.
+   `user_facing_summary` in `user_language`, intent:
+   "Precheck complete — voice/interests loaded, target {target_date}".
 
 ### fetch
 
@@ -157,9 +157,9 @@ and read its artifact.
 
 2. If `result.status != "ok"`, do NOT stop the skill — agenthud is
    nice-to-have for this skill, not required. Set
-   `next_phase_input.report = null` and log
-   `user_facing_summary` (Korean):
-   `"agenthud 실패 — 웹 데이터로만 진행"`. Continue to discover.
+   `next_phase_input.report = null` and use `user_facing_summary`
+   in `user_language`, intent: "agenthud failed — continuing with
+   web data only". Continue to discover.
 
 3. Read the artifact **directly off the child-runs mount** — NOT
    via `mcp__zipsa__get_artifact` (that would pull the full JSON
@@ -186,8 +186,9 @@ and read its artifact.
    - `<` = agent responses (often the most quote-worthy prose)
 
 4. If `jq '.sessions | length' "$ART"` returns 0 (no activity on the
-   date), set `next_phase_input.activity_slim = null` and use Korean
-   `user_facing_summary`: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`.
+   date), set `next_phase_input.activity_slim = null` and use
+   `user_facing_summary` in `user_language`, intent:
+   "No Claude Code activity today — continuing with web data".
 
 5. Reduce the artifact to a draft-friendly slim shape (the
    draft phase reads this, NOT the full artifact — keeps that
@@ -248,11 +249,11 @@ and read its artifact.
    }
    ```
 
-   `user_facing_summary` (Korean):
-   - success with commits: `"agenthud 로드 — {N} 프로젝트, {C} 커밋"`
-   - success no commits: `"agenthud 로드 — {N} 프로젝트 (커밋 없음)"`
-   - success empty: `"오늘 Claude Code 활동 없음 — 웹 데이터로 진행"`
-   - failure: `"agenthud 실패 — 웹 데이터로만 진행"`
+   `user_facing_summary` in `user_language`, intent:
+   - success with commits: "agenthud loaded — {N} projects, {C} commits"
+   - success no commits: "agenthud loaded — {N} projects (no commits)"
+   - success empty: "No Claude Code activity today — continuing with web data"
+   - failure: "agenthud failed — continuing with web data only"
 
 ### discover
 
@@ -289,9 +290,9 @@ Search public build-in-public chatter via `WebSearch` and extract
    }
    ```
 
-   `user_facing_summary` (Korean):
-   - non-empty: `"BIP 트렌드 분석 완료 — 인사이트 {N}개"`
-   - empty: `"BIP 검색 결과 없음 — 웹 데이터 없이 계속"`
+   `user_facing_summary` in `user_language`, intent:
+   - non-empty: "BIP trend analysis complete — {N} insights"
+   - empty: "No BIP search results — continuing without web data"
 
 ### interests_search
 
@@ -320,7 +321,7 @@ in English prose (the draft phase is English).
 4. On `WebSearch` 0-results or repeated failure, set
    `interests_summary = "(no search results)"` and continue. Plain
    English — this field is consumed by the English draft phase;
-   Korean status belongs in `user_facing_summary`.
+   localized status belongs in `user_facing_summary`.
 
 5. Output `next_phase_input`:
    ```json
@@ -330,9 +331,9 @@ in English prose (the draft phase is English).
    }
    ```
 
-   `user_facing_summary` (Korean):
-   `"관심사 검색 요약 완료 — {N} 주제"` (substitute `{N}` with
-   the number of items actually queried, max 3).
+   `user_facing_summary` in `user_language`, intent:
+   "Interest search summary complete — {N} topics" (substitute `{N}`
+   with the number of items actually queried, max 3).
 
 ### draft
 
@@ -350,8 +351,8 @@ Inputs (from `previous_phase_input`):
 
 Rules:
 
-- The tweet **must be English**. Even if the user reviews in Korean,
-  the tweet text stays English.
+- The tweet **must be English**. Even if the user reviews in another
+  language, the tweet text stays English.
 - Stay in `voice`. Apply 1-2 of the `insights` if natural — do not
   force them.
 - Prioritize content sources in this order:
@@ -376,46 +377,42 @@ next_phase_input = {
 }
 ```
 
-`user_facing_summary` (Korean): `"초안 작성 완료"`.
+`user_facing_summary` in `user_language`, intent: "Draft complete".
 
 ### review
 
-Run a Korean-language review loop on the English draft.
+Run a localized review loop on the English draft.
 
 **Language constraint:**
-- All conversation with the user in this phase is **Korean**.
+- All conversation with the user in this phase is in
+  `execution_context.user_language`.
 - The draft text itself is **English** and must NOT be translated
   when shown back to the user.
+- The user's feedback may arrive in any language; understand it and
+  apply to the English draft regardless.
 
 Steps:
 
-1. Show the draft (English) with its character count. Ask (Korean):
-   ```
-   이대로 갈까요? 수정 요청? (엔터=확정)
-   ```
+1. Show the draft (English) with its character count. Ask in
+   `user_language`, intent: "Go with this? Or edit? (empty = confirm)".
 
 2. If the user gives empty input → treat as approval, jump to step 4.
 
-3. If the user gives feedback (Korean or English) → apply the
-   feedback to the draft while keeping it in **English** and in
-   `voice`. Verify ≤ `config.max_tweet_chars`. Go back to step 1.
+3. If the user gives feedback (any language) → apply the feedback to
+   the draft while keeping it in **English** and in `voice`. Verify
+   ≤ `config.max_tweet_chars`. Go back to step 1.
 
-   Cap at `config.max_review_iterations` (5). After the cap, force
-   a binary decision with:
-   ```
-   추가 수정 한도(5회) 도달. 이대로 게시할까요? (y/N)
-   ```
+   Cap at `config.max_review_iterations` (5). After the cap, force a
+   binary decision in `user_language`, intent: "Review limit (5)
+   reached. Post as-is? (y/N)".
 
-4. Final confirmation (Korean):
-   ```
-   X에 게시할까요? (y/N)
-   ```
+4. Final confirmation in `user_language`, intent: "Post to X? (y/N)".
 
-   - `y` / `yes` / `네` / `예` / `응` / `ㅇ` / `ㅇㅇ` →
+   - `y` / `yes` (any affirmative in user_language) →
      `approved_for_post = true`, proceed.
    - Anything else (including empty) → stop with `status="failed"`,
-     `error.code="user_declined"`,
-     `user_facing_summary` (Korean): `"사용자가 게시를 취소했습니다"`.
+     `error.code="user_declined"`, `user_facing_summary` in
+     `user_language`, intent: "User canceled the post".
 
 Output (on approval):
 
@@ -427,7 +424,7 @@ next_phase_input = {
 }
 ```
 
-`user_facing_summary` (Korean): `"최종 컨펌 완료 — 게시 진행"`.
+`user_facing_summary` in `user_language`, intent: "Final confirmation — posting".
 
 ### post
 
@@ -442,9 +439,9 @@ Invoke the atomic `x-post` child skill with the approved draft.
    ```
 
 2. If `result.status != "ok"`, stop with `status="failed"`,
-   `error.code="x_post_failed"`,
-   `user_facing_summary` (Korean):
-   `"게시 실패: <result.summary.error.message truncated to 200 chars>"`.
+   `error.code="x_post_failed"`, `user_facing_summary` in
+   `user_language`, intent:
+   "Post failed: <result.summary.error.message truncated to 200 chars>".
 
 3. On success, read the artifact off the child-runs mount:
 
@@ -464,8 +461,7 @@ Invoke the atomic `x-post` child skill with the approved draft.
    }
    ```
 
-   `user_facing_summary` (Korean):
-   `"게시 완료: <url>"`.
+   `user_facing_summary` in `user_language`, intent: "Posted: <url>".
 
 The `tweet_id` is the durable key for "what posted when".
 
