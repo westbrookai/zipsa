@@ -380,6 +380,96 @@ class TestListCommand:
         assert "66%" in result.output
 
 
+class TestSkillNameShortcut:
+    """`zipsa <skill-name> [args]` is sugar for `zipsa run <skill-name> [args]`
+    when <skill-name> is an installed skill and is NOT a known subcommand.
+
+    Failure modes the shortcut MUST NOT regress on:
+      - typos of real commands still fail with typer's "No such command"
+      - flag-only invocations (--version, --help) reach typer untouched
+      - existing `run X` invocations stay unchanged
+    """
+
+    def _rewrite(self, argv, installed: set):
+        from zipsa.cli import _rewrite_argv_for_skill_shortcut
+        return _rewrite_argv_for_skill_shortcut(
+            argv, skill_installed=lambda name: name in installed,
+        )
+
+    def test_installed_skill_rewrites_to_run(self):
+        new_argv, notice = self._rewrite(
+            ["zipsa", "weather"], installed={"weather"},
+        )
+        assert new_argv == ["zipsa", "run", "weather"]
+        # Notice goes to stderr so user knows the shortcut fired and
+        # learns the canonical form by example.
+        assert notice is not None
+        assert "weather" in notice
+        assert "zipsa run weather" in notice
+
+    def test_args_after_skill_name_forwarded(self):
+        new_argv, notice = self._rewrite(
+            ["zipsa", "weather", "Sydney", "--foo", "bar"],
+            installed={"weather"},
+        )
+        assert new_argv == ["zipsa", "run", "weather", "Sydney", "--foo", "bar"]
+        assert notice is not None
+
+    def test_typo_not_rewritten(self):
+        """`zipsa lst` should fall through to typer's normal error path
+        — the shortcut must not silently 'succeed' on something the
+        user clearly mistyped. installed_skill check returns False →
+        argv unchanged → typer reports 'No such command lst'."""
+        new_argv, notice = self._rewrite(
+            ["zipsa", "lst"], installed={"weather", "hello-world"},
+        )
+        assert new_argv == ["zipsa", "lst"]
+        assert notice is None
+
+    def test_known_command_not_rewritten_even_if_skill_with_same_name(self):
+        """If a skill happens to share a name with a built-in command
+        (e.g. user installs a skill called 'list'), the built-in wins.
+        Users can still invoke the skill explicitly via `zipsa run list`."""
+        new_argv, notice = self._rewrite(
+            ["zipsa", "list"], installed={"list"},
+        )
+        assert new_argv == ["zipsa", "list"]
+        assert notice is None
+
+    def test_existing_run_invocation_unchanged(self):
+        new_argv, notice = self._rewrite(
+            ["zipsa", "run", "weather"], installed={"weather"},
+        )
+        assert new_argv == ["zipsa", "run", "weather"]
+        assert notice is None
+
+    def test_flag_at_position_1_not_intercepted(self):
+        """`zipsa --version` and `zipsa -h` go straight to typer."""
+        for flag in ("--version", "-V", "--help", "-h"):
+            new_argv, notice = self._rewrite(
+                ["zipsa", flag], installed={"weather"},
+            )
+            assert new_argv == ["zipsa", flag]
+            assert notice is None
+
+    def test_no_args_unchanged(self):
+        new_argv, notice = self._rewrite(["zipsa"], installed={"weather"})
+        assert new_argv == ["zipsa"]
+        assert notice is None
+
+    def test_path_argument_not_treated_as_skill(self):
+        """`zipsa ./skills/foo` (path) should not trigger the shortcut.
+        Paths contain '/' or start with '.' / '~' — none of those can
+        be a valid skill name (skill names are simple identifiers)."""
+        for path in ("./skills/foo", "../skills/foo", "/abs/path",
+                     "~/skills/foo", "skills/foo"):
+            new_argv, notice = self._rewrite(
+                ["zipsa", path], installed={"foo"},
+            )
+            assert new_argv == ["zipsa", path], f"path {path!r} was rewritten"
+            assert notice is None
+
+
 class TestListOrchestratorTree:
     """When a skill declares spec.children, list shows them as an
     indented tree below the parent with each child's @version and an
