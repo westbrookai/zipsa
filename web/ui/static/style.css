@@ -69,6 +69,20 @@ th {
 .success-rate-ok { color: #2c8a3e; font-weight: 500; }
 .success-rate-warn { color: #b07a00; font-weight: 500; }
 
+.file-links {
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.file-links a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.file-links a:hover {
+    text-decoration: underline;
+}
+
 .state-msg {
     color: var(--muted);
     padding: 2rem;

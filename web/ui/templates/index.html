@@ -102,6 +102,7 @@
                     <th>Version</th>
                     <th>Model</th>
                     <th>Runs</th>
+                    <th>Files</th>
                     <th>Purpose</th>
                     <th></th>
                 </tr>
@@ -113,6 +114,11 @@
                         <td class="mono" x-text="skill.version"></td>
                         <td class="mono muted" x-text="skill.model || '—'"></td>
                         <td class="muted" x-html="runStatsLabel(skill)"></td>
+                        <td class="file-links">
+                            <a target="_blank" :href="`/api/skills/${skill.name}/files/manifest.yaml`">manifest</a>
+                            <span class="muted">·</span>
+                            <a target="_blank" :href="`/api/skills/${skill.name}/files/SKILL.md`">SKILL</a>
+                        </td>
                         <td x-text="skill.purpose"></td>
                         <td>
                             <button

@@ -16,10 +16,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from zipsa import paths as zipsa_paths
 from zipsa.core.skill import Skill
+
+
+# Only these two files are exposed via the file-view endpoint — keeps
+# the route from becoming a path-traversal hole. Anything else 404s.
+_VIEWABLE_FILES = frozenset({"manifest.yaml", "SKILL.md"})
 
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
@@ -92,3 +98,21 @@ def _list_installed() -> list[dict]:
 @router.get("")
 def list_skills() -> dict:
     return {"skills": _list_installed()}
+
+
+@router.get("/{name}/files/{filename}", response_class=PlainTextResponse)
+def get_skill_file(name: str, filename: str) -> str:
+    """Return raw manifest.yaml or SKILL.md text for browser viewing.
+
+    Allowlist only — never resolve arbitrary filenames against the
+    skill directory.
+    """
+    if filename not in _VIEWABLE_FILES:
+        raise HTTPException(status_code=404, detail="file_not_found")
+    skill_root = zipsa_paths.skills_dir() / name
+    if not skill_root.exists():
+        raise HTTPException(status_code=404, detail="skill_not_found")
+    fp = skill_root / filename
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail="file_not_found")
+    return fp.read_text()
