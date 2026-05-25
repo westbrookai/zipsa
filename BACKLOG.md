@@ -30,40 +30,6 @@ Pick up if dangling-link pain recurs.
 
 ---
 
-## `ask_once` should accept a `default` parameter (2026-05-18)
-
-**Symptom.** Skills want to suggest a default value when asking a
-question for the first time (e.g. daily-progress's `notion_db_name`
-defaults to `zipsa-daily-log`). Today the skill writes the default
-into the prompt text and hopes the agent infers the right behavior
-when the user submits an empty answer.
-
-In the first daily-progress run after the v0.4.0 migration the agent
-*did* infer correctly — the user hit Enter on the db-name prompt and
-the agent stored `"zipsa-daily-log"` rather than `""`. But that worked
-by luck: nothing in the contract says empty input means "use the
-default mentioned in the prompt." A different agent (or the same agent
-on a different day) might just as easily store `""`, which would then
-be cached forever and break the skill silently.
-
-**Fix sketch.**
-
-- Extend `mcp__zipsa__ask_once`'s schema with an optional `default`
-  parameter. When the user submits an empty string, store the default
-  instead, and return it to the caller.
-- Update runtime-contract.md to document the parameter and to say
-  "if the skill mentions a default value in the prompt, pass it as
-  `default` — don't rely on inference."
-- Consider the same treatment for plain `mcp__zipsa__ask` if any skill
-  needs a non-remembered default.
-
-**Test plan.** Unit test the handler with empty input + default set,
-empty input + no default, and non-empty input (default must be
-ignored). Add an integration test that runs an ask_once with a default
-in a non-interactive HITL run and confirms the default is stored.
-
----
-
 ## Hook denial messages should hint at the phase's allow list (2026-05-18)
 
 **Symptom.** In the daily-progress `report` phase the agent invoked

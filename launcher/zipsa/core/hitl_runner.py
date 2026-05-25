@@ -264,13 +264,25 @@ class HitlServer:
 
         @mcp.tool()
         @_logged
-        def ask_once(key: str, prompt: str, scope: str = "skill") -> str:
+        def ask_once(
+            key: str,
+            prompt: str,
+            scope: str = "skill",
+            default: str | None = None,
+        ) -> str:
             """Ask the user a question and cache the answer permanently.
 
             If the key already has a value (in the chosen scope), returns
             that value without prompting. Otherwise asks the user, stores
             the answer, and returns it. The "cached config" pattern in one
             call — no risk of forgetting to remember.
+
+            If `default` is given: an empty answer (the user just hits
+            Enter) resolves to `default`, and in a non-interactive run the
+            question resolves to `default` instead of failing. Pass the
+            value you mention in the prompt as `default` rather than
+            relying on the agent inferring that empty input means "use the
+            default".
 
             Use this for values that, once given, should never be asked
             again (workspace name, default city, preferred language).
@@ -285,7 +297,12 @@ class HitlServer:
             try:
                 answer = ask_h.run(prompt=prompt)
             except HitlUnattended as e:
-                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+                if default is None:
+                    raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+                answer = default
+            else:
+                if answer == "" and default is not None:
+                    answer = default
             store.set(key, answer)
             return answer
 

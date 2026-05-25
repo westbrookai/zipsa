@@ -598,3 +598,133 @@ class TestPerCallerMemoryRouting:
                 assert "red" not in bob_mem.read_text()
         finally:
             server.stop()
+
+
+class TestAskOnceDefault:
+    """ask_once `default` resolves empty input and unattended runs."""
+
+    def _make_server(self, tmp_path, stdin_text, interactive):
+        import io as _io
+        from zipsa.core.memory_store import MemoryStore
+        from zipsa.core.caller_context import CallerInfo
+        io_ = HitlIO(
+            stdin=_io.StringIO(stdin_text),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=interactive,
+        )
+        skill = MemoryStore(tmp_path / "skill.json")
+        global_ = MemoryStore(tmp_path / "global.json")
+        server = HitlServer(io_, skill_store=skill, global_store=global_,
+                            primary_caller=CallerInfo("test", "0"))
+        return server, skill
+
+    def _session(self, server):
+        import httpx
+        url = f"http://127.0.0.1:{server.port}/mcp"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {server.token}",
+        }
+        init = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}},
+        }
+        r = httpx.post(url, json=init, headers=headers, timeout=5.0)
+        assert r.status_code == 200
+        sid = r.headers["mcp-session-id"]
+        sh = {**headers, "mcp-session-id": sid}
+        httpx.post(url, json={"jsonrpc": "2.0",
+                              "method": "notifications/initialized"},
+                   headers=sh, timeout=5.0)
+        return url, sh
+
+    def _call(self, url, sh, arguments, req_id=2):
+        import httpx
+        call = {"jsonrpc": "2.0", "id": req_id, "method": "tools/call",
+                "params": {"name": "ask_once", "arguments": arguments}}
+        r = httpx.post(url, json=call, headers=sh, timeout=5.0)
+        assert r.status_code == 200
+        return r
+
+    def _text(self, r):
+        import json
+        body = r.text
+        if "data:" in body:
+            for line in body.splitlines():
+                if line.startswith("data:"):
+                    data = json.loads(line[5:].strip())
+                    break
+        else:
+            data = r.json()
+        return data["result"]["content"][0]["text"]
+
+    def test_empty_input_uses_default(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "\n", interactive=True)
+        server.start()
+        try:
+            url, sh = self._session(server)
+            r = self._call(url, sh, {"key": "db", "prompt": "DB?",
+                                     "default": "zipsa-daily-log"})
+            assert "zipsa-daily-log" in self._text(r)
+            assert skill.get("db") == "zipsa-daily-log"
+        finally:
+            server.stop()
+
+    def test_empty_input_no_default_stores_empty(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "\n", interactive=True)
+        server.start()
+        try:
+            url, sh = self._session(server)
+            self._call(url, sh, {"key": "db", "prompt": "DB?"})
+            assert skill.get("db") == ""   # documents current behavior
+        finally:
+            server.stop()
+
+    def test_nonempty_input_ignores_default(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "my-db\n", interactive=True)
+        server.start()
+        try:
+            url, sh = self._session(server)
+            r = self._call(url, sh, {"key": "db", "prompt": "DB?",
+                                     "default": "zipsa-daily-log"})
+            assert "my-db" in self._text(r)
+            assert skill.get("db") == "my-db"
+        finally:
+            server.stop()
+
+    def test_cache_hit_ignores_default(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "", interactive=True)
+        skill.set("db", "cached-db")
+        server.start()
+        try:
+            url, sh = self._session(server)
+            r = self._call(url, sh, {"key": "db", "prompt": "DB?",
+                                     "default": "zipsa-daily-log"})
+            assert "cached-db" in self._text(r)
+        finally:
+            server.stop()
+
+    def test_noninteractive_uses_default(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "", interactive=False)
+        server.start()
+        try:
+            url, sh = self._session(server)
+            r = self._call(url, sh, {"key": "db", "prompt": "DB?",
+                                     "default": "zipsa-daily-log"})
+            assert "zipsa-daily-log" in self._text(r)
+            assert skill.get("db") == "zipsa-daily-log"
+        finally:
+            server.stop()
+
+    def test_noninteractive_no_default_raises_unattended(self, tmp_path):
+        server, skill = self._make_server(tmp_path, "", interactive=False)
+        server.start()
+        try:
+            url, sh = self._session(server)
+            r = self._call(url, sh, {"key": "db", "prompt": "DB?"})
+            assert "HITL_UNATTENDED" in r.text
+        finally:
+            server.stop()
