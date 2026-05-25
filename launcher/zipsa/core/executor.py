@@ -38,6 +38,40 @@ from .. import paths as zipsa_paths
 CONTAINER_WORKSPACE = "/home/agent/workspace"
 
 
+def _format_shell_command_multiline(argv: list[str]) -> str:
+    """Render a shell argv as a multi-line bash command using
+    ``\\<newline>`` line continuations.
+
+    Functionally identical to ``shlex.join(argv)`` — bash parses both
+    the same way — but each ``--flag`` (and its value, if any) lands
+    on its own line, so dry-run output is scannable instead of a
+    single-line wall.
+
+    Pairing heuristic: an arg starting with ``-`` followed by an arg
+    that does NOT start with ``-`` (after quoting) is a flag+value
+    pair on one line. Otherwise each arg gets its own line. The first
+    arg (the command name) always starts a fresh line.
+    """
+    if not argv:
+        return ""
+    quoted = [shlex.quote(a) for a in argv]
+    parts: list[str] = [quoted[0]]
+    i = 1
+    while i < len(quoted):
+        flag = quoted[i]
+        if (
+            flag.startswith("-")
+            and i + 1 < len(quoted)
+            and not quoted[i + 1].startswith("-")
+        ):
+            parts.append(f"{flag} {quoted[i + 1]}")
+            i += 2
+        else:
+            parts.append(flag)
+            i += 1
+    return " \\\n  ".join(parts)
+
+
 class MountCollisionError(ValueError):
     """Raised when two dynamic mount entries resolve to the same container path."""
 
@@ -1591,17 +1625,22 @@ class DockerExecutor:
         # Preamble copies .claude.json from the read-only /.zipsa mount into the
         # container's overlay FS so Claude Code can atomically rename it. Also
         # installs settings.json (with PreToolUse hook config) into ~/.claude/.
-        cp_preamble = (
-            "cp /.zipsa/.claude.json /home/agent/.claude.json && "
-            "mkdir -p /home/agent/.claude && "
-            "cp /.zipsa/settings.json /home/agent/.claude/settings.json"
-        )
+        # Newline-after-`&&` is bash's normal command separator (no `\`
+        # continuation needed). Splitting these onto separate lines makes
+        # dry-run output legible without changing how bash parses the script
+        # — the executed and printed commands are byte-for-byte identical.
+        preamble_steps = [
+            "cp /.zipsa/.claude.json /home/agent/.claude.json",
+            "mkdir -p /home/agent/.claude",
+            "cp /.zipsa/settings.json /home/agent/.claude/settings.json",
+        ]
         if self.dev_overlay is not None and self.dev_overlay.preamble_str:
-            cp_preamble = f"{cp_preamble} && {self.dev_overlay.preamble_str}"
+            preamble_steps.append(self.dev_overlay.preamble_str)
+        cp_preamble = " &&\n".join(preamble_steps)
 
         if shell:
             # exec replaces the copy-shell with a fresh interactive bash
-            cmd.extend(["bash", "-c", f"{cp_preamble} && exec bash"])
+            cmd.extend(["bash", "-c", f"{cp_preamble} &&\nexec bash"])
         else:
             # Runtime-specific command (from plugin)
             system_prompt = _build_system_prompt_impl(skill)
@@ -1637,7 +1676,13 @@ class DockerExecutor:
                 model=effective_model,
             )
 
-            cmd.extend(["bash", "-c", f"{cp_preamble} && {shlex.join(runtime_cmd)}"])
+            # Build the claude invocation as multi-line bash with one
+            # --flag (and its value, if present) per line, joined with
+            # `\<newline>` continuations. Bash parses this identically
+            # to `shlex.join(runtime_cmd)` — but dry-run output is much
+            # easier to scan than a single-line wall of flags.
+            claude_call = _format_shell_command_multiline(runtime_cmd)
+            cmd.extend(["bash", "-c", f"{cp_preamble} &&\n{claude_call}"])
 
         return cmd
 
