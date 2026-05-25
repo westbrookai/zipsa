@@ -19,12 +19,26 @@
             No installed skills. Try <code>zipsa install &lt;source&gt;</code> from the CLI.
         </div>
 
-        <table x-show="!loading && skills.length > 0">
+        <!-- Output panel comes FIRST so it stays in view as the user
+             scrolls; the skill list below is secondary once a run is
+             active. -->
+        <section x-show="output.length > 0 || running" class="output-panel">
+            <header class="output-header">
+                <h3>
+                    Output<span x-show="currentSkill"> — <span class="mono" x-text="currentSkill"></span></span>
+                </h3>
+                <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
+            </header>
+            <pre x-ref="outBox" class="output-box"><template x-for="(line, idx) in output" :key="idx"><div :class="line.stream === 'stderr' ? 'log-line stderr' : 'log-line'" x-text="line.text"></div></template></pre>
+        </section>
+
+        <table x-show="!loading && skills.length > 0" :class="{'compact': output.length > 0 || running}">
             <thead>
                 <tr>
                     <th>Name</th>
                     <th>Version</th>
                     <th>Model</th>
+                    <th>Runs</th>
                     <th>Purpose</th>
                     <th></th>
                 </tr>
@@ -35,6 +49,7 @@
                         <td class="mono" x-text="skill.name"></td>
                         <td class="mono" x-text="skill.version"></td>
                         <td class="mono muted" x-text="skill.model || '—'"></td>
+                        <td class="muted" x-html="runStatsLabel(skill)"></td>
                         <td x-text="skill.purpose"></td>
                         <td>
                             <button
@@ -48,16 +63,6 @@
                 </template>
             </tbody>
         </table>
-
-        <section x-show="output.length > 0 || running" class="output-panel">
-            <header class="output-header">
-                <h3>
-                    Output<span x-show="currentSkill"> — <span class="mono" x-text="currentSkill"></span></span>
-                </h3>
-                <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
-            </header>
-            <pre x-ref="outBox" class="output-box"><template x-for="(line, idx) in output" :key="idx"><div :class="line.stream === 'stderr' ? 'log-line stderr' : 'log-line'" x-text="line.text"></div></template></pre>
-        </section>
     </main>
 
     <script>
@@ -90,6 +95,10 @@
                     this.exitCode = null;
                     this.running = true;
                     this.currentSkill = skillName;
+                    // Scroll to top — output panel now lives ABOVE the
+                    // skill table, so first-run UX is "see the panel
+                    // immediately."
+                    window.scrollTo({top: 0, behavior: 'smooth'});
                     try {
                         const resp = await fetch('/api/runs', {
                             method: 'POST',
@@ -157,6 +166,14 @@
                     if (this.exitCode === 0) return 'exit 0';
                     if (this.exitCode != null) return `exit ${this.exitCode}`;
                     return '';
+                },
+
+                runStatsLabel(skill) {
+                    const total = skill.total_runs;
+                    if (total === 0) return '<span class="muted">—</span>';
+                    const pct = Math.round((skill.successful_runs / total) * 100);
+                    const cls = pct === 100 ? 'success-rate-ok' : 'success-rate-warn';
+                    return `${total} runs · <span class="${cls}">${pct}% success</span>`;
                 },
             }
         }

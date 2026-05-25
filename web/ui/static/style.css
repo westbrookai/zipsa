@@ -66,6 +66,9 @@ th {
 
 .muted { color: var(--muted); }
 
+.success-rate-ok { color: #2c8a3e; font-weight: 500; }
+.success-rate-warn { color: #b07a00; font-weight: 500; }
+
 .state-msg {
     color: var(--muted);
     padding: 2rem;
@@ -106,11 +109,17 @@ code {
 }
 
 .output-panel {
-    margin-top: 2rem;
+    margin-bottom: 2rem;
     background: white;
     border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
+}
+
+/* When a run is active, dim the skill table a bit so the output
+   panel reads as the primary surface. */
+table.compact tbody tr {
+    opacity: 0.75;
 }
 
 .output-header {
@@ -159,7 +168,9 @@ code {
     font-family: "SF Mono", Menlo, Consolas, monospace;
     font-size: 0.82rem;
     line-height: 1.45;
-    max-height: 550px;
+    /* Bounded by viewport so the panel always fits on screen even on
+       tall streams — internal scroll handles overflow. */
+    max-height: 60vh;
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
