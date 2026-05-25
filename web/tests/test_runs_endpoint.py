@@ -108,6 +108,96 @@ def test_multiple_runs_get_unique_ids(client):
     assert a != b
 
 
+def test_summary_endpoint_returns_404_for_unknown(client):
+    resp = client.get("/api/runs/does-not-exist/summary")
+    assert resp.status_code == 404
+
+
+def test_summary_endpoint_returns_425_before_run_dir_seen(client):
+    """If stdout never produced a `Run dir:` line, the registry has
+    no run_dir to look up — the UI should know to fall back."""
+    resp = client.post("/api/runs", json={"skill": "x"})
+    run_id = resp.json()["run_id"]
+    resp = client.get(f"/api/runs/{run_id}/summary")
+    assert resp.status_code == 425
+
+
+def test_summary_endpoint_reads_disk_file(monkeypatch, tmp_path):
+    """Subprocess prints `Run dir: <tmp>` then exits. /summary should
+    pick up the path off stdout and read the file we planted there."""
+    import asyncio
+    import sys
+    from api import runs as runs_mod
+    from fastapi.testclient import TestClient
+
+    fake_run_dir = tmp_path / "run-x"
+    fake_run_dir.mkdir()
+    (fake_run_dir / "summary.json").write_text(json.dumps({
+        "status": "ok",
+        "result": {"answer": 42},
+        "user_facing_summary": "all good",
+    }))
+
+    def fake_cmd(skill, args):
+        script = f'print("Run dir: {fake_run_dir}")'
+        return [sys.executable, "-c", script]
+    monkeypatch.setattr("api.runs._build_run_command", fake_cmd)
+
+    async def run_and_drain() -> str:
+        runs_mod._runs.clear()
+        resp = await runs_mod.start_run(runs_mod.RunStartRequest(skill="x"))
+        rid = resp.run_id
+        # Drain the stream so _pump fills entry["run_dir"]
+        async for _ in runs_mod._event_stream(rid):
+            pass
+        return rid
+
+    rid = asyncio.run(run_and_drain())
+
+    from app import app
+    client = TestClient(app)
+    resp = client.get(f"/api/runs/{rid}/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["status"] == "ok"
+    assert body["summary"]["result"] == {"answer": 42}
+
+
+def test_stop_endpoint_returns_404_for_unknown(client):
+    resp = client.post("/api/runs/does-not-exist/stop")
+    assert resp.status_code == 404
+
+
+def test_stop_endpoint_terminates_running_subprocess(monkeypatch):
+    """Spawn a subprocess that would sleep forever, hit stop, verify
+    it actually exits with a non-zero code."""
+    import asyncio
+    import sys
+    from api import runs as runs_mod
+
+    def fake_cmd(skill, args):
+        # Sleeps long enough that the test will hit stop first.
+        script = 'import time; time.sleep(30)'
+        return [sys.executable, "-c", script]
+    monkeypatch.setattr("api.runs._build_run_command", fake_cmd)
+
+    async def run_and_stop() -> int:
+        runs_mod._runs.clear()
+        resp = await runs_mod.start_run(runs_mod.RunStartRequest(skill="x"))
+        rid = resp.run_id
+        # Give the subprocess a tick to start
+        await asyncio.sleep(0.1)
+        result = await runs_mod.stop_run(rid)
+        assert result["running"] is False
+        proc = runs_mod._runs[rid]["process"]
+        return proc.returncode
+
+    code = asyncio.run(run_and_stop())
+    # SIGTERM on UNIX = -15. Either negative (signal) or non-zero
+    # success-of-stop is fine; we just want "not None and not 0".
+    assert code is not None and code != 0
+
+
 def test_stdin_endpoint_returns_404_for_unknown(client):
     resp = client.post(
         "/api/runs/does-not-exist/stdin",

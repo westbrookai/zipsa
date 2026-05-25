@@ -27,9 +27,72 @@
                 <h3>
                     Output<span x-show="currentSkill"> — <span class="mono" x-text="currentSkill"></span></span>
                 </h3>
-                <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
+                <div class="output-header-right">
+                    <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
+                    <button
+                        x-show="running"
+                        class="btn btn-stop"
+                        @click="stopRun()"
+                        :disabled="stopping">
+                        <span x-text="stopping ? 'stopping…' : 'Stop'"></span>
+                    </button>
+                </div>
             </header>
             <pre x-ref="outBox" class="output-box"><template x-for="(line, idx) in output" :key="idx"><div :class="line.stream === 'stderr' ? 'log-line stderr' : 'log-line'" x-text="line.text"></div></template></pre>
+
+            <!-- Structured result card from the canonical summary.json.
+                 Shows after the run exits — disk file is the source of
+                 truth (renderer text is a view of the same data). -->
+            <div x-show="summary !== null" class="summary-card">
+                <div class="summary-row">
+                    <span class="summary-label">Summary</span>
+                    <span class="summary-value" x-text="summary?.user_facing_summary || '—'"></span>
+                </div>
+                <div x-show="summary?.result" class="summary-row">
+                    <span class="summary-label">Result</span>
+                    <table class="result-table">
+                        <template x-for="(v, k) in (summary?.result || {})" :key="k">
+                            <tr>
+                                <td class="mono muted" x-text="k"></td>
+                                <td class="mono" x-text="typeof v === 'object' ? JSON.stringify(v) : v"></td>
+                            </tr>
+                        </template>
+                    </table>
+                </div>
+                <div x-show="summary?.error" class="summary-row error-row">
+                    <span class="summary-label">Error</span>
+                    <span class="mono" x-text="summary?.error?.code || ''"></span>
+                    <span class="muted" x-text="summary?.error?.message || ''"></span>
+                </div>
+                <div class="summary-meta">
+                    <span x-text="`${(summary?.duration_ms || 0) / 1000}s`"></span>
+                    <span x-show="summary?.num_turns">·</span>
+                    <span x-show="summary?.num_turns" x-text="`${summary?.num_turns} turns`"></span>
+                    <span x-show="summary?.total_cost_usd != null">·</span>
+                    <span x-show="summary?.total_cost_usd != null" x-text="`$${(summary?.total_cost_usd || 0).toFixed(4)}`"></span>
+                </div>
+                <div x-show="runDir" class="summary-rundir">
+                    <span class="muted">Run dir:</span>
+                    <code x-text="runDir"></code>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recent runs: in-memory, last 10. Click to view its summary
+             without re-running. -->
+        <section x-show="history.length > 0" class="history-panel">
+            <h3 class="history-header">Recent runs</h3>
+            <ul class="history-list">
+                <template x-for="run in history" :key="run.run_id">
+                    <li class="history-item" @click="loadHistorySummary(run)">
+                        <span class="history-status" :class="historyStatusClass(run)" x-text="historyStatusIcon(run)"></span>
+                        <span class="mono history-skill" x-text="run.skill"></span>
+                        <span class="muted history-time" x-text="formatTimeAgo(run.ended_at)"></span>
+                        <span class="muted history-meta" x-show="run.cost_usd != null" x-text="`$${(run.cost_usd || 0).toFixed(4)}`"></span>
+                        <button class="btn btn-mini" @click.stop="startRun(run.skill)" :disabled="running">Re-run</button>
+                    </li>
+                </template>
+            </ul>
         </section>
 
         <table x-show="!loading && skills.length > 0" :class="{'compact': output.length > 0 || running}">
@@ -138,6 +201,10 @@
                 exitCode: null,
                 eventSource: null,
                 currentRunId: null,
+                stopping: false,
+                summary: null,
+                runDir: null,
+                history: [],   // [{run_id, skill, exit_code, ended_at, cost_usd}, ...]
                 // HITL state
                 hitlActive: false,
                 hitlPrompt: null,   // {type: 'ask'|'confirm'|'choose', text, options?}
@@ -161,6 +228,8 @@
                     this.exitCode = null;
                     this.running = true;
                     this.currentSkill = skillName;
+                    this.summary = null;
+                    this.runDir = null;
                     this.hitlPrompt = null;
                     this.hitlActive = false;
                     this.hitlInput = '';
@@ -193,13 +262,15 @@
                         data.text = data.text.replace(/\x1b\[[0-9;]*m/g, '');
                         this.handleStreamLine(data);
                     });
-                    es.addEventListener('exit', (e) => {
+                    es.addEventListener('exit', async (e) => {
                         const data = JSON.parse(e.data);
                         this.exitCode = data.exit_code;
                         this.running = false;
+                        this.stopping = false;
                         this.hitlPrompt = null;
                         es.close();
                         this.eventSource = null;
+                        await this.loadSummary(this.currentRunId, this.currentSkill, data.exit_code);
                     });
                     es.addEventListener('error', (e) => {
                         if (this.running) console.warn('SSE error', e);
@@ -278,6 +349,20 @@
                     this.hitlInput = '';
                 },
 
+                async stopRun() {
+                    if (!this.currentRunId || this.stopping) return;
+                    this.stopping = true;
+                    try {
+                        const resp = await fetch(`/api/runs/${this.currentRunId}/stop`, {method: 'POST'});
+                        if (!resp.ok) throw new Error(`POST stop ${resp.status}`);
+                    } catch (e) {
+                        console.error('stop failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] stop failed: ${e}`});
+                    } finally {
+                        this.stopping = false;
+                    }
+                },
+
                 scrollToBottom() {
                     const box = this.$refs.outBox;
                     if (box) box.scrollTop = box.scrollHeight;
@@ -303,6 +388,67 @@
                     const pct = Math.round((skill.successful_runs / total) * 100);
                     const cls = pct === 100 ? 'success-rate-ok' : 'success-rate-warn';
                     return `${total} runs · <span class="${cls}">${pct}% success</span>`;
+                },
+
+                async loadSummary(runId, skill, exitCode) {
+                    if (!runId) return;
+                    try {
+                        const resp = await fetch(`/api/runs/${runId}/summary`);
+                        if (!resp.ok) {
+                            // 425 = run_dir not yet known; 410 = no summary.json
+                            // (e.g. user stopped early). Either way: no card.
+                            this.recordHistory({run_id: runId, skill, exit_code: exitCode, ended_at: Date.now(), cost_usd: null});
+                            return;
+                        }
+                        const body = await resp.json();
+                        this.summary = body.summary;
+                        this.runDir = body.run_dir;
+                        this.recordHistory({
+                            run_id: runId,
+                            skill,
+                            exit_code: exitCode,
+                            ended_at: Date.now(),
+                            cost_usd: body.summary?.total_cost_usd ?? null,
+                            summary: body.summary,
+                            run_dir: body.run_dir,
+                        });
+                    } catch (e) {
+                        console.error('summary load failed', e);
+                    }
+                },
+
+                recordHistory(entry) {
+                    this.history = [entry, ...this.history.filter(h => h.run_id !== entry.run_id)].slice(0, 10);
+                },
+
+                loadHistorySummary(run) {
+                    // Re-show this past run's summary card without re-running.
+                    if (!run.summary) return;
+                    this.summary = run.summary;
+                    this.runDir = run.run_dir || null;
+                    this.currentSkill = run.skill;
+                    this.output = [];   // history view doesn't have the original stream
+                    this.exitCode = run.exit_code;
+                },
+
+                historyStatusIcon(run) {
+                    if (run.exit_code === 0) return '✓';
+                    if (run.exit_code === 4) return '⊘';
+                    return '✗';
+                },
+
+                historyStatusClass(run) {
+                    if (run.exit_code === 0) return 'history-ok';
+                    if (run.exit_code === 4) return 'history-declined';
+                    return 'history-error';
+                },
+
+                formatTimeAgo(ts) {
+                    if (!ts) return '';
+                    const secs = Math.floor((Date.now() - ts) / 1000);
+                    if (secs < 60) return `${secs}s ago`;
+                    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+                    return `${Math.floor(secs / 3600)}h ago`;
                 },
             }
         }
