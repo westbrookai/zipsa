@@ -6,16 +6,21 @@ Single purpose: report current weather for a given location.
 
 1. Extract the location from user input.
    - If a location is explicitly mentioned, use it directly.
-   - If no location is given, ask the user for their default city — remember the answer so future runs don't re-ask. Phrase the prompt in the user's language (e.g. "어느 지역의 날씨를 알려드릴까요? (예: 서울, 도쿄, New York)" for Korean).
+   - If no location is given, ask the user for their default city —
+     remember the answer so future runs don't re-ask. Phrase the
+     prompt in `execution_context.user_language`, intent: "Which
+     city's weather? (e.g. Seoul, Tokyo, New York)".
 
-2. Detect the user's language (Korean, English, Japanese, etc.) from how they phrased the request.
+2. Pass `execution_context.user_language` directly to wttr.in as the
+   `lang` query param (it accepts ISO codes — `ko`, `en`, `ja`,
+   etc.). No need to re-detect from user phrasing.
 
 3. Call WebFetch with this URL pattern (compact one-line format — do NOT use `format=j1`, it returns ~100KB of multi-day forecast):
    ```
    url:    https://wttr.in/{location}?format=%C+%t+%h+%w+%f&lang={lang}
    prompt: "Return the response body verbatim."
    ```
-   Use `ko` for Korean, `en` for English, `ja` for Japanese, etc.
+   `{lang}` = `execution_context.user_language`.
 
 4. Parse the single line response. Format is:
    ```
@@ -25,7 +30,8 @@ Single purpose: report current weather for a given location.
    - condition: e.g. "Sunny", "Light rain", "Light drizzle"
    - temp (°C), humidity (%), wind (km/h with direction), feels-like (°C)
 
-5. Reply to the user in their language, in 1-2 sentences. Keep it natural and conversational.
+5. Reply to the user in `execution_context.user_language`, in 1-2
+   sentences. Keep it natural and conversational.
 
 6. After replying, save the structured result as JSON to `/home/agent/runs/current/artifacts/weather.json` (use the Write tool). Shape:
    ```json
@@ -42,23 +48,29 @@ Single purpose: report current weather for a given location.
    ```
    This is what makes the skill composable — other skills can read it via `mcp__zipsa__get_artifact`.
 
-## Output examples
+## Output shape (English example, localize at runtime)
 
-Korean:
-> 시드니는 현재 22°C, 맑음입니다. 체감 21°C, 풍속 12km/h, 습도 60%.
-
-English:
 > Sydney is 22°C and sunny right now. Feels like 21°C, with 12 km/h wind and 60% humidity.
+
+The shape is: city + temp + condition, then feels-like, wind,
+humidity. Phrase naturally in `user_language` — do not translate
+this English literally.
 
 ## Failure cases
 
-- WebFetch fails (timeout, non-200): reply "지금 날씨 정보를 가져올 수 없습니다. 잠시 후 다시 시도해 주세요." (or English equivalent based on user language).
-- Location not recognized by wttr.in (empty `current_condition`): reply "해당 지역의 날씨를 찾을 수 없습니다. 도시 이름을 확인해 주세요."
+All error replies in `execution_context.user_language`:
+
+- WebFetch fails (timeout, non-200) — intent: "Can't fetch weather
+  right now. Please try again shortly."
+- Location not recognized by wttr.in (empty `current_condition`) —
+  intent: "Couldn't find that location. Check the city name."
 
 ## Off-topic refusal
 
-If the user asks anything other than current weather (forecasts beyond today, climate history, recommendations, unrelated topics), reply once:
-> 이 에이전트는 현재 날씨 정보만 제공합니다.
+If the user asks anything other than current weather (forecasts beyond
+today, climate history, recommendations, unrelated topics), reply
+once in `user_language`, intent: "This agent only reports current
+weather."
 
 Do not attempt to handle off-topic requests with other tools.
 
