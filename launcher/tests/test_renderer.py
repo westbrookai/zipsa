@@ -487,6 +487,46 @@ class TestEnvelopeSurfaceInResult:
         # Existing footer fields must still appear
         assert "Duration:" in out
 
+    def test_envelope_found_when_preceded_by_other_fenced_block(self, capsys):
+        """When the SKILL's Output Format is itself a fenced block (e.g.
+        hello-world's `Hello from zipsa!` block) emitted before the
+        contract envelope, the extractor must still locate the envelope.
+
+        Repro: agent text contains TWO fences — first an untagged ``` for
+        the user-facing output, then a ```json fence for the envelope.
+        Prior to this fix, _extract_envelope returned None because the
+        regex matched the first (non-JSON) fence.
+        """
+        agent_text = (
+            "```\n"
+            "Hello from zipsa!\n"
+            "\n"
+            "Runtime : Claude Code\n"
+            "Model   : claude-sonnet-4-6\n"
+            "Status  : OK\n"
+            "```\n"
+            "\n"
+            "```json\n"
+            '{\n'
+            '  "status": "ok",\n'
+            '  "phase": "main",\n'
+            '  "result": {"runtime": "Claude Code", "status": "OK"},\n'
+            '  "user_facing_summary": "zipsa pipeline OK"\n'
+            '}\n'
+            "```"
+        )
+        events = [
+            {"type": "assistant",
+             "message": {"content": [{"type": "text", "text": agent_text}]}},
+            {"type": "result", "is_error": False, "duration_ms": 1000,
+             "num_turns": 1, "total_cost_usd": 0.01},
+        ]
+        render(iter(events), OutputMode.pretty)
+        import re as _re
+        out = _re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+        assert "Summary: zipsa pipeline OK" in out
+        assert "Result: runtime=Claude Code, status=OK" in out
+
 
 class TestRunCompleteFooter:
     """zipsa_run_complete is the very last event of every run. The
