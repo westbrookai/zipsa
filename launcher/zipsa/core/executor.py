@@ -312,11 +312,16 @@ class DockerExecutor:
         _limits_state_ref: list[Optional[LimitsState]] = [None]
 
         stdout_lock = threading.Lock()
+        # ZIPSA_FORCE_INTERACTIVE=1 lets a wrapper (e.g. the web UI) feed
+        # answers via stdin even though zipsa is launched with a pipe
+        # instead of a TTY. Without the override, isatty() returns False
+        # and every ask/confirm/choose raises HitlUnattended.
+        _force_interactive = os.environ.get("ZIPSA_FORCE_INTERACTIVE") == "1"
         hitl_io = HitlIO(
             stdin=sys.stdin,
             stdout=sys.stdout,
             stdout_lock=stdout_lock,
-            is_interactive=sys.stdin.isatty(),
+            is_interactive=sys.stdin.isatty() or _force_interactive,
         )
         # Expose for summary-builder to read accumulated wait time.
         self._hitl_io = hitl_io

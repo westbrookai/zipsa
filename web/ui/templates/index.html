@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>zipsa</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+</head>
+<body x-data="zipsaApp()" x-init="loadSkills()">
+    <header>
+        <h1>zipsa</h1>
+        <p class="subtitle">Installed skills</p>
+    </header>
+
+    <main>
+        <div x-show="loading" class="state-msg">Loading…</div>
+        <div x-show="!loading && skills.length === 0" class="state-msg">
+            No installed skills. Try <code>zipsa install &lt;source&gt;</code> from the CLI.
+        </div>
+
+        <!-- Output panel comes FIRST so it stays in view as the user
+             scrolls; the skill list below is secondary once a run is
+             active. -->
+        <section x-show="output.length > 0 || running" class="output-panel">
+            <header class="output-header">
+                <h3>
+                    Output<span x-show="currentSkill"> — <span class="mono" x-text="currentSkill"></span></span>
+                </h3>
+                <div class="output-header-right">
+                    <span class="status" :class="statusClass()" x-text="statusLabel()"></span>
+                    <button
+                        x-show="running"
+                        class="btn btn-stop"
+                        @click="stopRun()"
+                        :disabled="stopping">
+                        <span x-text="stopping ? 'stopping…' : 'Stop'"></span>
+                    </button>
+                </div>
+            </header>
+            <pre x-ref="outBox" class="output-box"><template x-for="(line, idx) in output" :key="idx"><div :class="line.stream === 'stderr' ? 'log-line stderr' : 'log-line'" x-text="line.text"></div></template></pre>
+
+            <!-- Structured result card from the canonical summary.json.
+                 Shows after the run exits — disk file is the source of
+                 truth (renderer text is a view of the same data). -->
+            <div x-show="summary !== null" class="summary-card">
+                <div class="summary-row">
+                    <span class="summary-label">Summary</span>
+                    <span class="summary-value" x-text="summary?.user_facing_summary || '—'"></span>
+                </div>
+                <div x-show="summary?.result" class="summary-row">
+                    <span class="summary-label">Result</span>
+                    <table class="result-table">
+                        <template x-for="(v, k) in (summary?.result || {})" :key="k">
+                            <tr>
+                                <td class="mono muted" x-text="k"></td>
+                                <td class="mono" x-text="typeof v === 'object' ? JSON.stringify(v) : v"></td>
+                            </tr>
+                        </template>
+                    </table>
+                </div>
+                <div x-show="summary?.error" class="summary-row error-row">
+                    <span class="summary-label">Error</span>
+                    <span class="mono" x-text="summary?.error?.code || ''"></span>
+                    <span class="muted" x-text="summary?.error?.message || ''"></span>
+                </div>
+                <div class="summary-meta">
+                    <span x-text="`${(summary?.duration_ms || 0) / 1000}s`"></span>
+                    <span x-show="summary?.num_turns">·</span>
+                    <span x-show="summary?.num_turns" x-text="`${summary?.num_turns} turns`"></span>
+                    <span x-show="summary?.total_cost_usd != null">·</span>
+                    <span x-show="summary?.total_cost_usd != null" x-text="`$${(summary?.total_cost_usd || 0).toFixed(4)}`"></span>
+                </div>
+                <div x-show="runDir" class="summary-rundir">
+                    <span class="muted">Run dir:</span>
+                    <code x-text="runDir"></code>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recent runs: in-memory, last 10. Click to view its summary
+             without re-running. -->
+        <section x-show="history.length > 0" class="history-panel">
+            <h3 class="history-header">Recent runs</h3>
+            <ul class="history-list">
+                <template x-for="run in history" :key="run.run_id">
+                    <li class="history-item" @click="loadHistorySummary(run)">
+                        <span class="history-status" :class="historyStatusClass(run)" x-text="historyStatusIcon(run)"></span>
+                        <span class="mono history-skill" x-text="run.skill"></span>
+                        <span class="muted history-time" x-text="formatTimeAgo(run.ended_at)"></span>
+                        <span class="muted history-meta" x-show="run.cost_usd != null" x-text="`$${(run.cost_usd || 0).toFixed(4)}`"></span>
+                        <button class="btn btn-mini" @click.stop="startRun(run.skill)" :disabled="running">Re-run</button>
+                    </li>
+                </template>
+            </ul>
+        </section>
+
+        <table x-show="!loading && skills.length > 0" :class="{'compact': output.length > 0 || running}">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Version</th>
+                    <th>Model</th>
+                    <th>Runs</th>
+                    <th>Purpose</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="skill in skills" :key="skill.name">
+                    <tr>
+                        <td class="mono" x-text="skill.name"></td>
+                        <td class="mono" x-text="skill.version"></td>
+                        <td class="mono muted" x-text="skill.model || '—'"></td>
+                        <td class="muted" x-html="runStatsLabel(skill)"></td>
+                        <td x-text="skill.purpose"></td>
+                        <td>
+                            <button
+                                class="btn"
+                                @click="startRun(skill.name)"
+                                :disabled="running">
+                                Run
+                            </button>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </main>
+
+    <!-- HITL modal: shown when the running subprocess prints a
+         `[ask] / [confirm] / [choose]` prompt block. -->
+    <div x-show="hitlPrompt !== null" class="modal-overlay" @keydown.escape="cancelHitl()">
+        <div class="modal" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-header">
+                <span class="hitl-tag" x-text="hitlPrompt?.type"></span>
+                <span class="muted">input needed</span>
+            </div>
+            <p class="hitl-prompt" x-text="hitlPrompt?.text"></p>
+
+            <!-- ask: free-form text -->
+            <template x-if="hitlPrompt?.type === 'ask'">
+                <form @submit.prevent="submitHitl(hitlInput)">
+                    <input
+                        type="text"
+                        class="hitl-input"
+                        x-model="hitlInput"
+                        x-ref="hitlInputRef"
+                        autofocus
+                        placeholder="Type your answer">
+                    <div class="modal-actions">
+                        <button type="submit" class="btn">Send</button>
+                    </div>
+                </form>
+            </template>
+
+            <!-- confirm: yes/no -->
+            <template x-if="hitlPrompt?.type === 'confirm'">
+                <div class="modal-actions">
+                    <button class="btn" @click="submitHitl('y')">Yes</button>
+                    <button class="btn btn-secondary" @click="submitHitl('n')">No</button>
+                </div>
+            </template>
+
+            <!-- choose: radio list -->
+            <template x-if="hitlPrompt?.type === 'choose'">
+                <form @submit.prevent="submitHitl(hitlInput)">
+                    <ul class="choose-options">
+                        <template x-for="(opt, idx) in (hitlPrompt?.options || [])" :key="idx">
+                            <li>
+                                <label>
+                                    <input
+                                        type="radio"
+                                        :value="(idx + 1).toString()"
+                                        x-model="hitlInput"
+                                        name="choose">
+                                    <span x-text="opt"></span>
+                                </label>
+                            </li>
+                        </template>
+                    </ul>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn" :disabled="!hitlInput">Submit</button>
+                    </div>
+                </form>
+            </template>
+        </div>
+    </div>
+
+    <script>
+        const PROMPT_OPEN = '──── User input needed ────';
+        const PROMPT_CLOSE = '──── Resuming ────';
+
+        function zipsaApp() {
+            return {
+                loading: true,
+                skills: [],
+                running: false,
+                currentSkill: null,
+                output: [],
+                exitCode: null,
+                eventSource: null,
+                currentRunId: null,
+                stopping: false,
+                summary: null,
+                runDir: null,
+                history: [],   // [{run_id, skill, exit_code, ended_at, cost_usd}, ...]
+                // Bumped every 1s — formatTimeAgo() reads this so
+                // Alpine re-renders history rows as time passes.
+                // Client-side only, no network; cheap.
+                now: Date.now(),
+                // HITL state
+                hitlActive: false,
+                hitlPrompt: null,   // {type: 'ask'|'confirm'|'choose', text, options?}
+                hitlInput: '',
+
+                init() {
+                    // Tick `now` every 1s so "time ago" labels move
+                    // smoothly — pure client-side, negligible cost.
+                    setInterval(() => { this.now = Date.now(); }, 1000);
+                },
+
+                async loadSkills() {
+                    try {
+                        const resp = await fetch('/api/skills');
+                        const data = await resp.json();
+                        this.skills = data.skills;
+                    } catch (e) {
+                        console.error('skills load failed', e);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async startRun(skillName) {
+                    if (this.running) return;
+                    this.output = [];
+                    this.exitCode = null;
+                    this.running = true;
+                    this.currentSkill = skillName;
+                    this.summary = null;
+                    this.runDir = null;
+                    this.hitlPrompt = null;
+                    this.hitlActive = false;
+                    this.hitlInput = '';
+                    window.scrollTo({top: 0, behavior: 'smooth'});
+                    try {
+                        const resp = await fetch('/api/runs', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({skill: skillName}),
+                        });
+                        if (!resp.ok) throw new Error(`POST /api/runs ${resp.status}`);
+                        const {run_id} = await resp.json();
+                        this.currentRunId = run_id;
+                        this.subscribe(run_id);
+                    } catch (e) {
+                        console.error('run start failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] failed to start run: ${e}`});
+                        this.running = false;
+                    }
+                },
+
+                subscribe(runId) {
+                    if (this.eventSource) this.eventSource.close();
+                    const es = new EventSource(`/api/runs/${runId}/stream`);
+                    this.eventSource = es;
+
+                    es.addEventListener('line', (e) => {
+                        const data = JSON.parse(e.data);
+                        // Strip ANSI before HITL detection — markers contain unicode but no ANSI.
+                        data.text = data.text.replace(/\x1b\[[0-9;]*m/g, '');
+                        this.handleStreamLine(data);
+                    });
+                    es.addEventListener('exit', async (e) => {
+                        const data = JSON.parse(e.data);
+                        this.exitCode = data.exit_code;
+                        this.running = false;
+                        this.stopping = false;
+                        this.hitlPrompt = null;
+                        es.close();
+                        this.eventSource = null;
+                        await this.loadSummary(this.currentRunId, this.currentSkill, data.exit_code);
+                    });
+                    es.addEventListener('error', (e) => {
+                        if (this.running) console.warn('SSE error', e);
+                    });
+                },
+
+                handleStreamLine(data) {
+                    const text = data.text;
+
+                    // HITL block start
+                    if (text.includes(PROMPT_OPEN)) {
+                        this.hitlActive = true;
+                        this.hitlInput = '';
+                        return;  // suppress marker
+                    }
+                    // HITL block end (may be merged with leftover `> ` prompt)
+                    if (text.includes(PROMPT_CLOSE)) {
+                        this.hitlActive = false;
+                        this.hitlPrompt = null;
+                        return;
+                    }
+                    if (this.hitlActive) {
+                        const m1 = text.match(/^\[ask\]\s*(.*)$/);
+                        if (m1) {
+                            this.hitlPrompt = {type: 'ask', text: m1[1]};
+                            this.$nextTick(() => this.$refs.hitlInputRef?.focus());
+                            return;
+                        }
+                        const m2 = text.match(/^\[confirm\]\s*(.*?)(?:\s*\[[YyNn/]+\])?$/);
+                        if (m2 && text.startsWith('[confirm]')) {
+                            this.hitlPrompt = {type: 'confirm', text: m2[1].trim()};
+                            return;
+                        }
+                        const m3 = text.match(/^\[choose\]\s*(.*)$/);
+                        if (m3) {
+                            this.hitlPrompt = {type: 'choose', text: m3[1], options: []};
+                            return;
+                        }
+                        const m4 = text.match(/^\s+\d+\)\s*(.*)$/);
+                        if (m4 && this.hitlPrompt && this.hitlPrompt.type === 'choose') {
+                            this.hitlPrompt.options.push(m4[1]);
+                            return;
+                        }
+                        // Other lines inside a HITL block (`> ` prompt, hint lines) — suppress
+                        return;
+                    }
+
+                    // Normal output
+                    this.output.push(data);
+                    this.$nextTick(() => this.scrollToBottom());
+                },
+
+                async submitHitl(answer) {
+                    if (!this.currentRunId) return;
+                    const payload = String(answer).trim();
+                    try {
+                        const resp = await fetch(`/api/runs/${this.currentRunId}/stdin`, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({text: payload}),
+                        });
+                        if (!resp.ok) throw new Error(`POST stdin ${resp.status}`);
+                    } catch (e) {
+                        console.error('HITL submit failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] HITL submit failed: ${e}`});
+                    } finally {
+                        // Modal closes once we see PROMPT_CLOSE on the stream;
+                        // also close optimistically so the user sees feedback.
+                        this.hitlPrompt = null;
+                        this.hitlInput = '';
+                    }
+                },
+
+                cancelHitl() {
+                    this.hitlPrompt = null;
+                    this.hitlInput = '';
+                },
+
+                async stopRun() {
+                    if (!this.currentRunId || this.stopping) return;
+                    this.stopping = true;
+                    try {
+                        const resp = await fetch(`/api/runs/${this.currentRunId}/stop`, {method: 'POST'});
+                        if (!resp.ok) throw new Error(`POST stop ${resp.status}`);
+                    } catch (e) {
+                        console.error('stop failed', e);
+                        this.output.push({stream: 'stderr', text: `[web] stop failed: ${e}`});
+                    } finally {
+                        this.stopping = false;
+                    }
+                },
+
+                scrollToBottom() {
+                    const box = this.$refs.outBox;
+                    if (box) box.scrollTop = box.scrollHeight;
+                },
+
+                statusClass() {
+                    if (this.running) return 'status-running';
+                    if (this.exitCode === 0) return 'status-ok';
+                    if (this.exitCode != null && this.exitCode !== 0) return 'status-error';
+                    return '';
+                },
+
+                statusLabel() {
+                    if (this.running) return 'running…';
+                    if (this.exitCode === 0) return 'exit 0';
+                    if (this.exitCode != null) return `exit ${this.exitCode}`;
+                    return '';
+                },
+
+                runStatsLabel(skill) {
+                    const total = skill.total_runs;
+                    if (total === 0) return '<span class="muted">—</span>';
+                    const pct = Math.round((skill.successful_runs / total) * 100);
+                    const cls = pct === 100 ? 'success-rate-ok' : 'success-rate-warn';
+                    return `${total} runs · <span class="${cls}">${pct}% success</span>`;
+                },
+
+                async loadSummary(runId, skill, exitCode) {
+                    if (!runId) return;
+                    try {
+                        const resp = await fetch(`/api/runs/${runId}/summary`);
+                        if (!resp.ok) {
+                            // 425 = run_dir not yet known; 410 = no summary.json
+                            // (e.g. user stopped early). Either way: no card.
+                            this.recordHistory({run_id: runId, skill, exit_code: exitCode, ended_at: Date.now(), cost_usd: null});
+                            return;
+                        }
+                        const body = await resp.json();
+                        this.summary = body.summary;
+                        this.runDir = body.run_dir;
+                        this.recordHistory({
+                            run_id: runId,
+                            skill,
+                            exit_code: exitCode,
+                            ended_at: Date.now(),
+                            cost_usd: body.summary?.total_cost_usd ?? null,
+                            summary: body.summary,
+                            run_dir: body.run_dir,
+                        });
+                    } catch (e) {
+                        console.error('summary load failed', e);
+                    }
+                },
+
+                recordHistory(entry) {
+                    this.history = [entry, ...this.history.filter(h => h.run_id !== entry.run_id)].slice(0, 10);
+                },
+
+                loadHistorySummary(run) {
+                    // Re-show this past run's summary card without re-running.
+                    if (!run.summary) return;
+                    this.summary = run.summary;
+                    this.runDir = run.run_dir || null;
+                    this.currentSkill = run.skill;
+                    this.output = [];   // history view doesn't have the original stream
+                    this.exitCode = run.exit_code;
+                },
+
+                historyStatusIcon(run) {
+                    if (run.exit_code === 0) return '✓';
+                    if (run.exit_code === 4) return '⊘';
+                    return '✗';
+                },
+
+                historyStatusClass(run) {
+                    if (run.exit_code === 0) return 'history-ok';
+                    if (run.exit_code === 4) return 'history-declined';
+                    return 'history-error';
+                },
+
+                formatTimeAgo(ts) {
+                    if (!ts) return '';
+                    // Read `this.now` (not Date.now()) so Alpine tracks
+                    // it as a reactive dep — labels refresh on each tick.
+                    const secs = Math.floor((this.now - ts) / 1000);
+                    if (secs < 60) return `${secs}s ago`;
+                    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+                    return `${Math.floor(secs / 3600)}h ago`;
+                },
+            }
+        }
+    </script>
+</body>
+</html>
