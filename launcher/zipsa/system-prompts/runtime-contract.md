@@ -27,7 +27,11 @@ the system prompt. It contains:
   Python. Don't ask the user for their timezone; this is already it.
 - `user_language`: 2-3 letter ISO code (e.g. `ko`, `en`, `ja`) detected
   from the host's POSIX locale (`$LC_ALL` / `$LANG`), with `en` as
-  the fallback. Use it whenever you write text the user will read —
+  the fallback. **Appears in two places:** the `# Runtime context`
+  section of your system prompt (always — single-phase and multi-
+  phase skills both see it here), AND inside this `execution_context`
+  block (multi-phase skills only). Either source is authoritative;
+  they agree. Use it whenever you write text the user will read —
   prompts (`ask`, `confirm`, `choose`), `user_facing_summary`, error
   messages. Do NOT translate machine-readable fields (skill state
   keys, JSON field names, tool args, artifact contents). If the user

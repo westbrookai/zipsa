@@ -70,6 +70,26 @@ class TestDockerExecutor:
 
         assert "# MCP Server Paths" not in prompt
 
+    def test_build_system_prompt_includes_user_language(self, monkeypatch):
+        """user_language must be visible in the SYSTEM prompt (not just
+        the per-phase user message), so single-phase skills — which
+        don't render a user message wrapper — can also localize their
+        prompts. Live first-test of `LANG=ko_KR zipsa weather` showed
+        the agent defaulted to English because it had no way to see
+        execution_context.user_language."""
+        monkeypatch.setenv("LANG", "ko_KR.UTF-8")
+        monkeypatch.delenv("LC_ALL", raising=False)
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        prompt = executor._build_system_prompt(skill)
+
+        # The literal "user_language: ko" should appear in the prompt
+        # so the agent can read it. Format identical to what the
+        # multi-phase execution_context block uses.
+        assert "user_language: ko" in prompt
+
     def test_write_env_file_creates_file(self, tmp_path):
         """_write_env_file should create .env in the given output_dir."""
         executor = DockerExecutor()

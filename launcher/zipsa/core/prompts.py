@@ -90,10 +90,20 @@ def build_system_prompt(skill: Skill) -> str:
             lines.append(f"- {server.name}: {CONTAINER_WORKSPACE}/{server.name}")
         mcp_paths_section = "\n".join(lines) + "\n\n"
 
+    # Static runtime context — values that hold for the whole skill
+    # invocation, regardless of phase model. Placing them in the system
+    # prompt (vs only in the user-message execution_context block) is
+    # what lets SINGLE-phase skills see user_language too. Multi-phase
+    # skills also get them in their per-phase execution_context block;
+    # the duplication is intentional and harmless (both sources agree).
+    user_language = _detect_user_language()
     skill_body = f"""You are the {skill.name} agent (v{skill.manifest.metadata.version}).
 
 # Purpose
 {skill.manifest.spec.purpose}
+
+# Runtime context
+- user_language: {user_language}
 
 # Instructions
 {skill.instructions}
