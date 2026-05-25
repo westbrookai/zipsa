@@ -39,6 +39,24 @@ def index(request: Request) -> HTMLResponse:
     return _templates.TemplateResponse(request, "index.html")
 
 
+@app.get(
+    "/view/skills/{skill_name}/files/{filename}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+def view_skill_file(
+    request: Request, skill_name: str, filename: str,
+) -> HTMLResponse:
+    """Shell page that fetches the raw file from the API and renders it
+    in the browser — markdown via marked.js, anything else as monospace
+    text. The API route remains the canonical raw source."""
+    return _templates.TemplateResponse(
+        request,
+        "view_file.html",
+        {"skill_name": skill_name, "filename": filename},
+    )
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     # Silence the browser's default favicon request — spike has no icon yet.

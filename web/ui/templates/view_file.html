@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ filename }} · {{ skill_name }} · zipsa</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="view-page">
+    <header class="view-header">
+        <a href="/" class="back-link">← back</a>
+        <div class="view-title">
+            <span class="mono">{{ skill_name }}</span>
+            <span class="muted">/</span>
+            <span class="mono">{{ filename }}</span>
+            <a class="raw-link"
+               target="_blank"
+               href="/api/skills/{{ skill_name }}/files/{{ filename }}">view raw</a>
+        </div>
+    </header>
+    <main id="content" class="view-content">
+        <div class="state-msg">Loading…</div>
+    </main>
+    <script>
+        const FILE_URL = "/api/skills/{{ skill_name }}/files/{{ filename }}";
+        const FILENAME = "{{ filename }}";
+        const target = document.getElementById('content');
+
+        fetch(FILE_URL)
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.text();
+            })
+            .then(text => {
+                if (FILENAME.endsWith('.md')) {
+                    // marked escapes raw HTML by default in modern versions —
+                    // good enough for the trusted SKILL.md content we own.
+                    target.innerHTML = marked.parse(text);
+                    target.classList.add('markdown-body');
+                } else {
+                    // Other files (manifest.yaml etc.) shown as monospace text.
+                    const pre = document.createElement('pre');
+                    pre.className = 'raw-file';
+                    pre.textContent = text;
+                    target.replaceChildren(pre);
+                }
+            })
+            .catch(err => {
+                target.innerHTML = `<div class="state-msg error">Failed to load: ${err.message}</div>`;
+            });
+    </script>
+</body>
+</html>
