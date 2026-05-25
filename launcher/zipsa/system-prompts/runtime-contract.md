@@ -131,6 +131,19 @@ No text outside this JSON block:
       "error": {...} | null
     }
 
+**Enforcement:** the launcher's strict parser rejects any final
+message that isn't EXACTLY one of:
+
+  - a raw JSON envelope as the entire body, OR
+  - a single ```json fenced block as the entire body.
+
+Any prose before, after, or between the envelope (including an
+untagged ``` block for an "output format" section) halts the run
+with `error.code="contract_violation"`. Likewise, an envelope with
+unknown top-level keys, missing required fields, or a `status` value
+outside the three allowed enums is rejected. See "Error codes" →
+`contract_violation` for the subcodes.
+
 ### Status semantics (launcher behavior)
 
 - `ok`: phase completed. Launcher proceeds to next phase.
@@ -382,11 +395,20 @@ SKILL.md authors, and observability tooling all read them).
 | `tool_not_allowed` | PreToolUse hook denied a call (tool not in `allowed_tools`) |
 | `mcp_unavailable` | MCP server unreachable or tool name unknown |
 | `hitl_unattended` | Tried to ask/confirm/choose in a non-interactive run |
-| `invalid_output_format` | Your final message wasn't a parseable envelope |
+| `contract_violation` | Final message violated the Output format rules — see subcodes below |
 | `phase_id_mismatch` | Envelope's `phase` field didn't match the running phase |
 | `limits_exceeded` | Phase or run exceeded `max_turns` / `max_cost_usd` / `timeout_seconds` |
 | `docker_failed` | Underlying docker subprocess crashed |
 | `user_interrupted` | User pressed Ctrl+C |
+
+`contract_violation` carries a `subcode` describing the specific
+breach:
+
+| Subcode | When |
+|---|---|
+| `text_outside_envelope` | Prose, untagged ``` blocks, or anything around the envelope JSON |
+| `malformed_json` | Envelope body failed to parse as JSON |
+| `invalid_schema` | Missing required field, unknown field, wrong type, or bad enum |
 
 ### `run_skill`-specific (returned in the result dict, not as a tool error)
 

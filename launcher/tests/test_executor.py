@@ -747,86 +747,97 @@ spec:
 # - test_summary.py::TestBuildSummary — verifies the schema for each status
 
 
-class TestExtractSkillOutput:
-    """Test _extract_skill_output multi-strategy JSON extraction."""
+class TestEnvelopeContractEnforcement:
+    """The runtime contract demands one and only one shape for the
+    agent's final message: the envelope JSON, alone. Inputs that an
+    earlier lax parser tolerated are now contract violations.
 
-    def test_strategy1_direct_json(self):
-        """Strategy 1: direct json.loads on stripped text."""
-        executor = DockerExecutor()
-        text = '{"status": "ok", "phase": "precheck", "result": null, "state_updates": null, "next_phase_input": null, "user_facing_summary": "Done.", "needs_input": null, "error": null}'
-        out = executor._extract_skill_output(text)
-        assert out is not None
-        assert out["status"] == "ok"
+    See test_envelope.py for exhaustive parser-level coverage; these
+    tests pin the executor-facing import path."""
 
-    def test_strategy2_fenced_json_block(self):
-        """Strategy 2: extract from ```json ... ``` block."""
-        executor = DockerExecutor()
-        text = 'Some thinking.\n```json\n{"status": "failed", "phase": "discover", "result": null, "state_updates": null, "next_phase_input": null, "user_facing_summary": "err", "needs_input": null, "error": null}\n```'
-        out = executor._extract_skill_output(text)
-        assert out is not None
-        assert out["status"] == "failed"
+    def _payload(self) -> str:
+        import json
+        return json.dumps({
+            "status": "ok",
+            "phase": "main",
+            "result": None,
+            "state_updates": None,
+            "next_phase_input": None,
+            "user_facing_summary": "done",
+            "error": None,
+        })
 
-    def test_strategy3_embedded_json_object(self):
-        """Strategy 3: find last {...} with 'status' key."""
-        executor = DockerExecutor()
-        text = 'I completed the task. {"status": "ok", "phase": "analyze", "result": "done", "state_updates": null, "next_phase_input": null, "user_facing_summary": "ok", "needs_input": null, "error": null}'
-        out = executor._extract_skill_output(text)
-        assert out is not None
-        assert out["status"] == "ok"
+    def test_raw_json_envelope_accepted(self):
+        from zipsa.core.envelope import parse_envelope_strict
+        env = parse_envelope_strict(self._payload())
+        assert env.status == "ok"
 
-    def test_strategy3_picks_outer_when_result_has_nested_status(self):
-        """Regression: hello-world emits a contract JSON whose `result`
-        field itself contains a "status" key. Strategy 3 must pick the
-        OUTERMOST {...} (the contract), not the nested inner dict."""
-        executor = DockerExecutor()
-        text = '''Hello from zipsa!
+    def test_fenced_envelope_accepted(self):
+        from zipsa.core.envelope import parse_envelope_strict
+        env = parse_envelope_strict("```json\n" + self._payload() + "\n```")
+        assert env.status == "ok"
 
-Runtime : Claude Code
-Model   : claude-sonnet-4-6
-Status  : OK
+    def test_prose_before_fenced_envelope_rejected(self):
+        """Previously this was Strategy 2 (lax tolerance for text +
+        fence). Now it's a contract violation — the executor turns this
+        into error.code=contract_violation."""
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        text = "Some thinking.\n```json\n" + self._payload() + "\n```"
+        with _pytest.raises(EnvelopeError) as e:
+            parse_envelope_strict(text)
+        assert e.value.subcode == "text_outside_envelope"
 
-{
-  "status": "ok",
-  "phase": "main",
-  "result": {
-    "runtime": "Claude Code",
-    "model": "claude-sonnet-4-6",
-    "status": "OK"
-  },
-  "user_facing_summary": "Zipsa is running."
-}'''
-        out = executor._extract_skill_output(text)
-        assert out is not None
-        # Must be the OUTER status, not "OK" from the nested result
-        assert out["status"] == "ok"
-        assert out["phase"] == "main"
-        # Inner status preserved inside result
-        assert out["result"]["status"] == "OK"
+    def test_prose_before_raw_json_rejected(self):
+        """Previously Strategy 3 accepted this. No longer."""
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        text = "I completed the task. " + self._payload()
+        with _pytest.raises(EnvelopeError) as e:
+            parse_envelope_strict(text)
+        assert e.value.subcode == "text_outside_envelope"
 
-    def test_unparseable_text_returns_none(self):
-        """When no parseable envelope is found, return None (not a
-        synthetic envelope). The caller is responsible for recording
-        the failed phase with error.code=invalid_output_format and the
-        raw text — that way the downstream phase_id_mismatch check
-        doesn't clobber the real error by tripping on a sentinel
-        phase value."""
-        executor = DockerExecutor()
-        text = "I could not complete the task due to an error."
-        assert executor._extract_skill_output(text) is None
+    def test_hello_world_violation_pattern_rejected(self):
+        """The hello-world SKILL.md instructs the agent to emit an
+        Output Format block before the envelope. This was the original
+        motivation for the enforcement: the lax parser tolerated it,
+        hiding a contract bug. Now it must fail loudly."""
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        text = (
+            "Hello from zipsa!\n"
+            "\n"
+            "Runtime : Claude Code\n"
+            "Model   : claude-sonnet-4-6\n"
+            "Status  : OK\n"
+            "\n"
+            + self._payload()
+        )
+        with _pytest.raises(EnvelopeError) as e:
+            parse_envelope_strict(text)
+        assert e.value.subcode == "text_outside_envelope"
+        # Excerpt should preserve the offending prefix for debugging
+        assert "Hello from zipsa!" in e.value.excerpt
 
-    def test_json_without_status_returns_none(self):
-        """A valid JSON object that lacks a 'status' key isn't a skill
-        envelope. Return None instead of a synthetic envelope so the
-        caller can record the real cause (agent emitted bare next_phase_input
-        without wrapping it in the envelope)."""
-        executor = DockerExecutor()
-        text = '```json\n{"voice": "x", "interests": ["a"]}\n```'
-        assert executor._extract_skill_output(text) is None
+    def test_garbage_text_rejected(self):
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        with _pytest.raises(EnvelopeError):
+            parse_envelope_strict("I could not complete the task due to an error.")
 
-    def test_none_input_returns_none(self):
-        """None input returns None."""
-        executor = DockerExecutor()
-        assert executor._extract_skill_output(None) is None
+    def test_envelope_missing_required_field_rejected(self):
+        """Pydantic schema catches missing status/phase/user_facing_summary."""
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        with _pytest.raises(EnvelopeError) as e:
+            parse_envelope_strict('{"voice": "x", "interests": ["a"]}')
+        assert e.value.subcode == "invalid_schema"
+
+    def test_none_input_rejected(self):
+        from zipsa.core.envelope import EnvelopeError, parse_envelope_strict
+        import pytest as _pytest
+        with _pytest.raises(EnvelopeError):
+            parse_envelope_strict(None)
 
 
 class TestBuildUserMessage:
@@ -1871,7 +1882,7 @@ class TestSummaryWritten:
         result_line = _json.dumps({
             "type": "assistant",
             "message": {
-                "content": [{"type": "text", "text": '{"status": "ok", "phase": "main", "result": {"hello": "world"}}'}],
+                "content": [{"type": "text", "text": '{"status": "ok", "phase": "main", "result": {"hello": "world"}, "user_facing_summary": "ok"}'}],
                 "usage": {"input_tokens": 100},
             },
         }) + "\n"
@@ -1920,6 +1931,7 @@ class TestSummaryWritten:
             "phase": "main",
             "result": {"done": True},
             "state_updates": {"last_city": "Sydney", "run_count": 7},
+            "user_facing_summary": "ok",
         })
         line = _json.dumps({
             "type": "assistant",
@@ -2008,6 +2020,7 @@ class TestSummaryWritten:
             "status": "failed",
             "phase": "main",
             "result": None,
+            "user_facing_summary": "Something went wrong",
             "error": {"code": "some_error", "message": "Something went wrong"},
         })
         result_line = _json.dumps({
