@@ -2,7 +2,7 @@ apiVersion: zipsa.dev/v1alpha1
 kind: Skill
 metadata:
   name: weather
-  version: 0.4.0
+  version: 0.5.0
   author: westbrookai
   description: Reports current weather conditions for any location worldwide. Atomic; emits weather.json artifact for downstream skills.
   tags: [weather, utility]
