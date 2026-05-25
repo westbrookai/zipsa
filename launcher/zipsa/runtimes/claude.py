@@ -53,8 +53,6 @@ class ClaudeRuntime(AgentRuntime):
             "claude",
             "--print",
             effective_input,
-            "--append-system-prompt",
-            system_prompt,
             "--allowedTools",
             allowed_tools,
             "--dangerously-skip-permissions",
@@ -67,6 +65,11 @@ class ClaudeRuntime(AgentRuntime):
             cmd.extend(["--add-dir", d])
         if mcp_debug_file:
             cmd.extend(["--debug", "--debug-file", mcp_debug_file])
+        # Put --append-system-prompt LAST so all the short flags
+        # (--allowedTools, --model, --debug, etc.) land first in
+        # dry-run output. The system prompt is several hundred lines;
+        # scrolling past it just to find the model flag is friction.
+        cmd.extend(["--append-system-prompt", system_prompt])
         return cmd
 
     def parse_output(self, stream: Iterator[str]) -> Iterator[dict]:
