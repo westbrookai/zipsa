@@ -1037,8 +1037,71 @@ def connect(
         raise typer.Exit(1)
 
 
+# Subcommands registered on the top-level `app`. Used by the
+# skill-name shortcut to distinguish "user typed a real subcommand"
+# from "user typed a skill name expecting implicit `run`".
+#
+# Keep in sync with @app.command(name=...) decorators above.
+_KNOWN_COMMANDS = frozenset({
+    "run", "view", "validate", "list", "where", "discover",
+    "configure", "runtimes", "install", "uninstall", "connect",
+})
+
+
+def _rewrite_argv_for_skill_shortcut(
+    argv: list[str],
+    skill_installed,  # Callable[[str], bool]
+) -> "tuple[list[str], Optional[str]]":
+    """Implement the `zipsa <skill-name>` → `zipsa run <skill-name>` sugar.
+
+    Returns `(possibly-rewritten-argv, optional-notice-for-stderr)`.
+
+    The shortcut fires only when ALL of the following hold:
+      - argv has at least 2 elements (program + subcommand)
+      - argv[1] is not a known subcommand (so typos still hit typer's
+        normal "No such command" error path)
+      - argv[1] is not a flag (`-V`, `--help`, etc. go to typer)
+      - argv[1] is a plain identifier (no slashes / leading `.` or `~`
+        — paths can't be skill names, must use explicit `zipsa run`)
+      - `skill_installed(argv[1])` returns True
+
+    On a successful rewrite the notice tells the user what just happened
+    and shows the canonical form so they learn it by example.
+    """
+    if len(argv) < 2:
+        return argv, None
+    candidate = argv[1]
+    if candidate.startswith("-"):
+        return argv, None
+    if candidate in _KNOWN_COMMANDS:
+        return argv, None
+    # Reject anything path-shaped — skill names are simple identifiers.
+    if "/" in candidate or candidate.startswith(".") or candidate.startswith("~"):
+        return argv, None
+    if not skill_installed(candidate):
+        return argv, None
+    rest = " ".join(argv[2:])
+    canonical = f"zipsa run {candidate}{(' ' + rest) if rest else ''}"
+    notice = (
+        f"[zipsa] '{candidate}' is an installed skill — running as: {canonical}"
+    )
+    return [argv[0], "run", *argv[1:]], notice
+
+
 def main():
     """Entry point for CLI."""
+    # `zipsa <skill-name>` sugar. Detects the shortcut on sys.argv,
+    # rewrites in place, prints a notice to stderr so the user sees
+    # the canonical `zipsa run <name>` form. Then typer dispatches
+    # normally — same code path as if the user had typed `run` themselves.
+    from .paths import installed_skill_dir
+    new_argv, notice = _rewrite_argv_for_skill_shortcut(
+        sys.argv,
+        skill_installed=lambda name: installed_skill_dir(name).exists(),
+    )
+    if notice is not None:
+        print(notice, file=sys.stderr)
+        sys.argv = new_argv
     app()
 
 
