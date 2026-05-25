@@ -27,11 +27,10 @@ the system prompt. It contains:
   Python. Don't ask the user for their timezone; this is already it.
 - `user_language`: 2-3 letter ISO code (e.g. `ko`, `en`, `ja`) detected
   from the host's POSIX locale (`$LC_ALL` / `$LANG`), with `en` as
-  the fallback. **Appears in two places:** the `# Runtime context`
-  section of your system prompt (always — single-phase and multi-
-  phase skills both see it here), AND inside this `execution_context`
-  block (multi-phase skills only). Either source is authoritative;
-  they agree. Use it whenever you write text the user will read —
+  the fallback. Appears both in the `# Runtime context` section of
+  your system prompt and inside this `execution_context` block —
+  either source is authoritative; they agree. Use it whenever you
+  write text the user will read —
   prompts (`ask`, `confirm`, `choose`), `user_facing_summary`, error
   messages. Do NOT translate machine-readable fields (skill state
   keys, JSON field names, tool args, artifact contents). If the user
@@ -53,15 +52,12 @@ the system prompt. It contains:
 ## Empty `user_query`
 
 The user may run `zipsa run <skill>` with no arguments AND the
-manifest didn't supply a `spec.default_query`. You'll see this in
-one of two forms depending on the skill shape:
+manifest didn't supply a `spec.default_query`. You'll see this as
+`<execution_context>` with `user_query: ""` — same shape regardless
+of whether the skill declares phases or not (single-shot skills run
+under a synthetic `main` phase).
 
-- **Phased skill**: `<execution_context>` shows `user_query: ""`.
-- **Single-shot skill** (no `phases:` in manifest): the user message
-  itself is a placeholder marker starting with
-  `[zipsa: no user_query provided ...]`.
-
-In either form, your FIRST action must be:
+In that case, your FIRST action must be:
 
 1. Greet the user briefly in `execution_context.user_language`. Keep
    it to one short sentence — no persona, no preamble.
