@@ -919,6 +919,72 @@ class TestBuildUserMessage:
         )
 
 
+    def test_user_message_contains_user_language(self, monkeypatch):
+        """execution_context.user_language is the 2-letter ISO code
+        derived from $LC_ALL/$LANG. Agents read this and localize
+        all user-facing strings — replaces the previous Korean default
+        hard-coded in runtime-contract.md."""
+        monkeypatch.setenv("LANG", "ko_KR.UTF-8")
+        monkeypatch.delenv("LC_ALL", raising=False)
+        executor = DockerExecutor()
+        skill_dir = Path(__file__).parent / "fixtures/skills/test-skill"
+        skill = Skill.load(skill_dir)
+
+        msg = executor._build_user_message(
+            skill=skill, phase_id="precheck", phase_goal="goal",
+            phase_allowed_tools="", previous_phase_output=None,
+            skill_state={}, user_query="log",
+        )
+        assert "user_language: ko" in msg
+
+
+class TestDetectUserLanguage:
+    """The launcher detects the user's preferred language from POSIX
+    locale env vars and exposes it via execution_context.user_language.
+    The agent uses this to localize prompts and user_facing_summary
+    text — eliminating the previous Korean default hard-coded in
+    runtime-contract.md."""
+
+    def _detect(self, monkeypatch, lang=None, lc_all=None):
+        from zipsa.core.prompts import _detect_user_language
+        for var in ("LANG", "LC_ALL", "LC_MESSAGES"):
+            monkeypatch.delenv(var, raising=False)
+        if lang is not None:
+            monkeypatch.setenv("LANG", lang)
+        if lc_all is not None:
+            monkeypatch.setenv("LC_ALL", lc_all)
+        return _detect_user_language()
+
+    def test_korean_locale(self, monkeypatch):
+        assert self._detect(monkeypatch, lang="ko_KR.UTF-8") == "ko"
+
+    def test_english_locale(self, monkeypatch):
+        assert self._detect(monkeypatch, lang="en_US.UTF-8") == "en"
+
+    def test_no_region(self, monkeypatch):
+        """Bare two-letter code without region/encoding still maps."""
+        assert self._detect(monkeypatch, lang="ja") == "ja"
+
+    def test_lc_all_overrides_lang(self, monkeypatch):
+        """POSIX precedence: LC_ALL > LANG (LC_ALL is the override)."""
+        assert self._detect(monkeypatch, lang="ko_KR.UTF-8", lc_all="en_US.UTF-8") == "en"
+
+    def test_c_locale_falls_back(self, monkeypatch):
+        """`LANG=C` and `LANG=POSIX` are placeholder locales, not real
+        language preferences. Fall back to English (the safe default
+        for a tool whose docs and source are in English)."""
+        assert self._detect(monkeypatch, lang="C") == "en"
+        assert self._detect(monkeypatch, lang="POSIX") == "en"
+
+    def test_empty_environment_falls_back(self, monkeypatch):
+        assert self._detect(monkeypatch) == "en"
+
+    def test_garbage_falls_back(self, monkeypatch):
+        """Anything that doesn't look like a 2-3 letter language code
+        falls back rather than passing garbage downstream."""
+        assert self._detect(monkeypatch, lang="garbage_VALUE") == "en"
+
+
 class TestSkillState:
     """Test skill state persistence."""
 
