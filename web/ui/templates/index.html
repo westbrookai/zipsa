@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>zipsa</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js" defer></script>
+</head>
+<body>
+    <header>
+        <h1>zipsa</h1>
+        <p class="subtitle">Installed skills</p>
+    </header>
+
+    <main x-data="skillList()" x-init="load()">
+        <div x-show="loading" class="state-msg">Loading…</div>
+        <div x-show="!loading && skills.length === 0" class="state-msg">
+            No installed skills. Try <code>zipsa install &lt;source&gt;</code> from the CLI.
+        </div>
+
+        <table x-show="!loading && skills.length > 0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Version</th>
+                    <th>Model</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="skill in skills" :key="skill.name">
+                    <tr>
+                        <td class="mono" x-text="skill.name"></td>
+                        <td class="mono" x-text="skill.version"></td>
+                        <td class="mono muted" x-text="skill.model || '—'"></td>
+                        <td x-text="skill.purpose"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </main>
+
+    <script>
+        function skillList() {
+            return {
+                loading: true,
+                skills: [],
+                async load() {
+                    try {
+                        const resp = await fetch('/api/skills');
+                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const data = await resp.json();
+                        this.skills = data.skills;
+                    } catch (e) {
+                        console.error('failed to load skills', e);
+                    } finally {
+                        this.loading = false;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>

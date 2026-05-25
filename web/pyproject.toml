@@ -1,0 +1,37 @@
+[project]
+name = "zipsa-web"
+version = "0.0.1"
+description = "Web UI for zipsa — wraps the CLI for non-developer skill authors and consumers"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "WestbrookAI", email = "neochoon@gmail.com" },
+]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",
+    "sse-starlette>=2.1",
+    "zipsa",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+# Not a published package — this is an app. Just resolve and install
+# the deps into web/.venv, don't try to build/install this project.
+[tool.uv]
+package = false
+
+# Path-dependency to the sibling launcher/ — gives web access to
+# `from zipsa.X import Y` with edits in launcher/ immediately reflected.
+[tool.uv.sources]
+zipsa = { path = "../launcher", editable = true }
+
+[tool.pytest.ini_options]
+# Lets `from app import app` work in tests without an install step.
+pythonpath = "."
