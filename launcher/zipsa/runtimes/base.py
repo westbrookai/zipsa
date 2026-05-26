@@ -68,3 +68,18 @@ class AgentRuntime(ABC):
             True if MCP is supported, False otherwise
         """
         return True
+
+    def format_event_compact(self, event: dict) -> Optional[str]:
+        """Summarize one parse_output event as a ~280-char line.
+
+        Used by core/run_log_handler.py (mcp__zipsa__read_run_log) to
+        let skill-builder analyze prior runs without dumping the raw
+        stream into context. Co-locating this with parse_output (the
+        sibling that produces these events) keeps the codec pair
+        together — SDK shape changes update both methods in one edit.
+
+        Default impl returns the type string as a marker. Each concrete
+        runtime should override with a richer formatter.
+        """
+        t = event.get("type") if isinstance(event, dict) else None
+        return t if isinstance(t, str) and len(t) < 60 else None

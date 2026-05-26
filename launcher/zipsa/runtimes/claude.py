@@ -92,3 +92,106 @@ class ClaudeRuntime(AgentRuntime):
             except json.JSONDecodeError:
                 # Plain text output
                 yield {"type": "text", "content": line}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Codec pair: parse_output (above) reads raw SDK stream into dicts.
+    # format_event_compact (below) summarizes one such dict into a
+    # ~280-char line for analysis tools.
+    #
+    # Co-located on purpose. If Claude SDK changes event shapes (new
+    # block type, renamed field, …), BOTH halves need updates — keeping
+    # them next to each other makes the dependency obvious and prevents
+    # cross-file drift. Consumer of format_event_compact:
+    #   core/run_log_handler.py (mcp__zipsa__read_run_log).
+    # ─────────────────────────────────────────────────────────────────────
+
+    # Per-event total ≈ 280 chars after capping (matches the 1.79MB /
+    # 62-turn worst case we measured: ~17KB output, well under the
+    # handler's 100KB output cap).
+    _BLOCK_CAP_THINK = 200
+    _BLOCK_CAP_TEXT = 200
+    _BLOCK_CAP_TOOL_INPUT = 150
+    _BLOCK_CAP_TOOL_RESULT = 150
+
+    def format_event_compact(self, event: dict) -> Optional[str]:
+        """Return a ~280-char one-line summary of an event, or None
+        if the event has no useful payload to surface.
+
+        Format vocabulary (kept stable so skill-builder's analysis
+        instructions can rely on it):
+          - `S: <subtype>`           — system event
+          - `A: 💭 ... | 🔧 Name(args) | 💬 text` — assistant turn
+          - `U: ✓ result`            — user tool_result
+          - `R: cost=$X turns=N`     — final result
+          - `<type>`                 — fallback marker for unknown types
+        """
+        try:
+            t = event.get("type")
+        except AttributeError:
+            return None
+        if t == "system":
+            return f"S: {event.get('subtype', '?')}"
+        if t == "result":
+            cost = event.get("total_cost_usd", 0) or 0
+            turns = event.get("num_turns", 0) or 0
+            return f"R: cost=${cost:.4f} turns={turns}"
+        if t == "assistant":
+            return self._fmt_assistant(event)
+        if t == "user":
+            return self._fmt_user(event)
+        # Unknown / minor events (rate_limit_event, text, …). Return a
+        # short marker so the timeline isn't full of blanks.
+        return t if isinstance(t, str) and len(t) < 60 else None
+
+    def _fmt_assistant(self, event: dict) -> Optional[str]:
+        msg = event.get("message") or {}
+        content = msg.get("content") or []
+        if not content:
+            return None
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            bt = block.get("type")
+            if bt == "thinking":
+                t = (block.get("thinking") or "")[: self._BLOCK_CAP_THINK]
+                parts.append(f"💭 {t}")
+            elif bt == "tool_use":
+                name = block.get("name", "?")
+                args = block.get("input", {})
+                args_str = json.dumps(args, ensure_ascii=False)[: self._BLOCK_CAP_TOOL_INPUT]
+                parts.append(f"🔧 {name}({args_str})")
+            elif bt == "text":
+                txt = (block.get("text") or "")[: self._BLOCK_CAP_TEXT]
+                parts.append(f"💬 {txt}")
+            # Silently skip other block types (image, etc.) for now.
+        if not parts:
+            return None
+        return "A: " + " | ".join(parts)
+
+    def _fmt_user(self, event: dict) -> Optional[str]:
+        msg = event.get("message") or {}
+        content = msg.get("content") or []
+        if not content:
+            return None
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                inner = block.get("content")
+                # Content can be a string or a list of {type:text, text:...}
+                if isinstance(inner, str):
+                    body = inner
+                elif isinstance(inner, list):
+                    body = " ".join(
+                        (b.get("text") if isinstance(b, dict) else str(b))
+                        or ""
+                        for b in inner
+                    )
+                else:
+                    body = str(inner)
+                parts.append(f"✓ {body[: self._BLOCK_CAP_TOOL_RESULT]}")
+        if not parts:
+            return None
+        return "U: " + " | ".join(parts)

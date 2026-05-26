@@ -393,6 +393,40 @@ class HitlServer:
             """
             return validator_h.validate(path=path)
 
+        from .run_log_handler import RunLogHandler
+        run_log_h = RunLogHandler()
+
+        @mcp.tool()
+        @_logged
+        def read_run_log(
+            skill: str, version: str, run_id: str,
+            phase_id: str = "",
+        ) -> dict:
+            """Read a past run's output.jsonl as a compact per-turn
+            summary so an analysis agent (skill-builder) can decide
+            what to refine without dumping the raw multi-MB stream
+            into its context.
+
+            Each turn is condensed to ~280 chars in a stable vocabulary
+            (`S:` system, `A: 💭/🔧/💬` assistant, `U: ✓` user,
+            `R:` final result). Multi-phase runs concatenate all phases
+            in order with `--- phase: <id> ---` markers; pass `phase_id`
+            to restrict to one phase. Total output capped at 100KB
+            (kept from the TAIL — most recent is most useful for
+            "what went wrong"). truncated=True signals the trim happened.
+
+            Args:
+              skill, version, run_id: identify the run dir under ~/.zipsa/
+              phase_id: optional — restrict to a single phase id
+
+            Returns: {log, total_turns, total_cost_usd, phase_id, truncated}
+            Errors: RUN_LOG_BAD_NAME, RUN_LOG_NOT_FOUND.
+            """
+            return run_log_h.read(
+                skill=skill, version=version, run_id=run_id,
+                phase_id=phase_id or None,
+            )
+
         from .run_skill_handler import RunSkillHandler
         run_skill_h = RunSkillHandler(server=self)
 
