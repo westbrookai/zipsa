@@ -713,6 +713,12 @@ class DockerExecutor:
             raw_stream = iter(process.stdout.readline, "")
 
             if output_file:
+                # output.jsonl preserves the runtime's parsed event stream
+                # verbatim — one JSON object per line. Consumer:
+                # core/run_log_handler.py (mcp__zipsa__read_run_log) via
+                # runtime.format_event_compact. If you change event shapes
+                # here (transforms, new fields), the runtime plugin's
+                # format_event_compact MUST update in the same PR.
                 with open(output_file, "w", buffering=1) as f:
                     yield from _stream_with_limits(raw_stream, output_file_handle=f)
             else:
