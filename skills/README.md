@@ -54,7 +54,7 @@ skills/my-skill/
 
 ```yaml
 apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: my-skill
   version: 0.1.0

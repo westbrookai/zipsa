@@ -288,7 +288,7 @@ class TestDockerExecutor:
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "manifest.yaml").write_text(
             f"""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: {name}
   version: {version}
@@ -321,7 +321,7 @@ spec:
         )
         (parent_dir / "manifest.yaml").write_text(
             f"""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: parent
   version: 1.0.0
@@ -635,7 +635,7 @@ spec:
         executor = DockerExecutor()
         manifest = SkillManifest(
             apiVersion="zipsa.dev/v1alpha1",
-            kind="Skill",
+            kind="SkillManifest",
             metadata=SkillMetadata(name="s", version="1.0.0"),
             spec=SkillSpec(
                 purpose="test",
@@ -673,7 +673,7 @@ spec:
         executor = DockerExecutor()
         manifest = SkillManifest(
             apiVersion="zipsa.dev/v1alpha1",
-            kind="Skill",
+            kind="SkillManifest",
             metadata=SkillMetadata(name="s", version="1.0.0"),
             spec=SkillSpec(
                 purpose="test",
@@ -709,7 +709,7 @@ spec:
         executor = DockerExecutor()
         manifest = SkillManifest(
             apiVersion="zipsa.dev/v1alpha1",
-            kind="Skill",
+            kind="SkillManifest",
             metadata=SkillMetadata(name="s", version="1.0.0"),
             spec=SkillSpec(
                 purpose="test",
@@ -1255,7 +1255,7 @@ class TestSpecMountsApplied:
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -1489,7 +1489,7 @@ class TestLimitsIntegration:
             spec["limits"] = agg_limits
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "limited-skill", "version": "1.0.0"},
             "spec": spec,
         }))
@@ -2135,7 +2135,7 @@ class TestSummaryWritten:
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "two-phase-skill", "version": "1.0.0"},
             "spec": {
                 "purpose": "Two phase test skill",
@@ -2274,7 +2274,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2301,7 +2301,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2332,7 +2332,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2366,7 +2366,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2399,7 +2399,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2430,7 +2430,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2459,7 +2459,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2492,7 +2492,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2523,7 +2523,7 @@ class TestMountExpansion:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2559,7 +2559,7 @@ class TestModelWiring:
         from zipsa.core.executor import DockerExecutor
         skill = self._make_skill(tmp_path,
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2576,7 +2576,7 @@ class TestModelWiring:
         from zipsa.core.executor import DockerExecutor
         skill = self._make_skill(tmp_path,
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2596,7 +2596,7 @@ class TestModelWiring:
         from zipsa.core.executor import DockerExecutor
         skill = self._make_skill(tmp_path,
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2636,7 +2636,7 @@ class TestPhaseSpecModel:
         (skill_dir / "SKILL.md").write_text("# x")
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: t\n"
@@ -2666,7 +2666,7 @@ class TestArtifactsDirCreation:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: afct, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"
@@ -2701,7 +2701,7 @@ class TestArtifactsDirCreation:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: afct, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"
@@ -2740,7 +2740,7 @@ class TestArtifactsDirCreation:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: afct, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"
@@ -2770,7 +2770,7 @@ class TestArtifactsDirCreation:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: afct, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"

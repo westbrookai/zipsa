@@ -73,7 +73,7 @@ class TestSkillLoadNewStructure:
         dist.mkdir()
         (dist / "manifest.yaml").write_text(
             f"apiVersion: zipsa.dev/v1alpha1\n"
-            f"kind: Skill\n"
+            f"kind: SkillManifest\n"
             f"metadata:\n"
             f"  name: {name}\n"
             f"  version: {version}\n"
@@ -124,7 +124,7 @@ class TestSkillLoadNewStructure:
         # Legacy at root with v0.0.1
         (root / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata:\n"
             "  name: smoke\n"
             "  version: 0.0.1\n"
@@ -295,7 +295,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -324,7 +324,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -360,7 +360,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {"purpose": "Test", "instructions": "./SKILL.md"},
         }
@@ -388,7 +388,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -429,7 +429,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -469,7 +469,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -506,7 +506,7 @@ class TestClaudeJson:
 
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -546,7 +546,7 @@ class TestClaudeJson:
         skill_dir.mkdir()
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "my-skill", "version": "2.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -573,7 +573,7 @@ class TestClaudeJson:
         skill_dir.mkdir()
         manifest = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "my-skill", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -603,7 +603,7 @@ def _make_skill(tmp_path: Path, mcp_entries: str) -> Skill:
     (skill_dir / "SKILL.md").write_text("# Test\n")
     (skill_dir / "manifest.yaml").write_text(f"""
 apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: test-skill
   version: 1.0.0
@@ -690,7 +690,7 @@ class TestZipsaMcpEntry:
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {"purpose": "T", "instructions": "./SKILL.md"},
         }))
@@ -715,7 +715,7 @@ class TestZipsaMcpEntry:
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {"purpose": "T", "instructions": "./SKILL.md"},
         }))

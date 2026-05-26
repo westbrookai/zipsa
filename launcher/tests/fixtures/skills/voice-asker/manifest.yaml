@@ -1,5 +1,5 @@
 apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: voice-asker
   version: 0.1.0

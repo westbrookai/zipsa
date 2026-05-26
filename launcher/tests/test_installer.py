@@ -76,7 +76,7 @@ def _make_fake_tarball(subpath: str, skill_name: str = "test-skill", version: st
     buf = io.BytesIO()
     manifest_content = yaml.dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": skill_name, "version": version},
         "spec": {
             "purpose": "Test skill",
@@ -300,7 +300,7 @@ def _make_local_skill(base: Path, name: str = "my-skill", version: str = "0.1.0"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "manifest.yaml").write_text(yaml.dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": name, "version": version},
         "spec": {
             "purpose": "Local test skill",

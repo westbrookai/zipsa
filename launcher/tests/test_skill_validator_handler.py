@@ -25,7 +25,7 @@ def _write_legacy_skill(root: Path, *, name: str = "demo", broken: bool = False)
         spec["instructions"] = "./SKILL.md"
     (d / "manifest.yaml").write_text(yaml.safe_dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": name, "version": "0.1.0"},
         "spec": spec,
     }))
@@ -40,7 +40,7 @@ def _write_new_skill(root: Path, *, name: str = "demo") -> Path:
     dist.mkdir(parents=True)
     (dist / "manifest.yaml").write_text(yaml.safe_dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": name, "version": "0.1.0"},
         "spec": {"purpose": "test", "instructions": "./instruction.md"},
     }))

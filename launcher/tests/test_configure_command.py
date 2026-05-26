@@ -17,7 +17,7 @@ def _install_demo_skill(tmp_path: Path, requires_block: str) -> Path:
     src.mkdir(parents=True)
     (src / "manifest.yaml").write_text(
         "apiVersion: zipsa.dev/v1alpha1\n"
-        "kind: Skill\n"
+        "kind: SkillManifest\n"
         "metadata: {name: demo, version: 0.1.0}\n"
         "spec:\n"
         "  purpose: test\n"

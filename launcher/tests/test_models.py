@@ -131,7 +131,7 @@ class TestMCPServers:
         manifest_yaml = tmp_path / "manifest.yaml"
         manifest_yaml.write_text("""
 apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: test-oauth
   version: 1.0.0
@@ -159,7 +159,7 @@ class TestSkillManifest:
         """Minimal valid manifest."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {
                 "name": "test",
                 "version": "1.0.0",
@@ -170,7 +170,7 @@ class TestSkillManifest:
             },
         }
         manifest = SkillManifest.model_validate(data)
-        assert manifest.kind == "Skill"
+        assert manifest.kind == "SkillManifest"
         assert manifest.metadata.name == "test"
         assert manifest.spec.purpose == "Test skill"
 
@@ -178,7 +178,7 @@ class TestSkillManifest:
         """Manifest with MCP stdio server."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -201,7 +201,7 @@ class TestSkillManifest:
         """Manifest with builtin tool whitelist."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -217,7 +217,7 @@ class TestSkillManifest:
         """MCP server allowed_tools lives on the server definition."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "Test",
@@ -271,7 +271,7 @@ class TestSkillManifest:
         """Missing required field should fail validation."""
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             # Missing metadata
             "spec": {"purpose": "Test", "instructions": "./SKILL.md"},
         }
@@ -357,7 +357,7 @@ class TestSpecMounts:
     def test_defaults_empty(self):
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {"purpose": "T", "instructions": "./SKILL.md"},
         }
@@ -367,7 +367,7 @@ class TestSpecMounts:
     def test_multiple_mounts_parsed(self):
         data = {
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "test", "version": "1.0.0"},
             "spec": {
                 "purpose": "T",

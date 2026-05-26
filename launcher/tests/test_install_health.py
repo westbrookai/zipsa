@@ -13,7 +13,7 @@ class TestHealthyDetection:
         d.mkdir()
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata:\n"
             "  name: skill-a\n"
             "  version: 1.0.0\n"
@@ -31,7 +31,7 @@ class TestHealthyDetection:
         src.mkdir(parents=True)
         (src / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata:\n"
             "  name: skill-a\n"
             "  version: 1.0.0\n"
@@ -57,7 +57,7 @@ class TestNewStructureDetection:
         dist.mkdir(parents=True)
         (dist / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata:\n"
             f"  name: {name}\n"
             "  version: 1.0.0\n"
@@ -125,7 +125,7 @@ class TestBrokenDetection:
         d.mkdir()
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {}  # missing required fields\n"
             "spec: {}\n"
         )
@@ -165,7 +165,7 @@ class TestRequiresStatus:
         d.mkdir()
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 1.0.0}\n"
             "spec: {purpose: x, instructions: ./SKILL.md}\n"
         )
@@ -180,7 +180,7 @@ class TestRequiresStatus:
         d.mkdir(parents=True)
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 1.0.0}\n"
             "spec:\n"
             "  purpose: x\n"
@@ -201,7 +201,7 @@ class TestRequiresStatus:
         d.mkdir(parents=True)
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: s, version: 1.0.0}\n"
             "spec:\n"
             "  purpose: x\n"

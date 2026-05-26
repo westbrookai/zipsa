@@ -36,7 +36,7 @@ def _install_child_skill(
     skill_dir = zipsa_home / "skills" / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     manifest = f"""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: {name}
   version: {version}

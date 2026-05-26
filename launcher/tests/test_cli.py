@@ -207,7 +207,7 @@ class TestListCommand:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "daily-progress", "version": "0.1.0"},
             "spec": {"purpose": "Test", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -234,7 +234,7 @@ class TestListCommand:
         # Bare 'Bash' is invalid under strict mode
         (bad_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "broken-skill", "version": "0.1.0"},
             "spec": {
                 "purpose": "Test",
@@ -254,10 +254,17 @@ class TestListCommand:
         assert "broken" in result.output.lower()
         assert "Invalid manifest" in result.output
 
-    def test_list_empty_when_no_skills_installed(self, tmp_path):
+    def test_list_empty_when_no_skills_installed(self, tmp_path, monkeypatch):
         """list reports no installed skills."""
         zipsa_home = tmp_path / ".zipsa"
         zipsa_home.mkdir(parents=True)
+        # Isolate from real built-ins (skill-builder etc.) — otherwise
+        # `zipsa list` always finds at least the bundled skill-builder.
+        empty_builtins = tmp_path / "_empty_builtins"
+        empty_builtins.mkdir()
+        monkeypatch.setattr(
+            "zipsa.paths.builtin_skills_root", lambda: empty_builtins,
+        )
 
         with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
             result = runner.invoke(app, ["list"])
@@ -273,7 +280,7 @@ class TestListCommand:
         original_dir.mkdir(parents=True)
         (original_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "hello-world", "version": "0.1.0"},
             "spec": {"purpose": "Hi", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -304,7 +311,7 @@ class TestListCommand:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "my-skill", "version": "0.1.0"},
             "spec": {"purpose": "Test", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -343,7 +350,7 @@ class TestListCommand:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "my-skill", "version": "0.1.0"},
             "spec": {"purpose": "Test", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -490,7 +497,7 @@ class TestListOrchestratorTree:
             spec["children"] = children
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": name, "version": version},
             "spec": spec,
         }))
@@ -579,7 +586,7 @@ class TestWhereCommand:
         source_dir.mkdir(parents=True)
         (source_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": name, "version": "0.1.0"},
             "spec": {"purpose": "x", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -598,7 +605,7 @@ class TestWhereCommand:
         skill_dir.mkdir(parents=True)
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": name, "version": "0.1.0"},
             "spec": {"purpose": "x", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -700,7 +707,7 @@ class TestDiscoverCommand:
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(yaml.dump({
             "apiVersion": "zipsa.dev/v1alpha1",
-            "kind": "Skill",
+            "kind": "SkillManifest",
             "metadata": {"name": "my-skill", "version": "0.1.0"},
             "spec": {"purpose": "Test", "instructions": "./SKILL.md",
                      "mcp": [], "tools": {"builtin": []}},
@@ -1192,7 +1199,7 @@ class TestRunEmptyQuery:
         skill_dir = tmp_path / "fixture-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: fixture-skill
   version: 1.0.0
@@ -1227,7 +1234,7 @@ spec:
         skill_dir = tmp_path / "fixture-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: fixture-skill
   version: 1.0.0
@@ -1266,7 +1273,7 @@ spec:
         skill_dir = tmp_path / "fixture-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text("""apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: fixture-skill
   version: 1.0.0
@@ -1336,7 +1343,7 @@ class TestListBrokenEntries:
         healthy = skills_dir / "healthy-skill"
         healthy.mkdir()
         (healthy / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: healthy-skill, version: 1.0.0}\n"
             "spec: {purpose: ok, instructions: ./SKILL.md}\n"
         )
@@ -1376,13 +1383,19 @@ class TestListBrokenEntries:
             d = skills_dir / f"healthy-{i}"
             d.mkdir()
             (d / "manifest.yaml").write_text(
-                "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+                "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
                 f"metadata: {{name: healthy-{i}, version: 1.0.0}}\n"
                 "spec: {purpose: ok, instructions: ./SKILL.md}\n"
             )
         (skills_dir / "broken").symlink_to(tmp_path / "gone")
 
         monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+        # Isolate from real built-ins so the count stays at 3.
+        empty_builtins = tmp_path / "_empty_builtins"
+        empty_builtins.mkdir()
+        monkeypatch.setattr(
+            "zipsa.paths.builtin_skills_root", lambda: empty_builtins,
+        )
 
         runner = CliRunner()
         result = runner.invoke(app, ["list"])
@@ -1409,7 +1422,7 @@ class TestInstallReplacesBroken:
         new_src = tmp_path / "new-src"
         new_src.mkdir()
         (new_src / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: test-skill, version: 1.0.0}\n"
             "spec: {purpose: ok, instructions: ./SKILL.md}\n"
         )
@@ -1443,7 +1456,7 @@ class TestInstallReplacesBroken:
         existing = skills_dir / "test-skill"
         existing.mkdir()
         (existing / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: test-skill, version: 1.0.0}\n"
             "spec: {purpose: ok, instructions: ./SKILL.md}\n"
         )
@@ -1452,7 +1465,7 @@ class TestInstallReplacesBroken:
         new_src = tmp_path / "new-src"
         new_src.mkdir()
         (new_src / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: test-skill, version: 2.0.0}\n"
             "spec: {purpose: ok, instructions: ./SKILL.md}\n"
         )
@@ -1480,7 +1493,7 @@ class TestRunExitCodes:
         skill_dir = tmp_path / "exit-code-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: exit-code-skill, version: 1.0.0}\n"
             "spec: {purpose: Test exit codes., instructions: ./SKILL.md, tools: {builtin: []}}\n"
         )
@@ -1594,7 +1607,7 @@ class TestSummaryToFlag:
         skill_dir = tmp_path / "summary-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: summary-skill, version: 1.0.0}\n"
             "spec: {purpose: Test., instructions: ./SKILL.md, tools: {builtin: []}}\n"
         )
@@ -1635,7 +1648,7 @@ class TestSummaryToFlag:
         skill_dir = tmp_path / "summary-skill"
         skill_dir.mkdir()
         (skill_dir / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: summary-skill, version: 1.0.0}\n"
             "spec: {purpose: Test., instructions: ./SKILL.md, tools: {builtin: []}}\n"
         )
@@ -1687,7 +1700,7 @@ class TestChildrenValidation:
                 limits_yaml += f"    timeout_seconds: {timeout_seconds}\n"
         children_yaml = "  children:\n" + "".join(f"    - {c}\n" for c in children)
         (skill_dir / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             "metadata: {name: parent-skill, version: 1.0.0}\n"
             f"spec:\n  purpose: Test.\n  instructions: ./SKILL.md\n"
             f"  tools: {{builtin: []}}\n{limits_yaml}{children_yaml}"
@@ -1713,7 +1726,7 @@ class TestChildrenValidation:
             if timeout_seconds is not None:
                 limits_yaml += f"    timeout_seconds: {timeout_seconds}\n"
         (child_dir / "manifest.yaml").write_text(
-            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "apiVersion: zipsa.dev/v1alpha1\nkind: SkillManifest\n"
             f"metadata: {{name: {name}, version: 1.0.0}}\n"
             f"spec:\n  purpose: Child skill.\n  instructions: ./SKILL.md\n"
             f"  tools: {{builtin: []}}\n{limits_yaml}"
@@ -1831,7 +1844,7 @@ class TestRunPreflightRequires:
         src.mkdir(parents=True)
         (src / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: needs-cfg, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"
@@ -1889,7 +1902,7 @@ class TestRunPreflightRequires:
         src.mkdir(parents=True)
         (src / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: plain, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: test\n"
@@ -1928,7 +1941,7 @@ class TestListRequiresIndicator:
         d.mkdir(parents=True)
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: needs, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: x\n"
@@ -1952,7 +1965,7 @@ class TestListRequiresIndicator:
         d.mkdir(parents=True)
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: done, version: 0.1.0}\n"
             "spec:\n"
             "  purpose: x\n"
@@ -1975,7 +1988,7 @@ class TestListRequiresIndicator:
         d.mkdir(parents=True)
         (d / "manifest.yaml").write_text(
             "apiVersion: zipsa.dev/v1alpha1\n"
-            "kind: Skill\n"
+            "kind: SkillManifest\n"
             "metadata: {name: plain, version: 0.1.0}\n"
             "spec: {purpose: x, instructions: ./SKILL.md}\n"
         )

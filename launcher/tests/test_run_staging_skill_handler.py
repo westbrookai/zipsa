@@ -47,7 +47,7 @@ def _write_skill(root: Path, name: str, *,
         spec["allows_staging_run"] = True
     (d / "manifest.yaml").write_text(yaml.safe_dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": name, "version": "0.1.0"},
         "spec": spec,
     }))

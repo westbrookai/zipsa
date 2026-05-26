@@ -320,6 +320,6 @@ class SkillManifest(BaseModel):
     """Complete skill manifest."""
 
     apiVersion: str
-    kind: Literal["Skill"]
+    kind: Literal["SkillManifest"]
     metadata: SkillMetadata
     spec: SkillSpec

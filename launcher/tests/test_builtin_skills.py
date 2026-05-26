@@ -34,7 +34,7 @@ def _write_skill(root: Path, name: str, *, version: str = "0.1.0") -> Path:
     dist.mkdir(parents=True)
     (dist / "manifest.yaml").write_text(yaml.safe_dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": {"name": name, "version": version},
         "spec": {"purpose": "Test.", "instructions": "./instruction.md"},
     }))

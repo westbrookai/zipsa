@@ -24,7 +24,7 @@ def _write_skill(skills_root: Path, name: str, *, version: str,
         metadata["description"] = description
     (d / "manifest.yaml").write_text(yaml.safe_dump({
         "apiVersion": "zipsa.dev/v1alpha1",
-        "kind": "Skill",
+        "kind": "SkillManifest",
         "metadata": metadata,
         "spec": {"purpose": purpose, "instructions": "./SKILL.md"},
     }))

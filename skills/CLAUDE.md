@@ -42,7 +42,7 @@ Only after SKILL.md is clear, write the manifest. The manifest should reflect ex
 **Required fields:**
 ```yaml
 apiVersion: zipsa.dev/v1alpha1
-kind: Skill
+kind: SkillManifest
 metadata:
   name: my-skill          # must match directory name
   version: 0.1.0
