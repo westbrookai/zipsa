@@ -126,10 +126,43 @@ def installed_skill_dir(name: str) -> Path:
     return skills_dir() / name
 
 
+def builtin_skills_root() -> Path:
+    """Directory inside the launcher Python package that holds built-in
+    skills (skill-builder, future skill-editor, etc.).
+
+    Distributed as package data via pyproject.toml so `pip install zipsa`
+    ships these out of the box. Test-overridable: monkeypatch
+    `zipsa.paths.builtin_skills_root` to point at a tmp dir.
+    """
+    return Path(__file__).parent / "builtin_skills"
+
+
+def builtin_skill_dir(name: str) -> "Path | None":
+    """Return the path to a built-in skill if it exists, else None.
+
+    Used by resolve_skill as fallback after installed lookup misses,
+    and by list / install code paths that need to know whether a name
+    is a built-in.
+    """
+    candidate = builtin_skills_root() / name
+    return candidate if candidate.is_dir() else None
+
+
+def is_builtin_skill(name: str) -> bool:
+    return builtin_skill_dir(name) is not None
+
+
 def resolve_skill(name: str) -> Path:
+    # Installed user skills take precedence over built-ins. The installer
+    # blocks name collisions up-front (so this preference is mostly a
+    # defense-in-depth thing) — but if a user manually drops a same-named
+    # skill into ~/.zipsa/skills/, their copy wins.
     path = installed_skill_dir(name)
-    if not path.exists():
-        raise SkillNotInstalledError(
-            f"Skill '{name}' not found. Try: zipsa install <source>"
-        )
-    return path
+    if path.exists():
+        return path
+    builtin = builtin_skill_dir(name)
+    if builtin is not None:
+        return builtin
+    raise SkillNotInstalledError(
+        f"Skill '{name}' not found. Try: zipsa install <source>"
+    )
