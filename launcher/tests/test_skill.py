@@ -53,6 +53,115 @@ class TestSkillLoad:
         assert skill.skill_dir == skill_dir
 
 
+class TestSkillLoadNewStructure:
+    """Skills authored via skill-builder live under `zipsa-dist/`:
+
+        skills/<name>/
+        ├── SKILL.md           ← author's natural-language source
+        └── zipsa-dist/
+            ├── instruction.md ← agent-facing instructions
+            └── manifest.yaml  ← launcher-facing config
+
+    Skill.load prefers this layout over the legacy root-level layout.
+    Legacy layout still works (fallback) until every installed skill is
+    migrated; this test class pins both code paths.
+    """
+
+    @staticmethod
+    def _write_new_layout(root: Path, name: str, version: str = "1.0.0") -> None:
+        dist = root / "zipsa-dist"
+        dist.mkdir()
+        (dist / "manifest.yaml").write_text(
+            f"apiVersion: zipsa.dev/v1alpha1\n"
+            f"kind: Skill\n"
+            f"metadata:\n"
+            f"  name: {name}\n"
+            f"  version: {version}\n"
+            f"spec:\n"
+            f"  purpose: Test.\n"
+            f"  instructions: ./instruction.md\n"
+        )
+        (dist / "instruction.md").write_text(f"# {name}\n\nAgent instructions here.\n")
+        # Author-facing file at the top level — not read by the launcher.
+        (root / "SKILL.md").write_text(f"# {name}\n\nWhat I want this skill to do.\n")
+
+    def test_new_structure_loads_from_directory(self, tmp_path):
+        root = tmp_path / "smoke"
+        root.mkdir()
+        self._write_new_layout(root, "smoke")
+        skill = Skill.load(root)
+        assert skill.name == "smoke"
+        assert skill.manifest.metadata.version == "1.0.0"
+
+    def test_new_structure_skill_dir_points_to_zipsa_dist(self, tmp_path):
+        """skill_dir is the directory containing manifest.yaml. For new
+        skills that's `<root>/zipsa-dist/`. Important because
+        spec.instructions paths resolve relative to skill_dir."""
+        root = tmp_path / "smoke"
+        root.mkdir()
+        self._write_new_layout(root, "smoke")
+        skill = Skill.load(root)
+        assert skill.skill_dir == (root / "zipsa-dist").resolve()
+
+    def test_new_structure_instructions_resolve_to_zipsa_dist(self, tmp_path):
+        """spec.instructions=./instruction.md must land inside zipsa-dist
+        (the agent reads instruction.md, NOT the author's SKILL.md)."""
+        root = tmp_path / "smoke"
+        root.mkdir()
+        self._write_new_layout(root, "smoke")
+        skill = Skill.load(root)
+        assert "Agent instructions here." in skill.instructions
+        # Author's natural-language file is NOT what the agent sees.
+        assert "What I want this skill to do." not in skill.instructions
+
+    def test_new_structure_takes_precedence_over_legacy(self, tmp_path):
+        """If both `zipsa-dist/manifest.yaml` and root `manifest.yaml`
+        exist, the new structure wins. Skill-builder writes new layouts
+        atomically — when we see both, the dist version is the intended
+        truth and root is leftover from a partial migration."""
+        root = tmp_path / "smoke"
+        root.mkdir()
+        # Legacy at root with v0.0.1
+        (root / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata:\n"
+            "  name: smoke\n"
+            "  version: 0.0.1\n"
+            "spec:\n"
+            "  purpose: legacy.\n"
+            "  instructions: ./SKILL.md\n"
+        )
+        (root / "SKILL.md").write_text("# legacy\n")
+        # New at zipsa-dist with v1.0.0
+        self._write_new_layout(root, "smoke", version="1.0.0")
+        skill = Skill.load(root)
+        assert skill.manifest.metadata.version == "1.0.0"
+
+    def test_missing_both_raises_clear_error(self, tmp_path):
+        """Empty dir → error message names both paths that were tried so
+        users know what's expected, not just where the launcher looked."""
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        with pytest.raises(FileNotFoundError) as exc:
+            Skill.load(empty)
+        # Both candidate paths should appear in the message
+        msg = str(exc.value)
+        assert "zipsa-dist" in msg
+        assert "manifest.yaml" in msg
+
+    def test_loading_via_dist_manifest_file_directly(self, tmp_path):
+        """Passing zipsa-dist/manifest.yaml as a file path also works —
+        skill_dir derives from manifest's parent."""
+        root = tmp_path / "smoke"
+        root.mkdir()
+        self._write_new_layout(root, "smoke")
+        manifest_path = root / "zipsa-dist" / "manifest.yaml"
+        skill = Skill.load(manifest_path)
+        assert skill.skill_dir == (root / "zipsa-dist").resolve()
+        assert "Agent instructions here." in skill.instructions
+
+
 class TestSkillInstructions:
     """Test SKILL.md loading."""
 

@@ -46,6 +46,54 @@ class TestHealthyDetection:
         assert h.ok is True
 
 
+class TestNewStructureDetection:
+    """check_install should also recognize `zipsa-dist/manifest.yaml`
+    (the layout skill-builder writes). Legacy root-level manifest.yaml
+    keeps working — tested in TestHealthyDetection above."""
+
+    @staticmethod
+    def _write_new_layout(root: Path, name: str = "skill-a") -> None:
+        dist = root / "zipsa-dist"
+        dist.mkdir(parents=True)
+        (dist / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\n"
+            "kind: Skill\n"
+            "metadata:\n"
+            f"  name: {name}\n"
+            "  version: 1.0.0\n"
+            "spec:\n"
+            "  purpose: Test.\n"
+            "  instructions: ./instruction.md\n"
+        )
+        (dist / "instruction.md").write_text("agent text\n")
+
+    def test_new_structure_is_ok(self, tmp_path):
+        d = tmp_path / "skill-a"
+        d.mkdir()
+        self._write_new_layout(d)
+        h = check_install(d)
+        assert h.ok is True
+        assert h.reason is None
+
+    def test_new_structure_via_symlink_is_ok(self, tmp_path):
+        src = tmp_path / "src" / "skill-a"
+        src.mkdir(parents=True)
+        self._write_new_layout(src)
+        link = tmp_path / "installed" / "skill-a"
+        link.parent.mkdir()
+        link.symlink_to(src)
+        h = check_install(link)
+        assert h.ok is True
+
+    def test_neither_layout_reports_missing(self, tmp_path):
+        d = tmp_path / "skill-a"
+        d.mkdir()
+        # no manifest in either location
+        h = check_install(d)
+        assert h.ok is False
+        assert "manifest.yaml" in h.reason
+
+
 class TestBrokenDetection:
     def test_dangling_symlink_reports_linked_source_missing(self, tmp_path):
         gone = tmp_path / "removed-source"

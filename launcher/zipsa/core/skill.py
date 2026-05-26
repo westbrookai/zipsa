@@ -42,9 +42,24 @@ class Skill:
             manifest_path = skill_path
             skill_dir = skill_path.parent
         else:
-            # Directory path
-            manifest_path = skill_path / "manifest.yaml"
-            skill_dir = skill_path
+            # Directory path. Prefer the new structure (zipsa-dist/) so
+            # skill-builder-authored skills win cleanly; fall back to the
+            # legacy root layout while older installs are still around.
+            # `skill_dir` is whichever directory contains manifest.yaml —
+            # spec.instructions paths are resolved against it.
+            dist_manifest = skill_path / "zipsa-dist" / "manifest.yaml"
+            legacy_manifest = skill_path / "manifest.yaml"
+            if dist_manifest.exists():
+                manifest_path = dist_manifest
+                skill_dir = skill_path / "zipsa-dist"
+            elif legacy_manifest.exists():
+                manifest_path = legacy_manifest
+                skill_dir = skill_path
+            else:
+                raise FileNotFoundError(
+                    f"No manifest.yaml found. Tried: "
+                    f"{dist_manifest}, {legacy_manifest}"
+                )
 
         if not manifest_path.exists():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
