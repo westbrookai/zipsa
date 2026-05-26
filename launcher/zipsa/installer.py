@@ -242,6 +242,20 @@ def install_local(local_path: str, link: bool = False, force: bool = False) -> s
 
     name = skill.name
     version = skill.manifest.metadata.version
+
+    # Built-in name collision check: if the user tries to install a
+    # skill with the same name as a built-in (skill-builder, etc.),
+    # refuse. Silent override would be confusing — the user wouldn't
+    # know which version `zipsa run <name>` resolves to. They can fork
+    # under a different name instead.
+    from .paths import is_builtin_skill
+    if is_builtin_skill(name):
+        raise ValueError(
+            f"'{name}' is a built-in skill that ships with zipsa; "
+            f"choose a different name to install your own version "
+            f"(e.g. 'my-{name}')."
+        )
+
     dest = skills_dir() / name
 
     if (dest.exists() or dest.is_symlink()) and not force:

@@ -553,35 +553,33 @@ def validate(
 @app.command(name="list")
 def list_installed():
     """List installed skills with run statistics."""
+    from .paths import builtin_skills_root
+
     home = zipsa_home()
     sd = home / "skills"
-    if not sd.exists():
-        typer.echo("No installed skills.")
-        return
 
     home_subdirs = list(home.iterdir()) if home.exists() else []
 
     installed = []
     broken: list[tuple[str, str]] = []  # (name, reason) for broken entries
-    for item in sorted(sd.iterdir()):
-        if not item.is_dir() and not item.is_symlink():
-            continue
 
+    def _add_entry(item: Path, *, is_builtin: bool) -> None:
+        """Inner helper — same enumeration logic for both user-installed
+        and built-in skills. is_builtin only changes the display tag."""
         health = check_install(item)
         if not health.ok:
             broken.append((item.name, health.reason or "unknown reason"))
-            continue
-
+            return
         try:
             skill = Skill.load(item)
         except ValidationError as e:
             first = e.errors()[0]
             loc = ".".join(str(p) for p in first["loc"])
             broken.append((item.name, f"{loc}: {first['msg']}"))
-            continue
+            return
         except Exception as e:
             broken.append((item.name, str(e).splitlines()[0]))
-            continue
+            return
 
         install_json = item / "_install.json"
         install_meta = {}
@@ -591,7 +589,7 @@ def list_installed():
             except Exception:
                 pass
 
-        # Compute run stats from zipsa_home()/<name>@<version>/runs/
+        # Compute run stats (same logic as before)
         total_runs = 0
         successful_runs = 0
         for run_data_dir in home_subdirs:
@@ -605,8 +603,6 @@ def list_installed():
             for run_dir in runs_dir.iterdir():
                 if not run_dir.is_dir():
                     continue
-                # Prefer summary.json (single source of truth). Fall back
-                # to legacy metadata.json for pre-consolidation runs.
                 summary_file = run_dir / "summary.json"
                 if summary_file.exists():
                     try:
@@ -634,9 +630,28 @@ def list_installed():
             "total_runs": total_runs,
             "successful_runs": successful_runs,
             "is_link": item.is_symlink(),
+            "is_builtin": is_builtin,
             "item": item,
-            "health": health,  # NEW
+            "health": health,
         })
+
+    # 1) User-installed skills under ~/.zipsa/skills/
+    if sd.exists():
+        for item in sorted(sd.iterdir()):
+            if not item.is_dir() and not item.is_symlink():
+                continue
+            _add_entry(item, is_builtin=False)
+
+    # 2) Built-in skills bundled with the launcher package. Same
+    #    enumeration / display flow, just tagged "(built-in)".
+    builtin_root = builtin_skills_root()
+    if builtin_root.exists():
+        for item in sorted(builtin_root.iterdir()):
+            if not item.is_dir():
+                continue
+            if item.name.startswith("__"):  # skip __pycache__ etc
+                continue
+            _add_entry(item, is_builtin=True)
 
     total_count = len(installed) + len(broken)
     if total_count == 0:
@@ -652,7 +667,9 @@ def list_installed():
 
         name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
         version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
-        if entry["is_link"]:
+        if entry["is_builtin"]:
+            label = typer.style(" (built-in)", fg=typer.colors.BLUE)
+        elif entry["is_link"]:
             label = typer.style(" (linked)", fg=typer.colors.YELLOW)
         else:
             label = ""
