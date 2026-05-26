@@ -251,6 +251,11 @@ class SkillSpec(BaseModel):
     network: Optional[dict] = None  # Network allow list
     default_query: Optional[str] = None  # Default query for skill (when user runs with no args)
     children: list[str] = Field(default_factory=list)  # Child skills this skill may invoke
+    # Opt-in to invoke unsaved skills from ~/.zipsa/staging/ via
+    # mcp__zipsa__run_staging_skill. Only privileged authoring meta-skills
+    # (e.g. skill-builder) should set this — production skills should
+    # operate on installed children only.
+    allows_staging_run: bool = False
     # Multi-phase support (v1: documentation only, v2: strict validation)
     phases: list[PhaseSpec] = Field(default_factory=list)
     state_schema: dict = Field(default_factory=dict)  # v1: docs only

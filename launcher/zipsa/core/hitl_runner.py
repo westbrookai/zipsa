@@ -435,9 +435,10 @@ class HitlServer:
         async def run_skill(name: str, args: str = "") -> dict:
             """Invoke a child skill declared in this skill's spec.children.
 
-            Returns {status, exit_code, skill, version, run_id, summary}.
-            Pair `skill`+`version`+`run_id` with `mcp__zipsa__get_artifact`
-            to read the child's outputs.
+            Returns {status, exit_code, skill, version, run_id, summary,
+            is_staging (always false for this tool)}. Pair `skill`+
+            `version`+`run_id` with `mcp__zipsa__get_artifact` to read
+            the child's outputs.
 
             Args:
               name: child skill name (must be in this skill's spec.children)
@@ -450,6 +451,32 @@ class HitlServer:
             # container's MCP calls back into this same server).
             import asyncio
             return await asyncio.to_thread(run_skill_h.run, name=name, args=args)
+
+        from .run_staging_skill_handler import RunStagingSkillHandler
+        run_staging_h = RunStagingSkillHandler(server=self)
+
+        @mcp.tool()
+        @_logged
+        async def run_staging_skill(name: str, args: str = "") -> dict:
+            """Invoke a skill that lives in ~/.zipsa/staging/<name>/
+            (not yet installed). Designed for skill-builder's iterate
+            loop — author drafts a skill, runs it via this tool,
+            analyzes the result via mcp__zipsa__read_run_log, refines,
+            repeats. Permission gated by caller's spec.allows_staging_run.
+
+            Same result shape as run_skill, plus `is_staging: true` so
+            callers can distinguish staging runs from regular ones (e.g.
+            for tagging or different cost accounting). run_skill returns
+            `is_staging: false` for symmetry.
+
+            Args:
+              name: directory under ~/.zipsa/staging/
+              args: passed to child as user_query (same as run_skill)
+            """
+            import asyncio
+            return await asyncio.to_thread(
+                run_staging_h.run, name=name, args=args,
+            )
 
         app = mcp.streamable_http_app()
         app.add_middleware(CallerContextMiddleware, token_map=self._token_map)

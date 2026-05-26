@@ -71,6 +71,7 @@ class RunSkillHandler:
             return {
                 "status": "failed", "exit_code": 2, "skill": name,
                 "version": None, "run_id": None, "summary": None,
+                "is_staging": False,
                 "error": {
                     "code": "skill_cycle_detected",
                     "message": f"'{name}' is already in the call chain ({' -> '.join(new_trace)} -> {name})",
@@ -80,6 +81,7 @@ class RunSkillHandler:
             return {
                 "status": "failed", "exit_code": 2, "skill": name,
                 "version": None, "run_id": None, "summary": None,
+                "is_staging": False,
                 "error": {
                     "code": "skill_depth_exceeded",
                     "message": f"call depth {new_depth} >= cap {_MAX_CALL_DEPTH} (chain: {' -> '.join(new_trace)})",
@@ -184,6 +186,7 @@ class RunSkillHandler:
                 "version": None,
                 "run_id": None,
                 "summary": None,
+                "is_staging": False,
                 "error": {"code": code, "message": stderr_text or "child exited 2"},
             }
 
@@ -211,6 +214,7 @@ class RunSkillHandler:
             "version": actual_version,
             "run_id": run_dir.name,
             "summary": summary,
+            "is_staging": False,
         }
 
     def _build_child_env(self, caller: CallerInfo, child_token: str) -> dict[str, str]:
@@ -313,5 +317,6 @@ class RunSkillHandler:
             "version": None,
             "run_id": None,
             "summary": None,
+            "is_staging": False,
             "error": {"code": code, "message": message},
         }

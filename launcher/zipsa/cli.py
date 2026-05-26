@@ -41,8 +41,29 @@ _DEFAULT_IMAGE = f"ghcr.io/westbrookai/zipsa-runtime:{_RUNTIME_VERSION}"
 def _resolve_skill_path(name: str) -> Path:
     """Resolve an installed skill name to its directory path.
 
+    When ZIPSA_STAGING_RUN_PATH is set in the environment, load the
+    skill from that directory instead. This is the hook RunStagingSkillHandler
+    uses to run an unsaved (staging) skill via the regular `zipsa run`
+    pipeline — no need to duplicate Skill.load + DockerExecutor setup.
+    Containment guard: the override path must resolve under ZIPSA_HOME.
+
     Thin wrapper around resolve_skill so tests can patch a single symbol.
     """
+    staging = os.environ.get("ZIPSA_STAGING_RUN_PATH")
+    if staging:
+        from .paths import zipsa_home
+        p = Path(staging).resolve()
+        try:
+            p.relative_to(zipsa_home().resolve())
+        except ValueError:
+            raise typer.BadParameter(
+                f"ZIPSA_STAGING_RUN_PATH must be under ZIPSA_HOME: {staging}"
+            )
+        if not p.exists():
+            raise SkillNotInstalledError(
+                f"Staging path does not exist: {staging}"
+            )
+        return p
     return resolve_skill(name)
 
 
