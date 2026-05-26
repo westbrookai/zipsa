@@ -341,6 +341,58 @@ class HitlServer:
                 skill=skill, version=version, run_id=run_id, name=name,
             )
 
+        # Skill-builder support — three tools the authoring agent uses
+        # during its discover → draft → validate cycle. Always registered
+        # (no caller scoping); access is gated by the agent's allowedTools.
+        from .skill_catalog_handler import SkillCatalogHandler
+        from .skill_files_handler import SkillFilesHandler
+        from .skill_validator_handler import SkillValidatorHandler
+        catalog_h = SkillCatalogHandler()
+        files_h = SkillFilesHandler()
+        validator_h = SkillValidatorHandler()
+
+        @mcp.tool()
+        @_logged
+        def list_skills_catalog() -> dict:
+            """List installed skills with run statistics.
+
+            Returns {skills: [{name, version, purpose, model, description,
+            tags, total_runs, successful_runs}, ...]}. Use this during
+            the discover phase to check whether the user's desired skill
+            already exists, or to find atomic skills that could be
+            composed as children of an orchestrator.
+            """
+            return catalog_h.run()
+
+        @mcp.tool()
+        @_logged
+        def write_skill_files(name: str, files: dict) -> dict:
+            """Write a draft skill into ~/.zipsa/staging/<name>/.
+
+            Only three filenames are accepted: `SKILL.md` (author's
+            natural-language source), `zipsa-dist/manifest.yaml`
+            (launcher config), and `zipsa-dist/instruction.md`
+            (agent-facing instructions). Re-writing overwrites; this
+            tool is meant to be called repeatedly as the draft evolves.
+
+            Returns {path, written_files}. Errors: SKILL_NAME_BAD,
+            SKILL_FILE_BAD_NAME, SKILL_FILE_BAD_CONTENT, SKILL_FILES_EMPTY.
+            """
+            return files_h.write(name=name, files=files)
+
+        @mcp.tool()
+        @_logged
+        def validate_skill(path: str) -> dict:
+            """Validate the skill directory at `path` (must be under
+            ZIPSA_HOME — typically a staging dir written by
+            write_skill_files).
+
+            Returns {ok: bool, errors: [str], name?, version?}. Use this
+            after every draft revision to either confirm "ready to
+            install" or feed errors back into the next iteration.
+            """
+            return validator_h.validate(path=path)
+
         from .run_skill_handler import RunSkillHandler
         run_skill_h = RunSkillHandler(server=self)
 
