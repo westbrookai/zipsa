@@ -54,8 +54,11 @@ def check_install(path: Path) -> InstallHealth:
     if not path.exists():
         return InstallHealth(ok=False, reason="Install entry does not exist")
 
-    manifest = path / "manifest.yaml"
-    if not manifest.exists():
+    # Skill-builder writes the new layout under zipsa-dist/; legacy
+    # skills still have a root-level manifest.yaml. Either is fine.
+    dist_manifest = path / "zipsa-dist" / "manifest.yaml"
+    legacy_manifest = path / "manifest.yaml"
+    if not dist_manifest.exists() and not legacy_manifest.exists():
         return InstallHealth(ok=False, reason="manifest.yaml not found")
 
     # Try to load the manifest. We use the same code path as production
