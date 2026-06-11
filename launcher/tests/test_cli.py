@@ -254,10 +254,17 @@ class TestListCommand:
         assert "broken" in result.output.lower()
         assert "Invalid manifest" in result.output
 
-    def test_list_empty_when_no_skills_installed(self, tmp_path):
+    def test_list_empty_when_no_skills_installed(self, tmp_path, monkeypatch):
         """list reports no installed skills."""
         zipsa_home = tmp_path / ".zipsa"
         zipsa_home.mkdir(parents=True)
+
+        # Repoint built-in skills root to an empty dir so the real
+        # bundled built-ins (skill-builder) don't surface here.
+        monkeypatch.setattr(
+            "zipsa.paths.builtin_skills_root",
+            lambda: tmp_path / "_no_builtins",
+        )
 
         with patch.dict(os.environ, {"ZIPSA_HOME": str(zipsa_home)}):
             result = runner.invoke(app, ["list"])
@@ -1383,6 +1390,12 @@ class TestListBrokenEntries:
         (skills_dir / "broken").symlink_to(tmp_path / "gone")
 
         monkeypatch.setattr("zipsa.cli.zipsa_home", lambda: zhome)
+        # Repoint built-in skills root to an empty dir so the real
+        # bundled built-ins (skill-builder) don't surface in the count.
+        monkeypatch.setattr(
+            "zipsa.paths.builtin_skills_root",
+            lambda: tmp_path / "_no_builtins",
+        )
 
         runner = CliRunner()
         result = runner.invoke(app, ["list"])

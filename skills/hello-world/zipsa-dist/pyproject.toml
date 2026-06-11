@@ -1,0 +1,13 @@
+[project]
+name = "hello-world"
+version = "0.3.0"
+description = "Smoke-test skill — reports runtime and confirms the box is up"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.zipsa]
+description = "Smoke-test skill — reports runtime and confirms the box is up"
+
+[tool.zipsa.limits]
+max_cost_usd = 0.01
+timeout_seconds = 30
