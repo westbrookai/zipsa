@@ -14,15 +14,19 @@ See `~/.claude/plans/crystalline-cooking-kahan.md` for Phase 0 design.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+
+from unittest.mock import patch
 
 from zipsa.core.phase_discovery import PHASE_EXTENSIONS
 from zipsa.exec_runner import (
     RUNNERS,
     ExecResult,
     ExecRunnerError,
+    _build_docker_argv,
     run_phase,
 )
 
@@ -273,6 +277,199 @@ class TestMetadata:
         result = run_phase(phase, skill_name="x")
 
         assert result.duration_ms >= 0
+
+
+class TestCtxOutDir:
+    """ctx always carries out_dir; phases write artifacts there."""
+
+    def test_local_mode_out_dir_is_host_path(self, tmp_path):
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "print(json.dumps({'out': ctx['out_dir']}))\n"
+            ),
+        )
+        out = tmp_path / "my-out"
+        out.mkdir()
+
+        result = run_phase(phase, skill_name="x", out_dir=out)
+
+        assert result.result == {"out": str(out)}
+        assert result.mode == "local"
+        assert result.out_dir == str(out)
+
+    def test_artifact_written_to_out_dir(self, tmp_path):
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "pathlib.Path(ctx['out_dir'], 'artifact.txt').write_text('hello')\n"
+                "print(json.dumps({'wrote': True}))\n"
+            ),
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+
+        result = run_phase(phase, skill_name="x", out_dir=out)
+
+        assert result.exit_code == 0
+        assert (out / "artifact.txt").read_text() == "hello"
+
+    def test_out_dir_defaults_to_temp(self, tmp_path):
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({}))\n"
+            ),
+        )
+
+        result = run_phase(phase, skill_name="x")
+
+        assert result.out_dir
+        assert Path(result.out_dir).is_dir()
+
+
+class TestBuildDockerArgv:
+    """Pure docker-argv builder — no Docker needed."""
+
+    def test_full_command_shape(self, tmp_path):
+        skill = tmp_path / "hello-world"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.report.py"
+        phase.touch()
+        out = tmp_path / "out"
+
+        argv = _build_docker_argv(
+            phase, skill_root=skill, out_dir=out, image="zipsa-runtime:test",
+        )
+
+        assert argv[0:2] == ["docker", "run"]
+        assert "--rm" in argv
+        assert "-i" in argv
+        assert "-t" not in argv
+        assert f"{skill.resolve()}:/skill:ro" in argv
+        assert f"{out}:/out" in argv
+        assert "zipsa-runtime:test" in argv
+        # Runner command + container-side phase path at the end
+        assert argv[-2:] == ["python", "/skill/zipsa-dist/1.report.py"]
+        # Container name carries the skill name for debuggability
+        name_idx = argv.index("--name")
+        assert argv[name_idx + 1].startswith("zipsa-exec-hello-world-")
+
+    def test_ts_phase_runner_command(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "2.fetch.ts"
+        phase.touch()
+
+        argv = _build_docker_argv(
+            phase, skill_root=skill, out_dir=tmp_path / "o", image="img",
+        )
+
+        assert argv[-3:] == ["npx", "tsx", "/skill/zipsa-dist/2.fetch.ts"]
+
+
+class TestDockerMode:
+    """run_phase with docker_image set — subprocess mocked."""
+
+    def _phase(self, tmp_path):
+        skill = tmp_path / "myskill"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.write_text("# placeholder, never actually run\n")
+        return skill, phase
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_docker_argv_and_result(self, mock_run, tmp_path):
+        skill, phase = self._phase(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"ok": true}\n'
+        mock_run.return_value.stderr = ""
+
+        result = run_phase(
+            phase,
+            skill_name="myskill",
+            skill_root=skill,
+            out_dir=out,
+            docker_image="zipsa-runtime:test",
+        )
+
+        argv = mock_run.call_args.args[0]
+        assert argv[0] == "docker"
+        assert "zipsa-runtime:test" in argv
+        assert result.mode == "docker"
+        assert result.result == {"ok": True}
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_ctx_out_dir_is_container_path(self, mock_run, tmp_path):
+        skill, phase = self._phase(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="myskill",
+            skill_root=skill,
+            out_dir=out,
+            docker_image="img",
+        )
+
+        stdin_payload = json.loads(mock_run.call_args.kwargs["input"])
+        assert stdin_payload["ctx"]["out_dir"] == "/out"
+
+    @patch("zipsa.exec_runner.subprocess.run", side_effect=FileNotFoundError)
+    def test_docker_binary_missing(self, mock_run, tmp_path):
+        skill, phase = self._phase(tmp_path)
+
+        with pytest.raises(ExecRunnerError, match="--local"):
+            run_phase(
+                phase,
+                skill_name="myskill",
+                skill_root=skill,
+                out_dir=tmp_path,
+                docker_image="img",
+            )
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_default_out_dir_under_zipsa_home(self, mock_run, tmp_path):
+        """Docker mode's default out dir must live under ~/.zipsa.
+
+        The system temp dir (/var/folders on macOS) is typically NOT in
+        Docker Desktop's file-sharing list, so a temp out dir mounts
+        empty inside the container and artifacts are silently lost.
+        ~/.zipsa sits under /Users, which IS shared.
+        """
+        from zipsa.paths import zipsa_home
+
+        skill, phase = self._phase(tmp_path)
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        result = run_phase(
+            phase,
+            skill_name="myskill",
+            skill_root=skill,
+            docker_image="img",
+        )
+
+        assert result.out_dir.startswith(str(zipsa_home()))
 
 
 class TestRunnersTable:

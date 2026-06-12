@@ -475,12 +475,24 @@ def exec_skill(
         Optional[str],
         typer.Argument(help="User input/query for the skill"),
     ] = None,
+    local: Annotated[
+        bool,
+        typer.Option("--local", help="Run on the host instead of the runtime container (faster, less isolated)"),
+    ] = False,
+    image: Annotated[
+        str,
+        typer.Option("--image", "-i", help="Runtime image for docker mode"),
+    ] = _DEFAULT_IMAGE,
+    out: Annotated[
+        Optional[Path],
+        typer.Option("--out", help="Host directory for phase artifacts (mounted at /out; default: temp dir)"),
+    ] = None,
 ):
     """Run a single-phase skill deterministically (Phase 0).
 
-    No Docker, no LLM, no manifest — the phase file in zipsa-dist/ is
-    executed as a subprocess (language picked by extension) and its
-    result printed as JSON.
+    The phase file in zipsa-dist/ runs inside the zipsa runtime
+    container by default (skill mounted read-only, artifacts via /out).
+    No LLM, no manifest. Result prints as JSON.
     """
     from .core.phase_discovery import PhaseDiscoveryError, discover_phases
     from .exec_runner import ExecRunnerError, run_phase
@@ -503,12 +515,18 @@ def exec_skill(
         )
         raise typer.Exit(1)
 
-    skill_name = path.resolve().name
+    skill_root = path.resolve()
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+
     try:
         outcome = run_phase(
             phases[0].path,
-            skill_name=skill_name,
+            skill_name=skill_root.name,
             user_query=user_query or "",
+            out_dir=out,
+            skill_root=skill_root,
+            docker_image=None if local else image,
         )
     except ExecRunnerError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -519,14 +537,29 @@ def exec_skill(
             f"Phase failed (exit {outcome.exit_code}):\n{outcome.stderr}",
             err=True,
         )
+        if (
+            outcome.mode == "docker"
+            and "/skill" in outcome.stderr
+            and "No such file" in outcome.stderr
+        ):
+            typer.echo(
+                "Hint: the skill path may be outside Docker Desktop's "
+                "file sharing list (Settings → Resources → File Sharing) "
+                "— such mounts come up empty inside the container. "
+                "Move the skill under a shared path (e.g. /Users) or "
+                "run with --local.",
+                err=True,
+            )
         raise typer.Exit(outcome.exit_code)
 
     typer.echo(json.dumps(
         {
             "skill_name": outcome.skill_name,
+            "mode": outcome.mode,
             "result": outcome.result,
             "exit_code": outcome.exit_code,
             "duration_ms": outcome.duration_ms,
+            "out_dir": outcome.out_dir,
         },
         ensure_ascii=False,
         indent=2,
