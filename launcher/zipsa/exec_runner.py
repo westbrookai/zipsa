@@ -176,6 +176,22 @@ def _ensure_image(image: str) -> None:
         )
 
 
+def _host_timezone() -> str | None:
+    """Return the host's IANA timezone name (e.g. Australia/Sydney),
+    or None when it can't be determined.
+
+    Read from the /etc/localtime symlink — present on macOS and most
+    Linux distros, and the zoneinfo name is the path suffix.
+    """
+    try:
+        target = os.readlink("/etc/localtime")
+    except OSError:
+        return None
+    if "zoneinfo/" not in target:
+        return None
+    return target.split("zoneinfo/", 1)[1]
+
+
 def _build_docker_argv(
     phase_path: Path,
     *,
@@ -184,7 +200,7 @@ def _build_docker_argv(
     image: str,
     command: list[str] | None = None,
     env_file: Path | None = None,
-    extra_mounts: list[Path] | None = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
 ) -> list[str]:
     """Build the minimal `docker run` command for one phase.
 
@@ -196,9 +212,14 @@ def _build_docker_argv(
     file argument). `env_file` adds --env-file — only LLM phases get
     it (Claude auth); code phases stay secret-free.
 
-    `extra_mounts` are host paths mounted read-only at the SAME
-    absolute path inside the container — for tools that embed host
-    paths in their data (e.g. agenthud resolving session cwd → .git).
+    `extra_mounts` are (host_path, container_path) pairs mounted
+    read-only — usually the same path on both sides so tools that
+    embed host paths in their data keep working (agenthud resolving
+    session cwd → .git); a different container path covers cases like
+    session logs that must land at the container user's home.
+
+    The host's timezone is injected as TZ so date arithmetic inside
+    the container ("yesterday") means the user's yesterday, not UTC's.
     """
     if command is None:
         command = [
@@ -211,14 +232,17 @@ def _build_docker_argv(
         "-i",
         "--name", f"zipsa-exec-{skill_root.name}-{os.getpid()}",
     ]
+    tz = _host_timezone()
+    if tz is not None:
+        argv += ["-e", f"TZ={tz}"]
     if env_file is not None:
         argv += ["--env-file", str(env_file)]
     argv += [
         "-v", f"{skill_root.resolve()}:{_CONTAINER_SKILL_DIR}:ro",
         "-v", f"{out_dir}:{_CONTAINER_OUT_DIR}",
     ]
-    for mount in extra_mounts or []:
-        argv += ["-v", f"{mount}:{mount}:ro"]
+    for host_path, container_path in extra_mounts or []:
+        argv += ["-v", f"{host_path}:{container_path}:ro"]
     argv += [
         image,
         *command,
@@ -235,7 +259,7 @@ def run_phase(
     skill_root: Path | None = None,
     docker_image: str | None = None,
     prev: dict | None = None,
-    extra_mounts: list[Path] | None = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
     timeout_seconds: int = 600,
 ) -> ExecResult:
     """Execute one phase file and return its outcome.
@@ -281,10 +305,10 @@ def run_phase(
     if docker_image is not None:
         if skill_root is None:
             raise ExecRunnerError("skill_root is required for docker mode")
-        for mount in extra_mounts or []:
-            if not mount.exists():
+        for host_path, _container_path in extra_mounts or []:
+            if not host_path.exists():
                 raise ExecRunnerError(
-                    f"mount path does not exist: {mount}"
+                    f"mount path does not exist: {host_path}"
                 )
         _ensure_image(docker_image)
         mode = "docker"
@@ -376,7 +400,7 @@ def run_phases(
     out_dir: Path | None = None,
     skill_root: Path | None = None,
     docker_image: str | None = None,
-    extra_mounts: list[Path] | None = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
     timeout_seconds: int = 600,
 ) -> list[ExecResult]:
     """Run a skill's phases sequentially, chaining each result into the

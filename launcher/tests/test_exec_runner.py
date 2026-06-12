@@ -769,7 +769,9 @@ class TestRunPhases:
 class TestExtraMounts:
     """--mount: host paths mounted ro at the same absolute container
     path (so tools that embed host paths, e.g. agenthud --with-git
-    resolving session cwd → .git, keep working)."""
+    resolving session cwd → .git, keep working). A `host:container`
+    form overrides the container path (e.g. session logs must land at
+    the container user's home, not the host's)."""
 
     def test_docker_argv_includes_extra_mounts(self, tmp_path):
         skill = tmp_path / "s"
@@ -787,11 +789,70 @@ class TestExtraMounts:
             skill_root=skill,
             out_dir=tmp_path / "o",
             image="img",
-            extra_mounts=[mount_a, mount_b],
+            extra_mounts=[(mount_a, str(mount_a)), (mount_b, str(mount_b))],
         )
 
         assert f"{mount_a}:{mount_a}:ro" in argv
         assert f"{mount_b}:{mount_b}:ro" in argv
+
+    def test_mount_with_container_path_override(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+        host = tmp_path / "claude-projects"
+        host.mkdir()
+
+        argv = _build_docker_argv(
+            phase,
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            image="img",
+            extra_mounts=[(host, "/home/agent/.claude/projects")],
+        )
+
+        assert f"{host}:/home/agent/.claude/projects:ro" in argv
+
+    def test_docker_argv_injects_host_timezone(self, tmp_path):
+        """Container clock semantics must match the host — 'yesterday'
+        means the USER's yesterday, not UTC's."""
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+
+        with patch(
+            "zipsa.exec_runner._host_timezone",
+            return_value="Australia/Sydney",
+        ):
+            argv = _build_docker_argv(
+                phase,
+                skill_root=skill,
+                out_dir=tmp_path / "o",
+                image="img",
+            )
+
+        tz_idx = argv.index("-e")
+        assert argv[tz_idx + 1] == "TZ=Australia/Sydney"
+
+    def test_docker_argv_no_tz_flag_when_undetectable(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+
+        with patch("zipsa.exec_runner._host_timezone", return_value=None):
+            argv = _build_docker_argv(
+                phase,
+                skill_root=skill,
+                out_dir=tmp_path / "o",
+                image="img",
+            )
+
+        assert "-e" not in argv
 
     @patch("zipsa.exec_runner.subprocess.run")
     def test_run_phase_passes_mounts(self, mock_run, tmp_path):
@@ -812,7 +873,7 @@ class TestExtraMounts:
             skill_root=skill,
             out_dir=tmp_path / "o",
             docker_image="img",
-            extra_mounts=[mount],
+            extra_mounts=[(mount, str(mount))],
         )
 
         run_call = next(
@@ -835,7 +896,7 @@ class TestExtraMounts:
                 skill_root=skill,
                 out_dir=tmp_path / "o",
                 docker_image="img",
-                extra_mounts=[tmp_path / "nope"],
+                extra_mounts=[(tmp_path / "nope", str(tmp_path / "nope"))],
             )
 
     def test_local_mode_ignores_mounts(self, tmp_path):
@@ -850,10 +911,12 @@ class TestExtraMounts:
             ),
         )
 
+        missing = tmp_path / "does-not-exist"
+
         result = run_phase(
             phase,
             skill_name="s",
-            extra_mounts=[tmp_path / "does-not-exist"],
+            extra_mounts=[(missing, str(missing))],
         )
 
         assert result.exit_code == 0

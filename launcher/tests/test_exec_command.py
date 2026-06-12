@@ -170,6 +170,29 @@ class TestExecDockerDefault:
         assert f"{m2}:{m2}:ro" in argv
 
     @patch("zipsa.exec_runner.subprocess.run")
+    def test_mount_colon_form_overrides_container_path(self, mock_run, tmp_path):
+        """--mount host:container puts the host dir at a different
+        container path (session logs at the container user's home)."""
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+        host = tmp_path / "claude-projects"
+        host.mkdir()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        result = runner.invoke(app, [
+            "exec", str(skill),
+            "--mount", f"{host}:/home/agent/.claude/projects",
+        ])
+
+        assert result.exit_code == 0, result.output
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        assert f"{host}:/home/agent/.claude/projects:ro" in run_call.args[0]
+
+    @patch("zipsa.exec_runner.subprocess.run")
     def test_mount_missing_path_errors(self, mock_run, tmp_path):
         skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
 
