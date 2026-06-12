@@ -27,6 +27,7 @@ from zipsa.exec_runner import (
     ExecResult,
     ExecRunnerError,
     _build_docker_argv,
+    _build_llm_prompt,
     run_phase,
     run_phases,
 )
@@ -249,12 +250,29 @@ class TestFailureModes:
         with pytest.raises(ExecRunnerError, match="no runner"):
             run_phase(phase, skill_name="x")
 
-    def test_md_extension_explicitly_refused(self, tmp_path):
-        """LLM phases get a different error message than 'unknown'."""
-        phase = _write(tmp_path, "1.do.md", "# llm\n")
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_md_phase_runs_claude(self, mock_run, tmp_path):
+        """`.md` is an LLM phase — runner assembles a prompt and runs
+        `claude -p` (local mode here), parsing the same last-JSON-line
+        contract from its reply."""
+        phase = _write(tmp_path, "1.greet.md", "# greet\n\nSay hello.\n")
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = (
+            "Hello there!\n"
+            '{"greeting": "Hello there!", "model": "claude"}\n'
+        )
+        mock_run.return_value.stderr = ""
 
-        with pytest.raises(ExecRunnerError, match="LLM"):
-            run_phase(phase, skill_name="x")
+        result = run_phase(phase, skill_name="x", user_query="hi")
+
+        argv = mock_run.call_args.args[0]
+        assert argv[0] == "claude"
+        assert "-p" in argv
+        # Prompt delivered via stdin, contains the md body + the input
+        prompt = mock_run.call_args.kwargs["input"]
+        assert "Say hello." in prompt
+        assert '"user_query": "hi"' in prompt
+        assert result.result == {"greeting": "Hello there!", "model": "claude"}
 
     def test_missing_phase_file_raises(self, tmp_path):
         phase = tmp_path / "1.gone.py"
@@ -716,25 +734,151 @@ class TestRunPhases:
         # Pre-flight: phase 1 must NOT have run
         assert not (out / "ran1").exists()
 
-    def test_md_phase_rejected_before_any_run(self, tmp_path):
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_md_phase_allowed_in_chain(self, mock_run, tmp_path):
+        """Hybrid skill: .py then .md — the LLM phase receives the
+        Python phase's result as prev inside its prompt."""
         skill, phases = _skill(tmp_path, {
-            "1.mark.py": (
-                "import json, sys, pathlib\n"
-                "ctx = json.loads(sys.stdin.read())['ctx']\n"
-                "pathlib.Path(ctx['out_dir'], 'ran1').touch()\n"
-                "print(json.dumps({}))\n"
-            ),
-            "2.think.md": "# llm phase\n",
+            "1.report.py": "unused — subprocess mocked\n",
+            "2.greet.md": "# greet\nGreet based on the env report.\n",
         })
-        out = tmp_path / "out"
-        out.mkdir()
 
-        with pytest.raises(ExecRunnerError, match="LLM"):
-            run_phases(
-                phases, skill_name="s", skill_root=skill, out_dir=out,
-            )
+        def fake_run(argv, **kwargs):
+            result = type("R", (), {})()
+            result.returncode = 0
+            result.stderr = ""
+            if argv[0] == "claude":
+                result.stdout = '{"greeting": "hi"}\n'
+            else:  # python phase
+                result.stdout = '{"python_version": "3.12"}\n'
+            return result
 
-        assert not (out / "ran1").exists()
+        mock_run.side_effect = fake_run
+
+        results = run_phases(phases, skill_name="s", skill_root=skill)
+
+        assert len(results) == 2
+        assert results[1].result == {"greeting": "hi"}
+        # The LLM prompt embedded phase 1's result as prev
+        claude_call = next(
+            c for c in mock_run.call_args_list if c.args[0][0] == "claude"
+        )
+        assert '"python_version": "3.12"' in claude_call.kwargs["input"]
+
+
+class TestLlmPhase:
+    """LLM (.md) phase specifics: prompt assembly + auth injection."""
+
+    def test_prompt_contains_md_ctx_prev_and_rule(self):
+        prompt = _build_llm_prompt(
+            "# greet\nSay hello warmly.\n",
+            ctx={"skill_name": "s", "user_query": "hi", "out_dir": "/out"},
+            prev={"python_version": "3.12"},
+        )
+
+        assert "Say hello warmly." in prompt
+        assert '"user_query": "hi"' in prompt
+        assert '"python_version": "3.12"' in prompt
+        # The output contract must be spelled out for the model
+        assert "last line" in prompt.lower()
+        assert "json" in prompt.lower()
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_docker_md_phase_injects_global_env_file(self, mock_run, tmp_path):
+        """Claude auth (CLAUDE_CODE_OAUTH_TOKEN) reaches the container
+        via --env-file ~/.zipsa/.env — for .md phases only."""
+        from zipsa.paths import global_env_file
+
+        env_file = global_env_file()
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=tok\n")
+
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.greet.md"
+        phase.write_text("# greet\n")
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "out",
+            docker_image="img",
+        )
+
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        argv = run_call.args[0]
+        env_idx = argv.index("--env-file")
+        assert argv[env_idx + 1] == str(env_file)
+        assert "claude" in argv
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_docker_md_phase_no_env_file_when_absent(self, mock_run, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.greet.md"
+        phase.write_text("# greet\n")
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "out",
+            docker_image="img",
+        )
+
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        assert "--env-file" not in run_call.args[0]
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_code_phase_never_gets_env_file(self, mock_run, tmp_path):
+        """Isolation: code phases stay secret-free even when the
+        global env file exists."""
+        from zipsa.paths import global_env_file
+
+        env_file = global_env_file()
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=tok\n")
+
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.write_text("# mocked\n")
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "out",
+            docker_image="img",
+        )
+
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        assert "--env-file" not in run_call.args[0]
 
 
 class TestRunnersTable:
