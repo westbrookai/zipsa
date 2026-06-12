@@ -465,6 +465,74 @@ def run(
         raise typer.Exit(1)
 
 
+@app.command(name="exec")
+def exec_skill(
+    path: Annotated[
+        Path,
+        typer.Argument(help="Path to a skill directory (containing zipsa-dist/)"),
+    ],
+    user_query: Annotated[
+        Optional[str],
+        typer.Argument(help="User input/query for the skill"),
+    ] = None,
+):
+    """Run a single-phase skill deterministically (Phase 0).
+
+    No Docker, no LLM, no manifest — the phase file in zipsa-dist/ is
+    executed as a subprocess (language picked by extension) and its
+    result printed as JSON.
+    """
+    from .core.phase_discovery import PhaseDiscoveryError, discover_phases
+    from .exec_runner import ExecRunnerError, run_phase
+
+    if not path.is_dir():
+        typer.echo(f"Error: skill directory not found: {path}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        phases = discover_phases(path)
+    except PhaseDiscoveryError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if len(phases) != 1:
+        typer.echo(
+            f"Error: exec requires exactly one phase, found {len(phases)}: "
+            f"{', '.join(p.path.name for p in phases)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    skill_name = path.resolve().name
+    try:
+        outcome = run_phase(
+            phases[0].path,
+            skill_name=skill_name,
+            user_query=user_query or "",
+        )
+    except ExecRunnerError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if outcome.exit_code != 0:
+        typer.echo(
+            f"Phase failed (exit {outcome.exit_code}):\n{outcome.stderr}",
+            err=True,
+        )
+        raise typer.Exit(outcome.exit_code)
+
+    typer.echo(json.dumps(
+        {
+            "skill_name": outcome.skill_name,
+            "result": outcome.result,
+            "exit_code": outcome.exit_code,
+            "duration_ms": outcome.duration_ms,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
 @app.command()
 def view(
     name: Annotated[
@@ -1084,7 +1152,7 @@ def connect(
 #
 # Keep in sync with @app.command(name=...) decorators above.
 _KNOWN_COMMANDS = frozenset({
-    "run", "view", "validate", "list", "where", "discover",
+    "run", "exec", "view", "validate", "list", "where", "discover",
     "configure", "runtimes", "install", "uninstall", "connect",
 })
 

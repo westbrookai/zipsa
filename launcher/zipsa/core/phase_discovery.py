@@ -27,11 +27,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Recognized phase file extensions. Adding a new language = adding here
+# and adding a matching row to `exec_runner.RUNNERS`. Keeping the list
+# in one place keeps the regex and the dispatch table in sync.
+PHASE_EXTENSIONS: tuple[str, ...] = ("py", "md", "sh", "js", "ts", "go")
+
 # <dotted-int>.<kebab-slug>.<ext>. Slug must start with a letter; allows
 # lowercase letters, digits, and hyphens after that. The dotted-int part
 # requires at least one segment, optional additional `.<int>` segments.
 _PHASE_FILENAME = re.compile(
-    r"^(?P<id>\d+(?:\.\d+)*)\.(?P<slug>[a-z][a-z0-9-]*)\.(?P<ext>py|md)$"
+    r"^(?P<id>\d+(?:\.\d+)*)"
+    r"\.(?P<slug>[a-z][a-z0-9-]*)"
+    rf"\.(?P<ext>{'|'.join(PHASE_EXTENSIONS)})$"
 )
 
 
