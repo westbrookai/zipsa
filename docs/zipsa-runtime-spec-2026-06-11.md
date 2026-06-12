@@ -1,5 +1,11 @@
 # Zipsa Runtime Spec — Hybrid Phase Runtime (2026-06-11)
 
+> ⚠️ **SUPERSEDED (2026-06-12).** This design (pyproject.toml metadata,
+> 17-PR plan, envelope contract, zipsa.hitl) was replaced by the
+> Phase 0 reset. The live contract is `skills/AUTHORING.md`; the
+> implementation is `zipsa exec` (PRs #109/#110/#111). Kept as design
+> history only — R1 (phase discovery) is the one part that shipped.
+>
 > Companion to `docs/zipsa-architecture-2026-06-11.md` (high-level
 > architecture) and `skills/AUTHORING.md` (author guide).
 >

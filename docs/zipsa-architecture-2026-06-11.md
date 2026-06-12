@@ -1,5 +1,10 @@
 # Zipsa Architecture — Hybrid Phases (2026-06-11)
 
+> ⚠️ **SUPERSEDED (2026-06-12).** 이 문서의 설계 (pyproject.toml 메타,
+> envelope contract, zipsa.hitl, Python-중심 phase) 는 Phase 0 reset 으로
+> 대체됨. 현행 contract 는 [skills/AUTHORING.md](../skills/AUTHORING.md),
+> 구현은 PR #109/#110/#111 (zipsa exec). 이 문서는 설계 이력으로만 보존.
+
 > 2026-05-15 [rethink doc](./zipsa-rethink-2026-05-15.md) 후속.
 > Rethink 는 *방향* 만 가리켰고 (B' = "Python authoring, Python runtime"), 이
 > 문서는 user 와의 대화에서 정제된 *형태* — **Hybrid Phases** — 를 spec

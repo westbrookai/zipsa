@@ -32,7 +32,8 @@ docker-compose.override.yml
 # IDE
 .vscode/
 .idea/
-.claude/
+.claude/*
+!.claude/skills/
 *.swp
 *.swo
 *~
