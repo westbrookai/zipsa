@@ -146,12 +146,23 @@ class TestExecDockerDefault:
         """Skill path outside Docker Desktop's file-sharing list mounts
         empty — the resulting 'No such file' error gets a hint."""
         skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
-        mock_run.return_value.returncode = 2
-        mock_run.return_value.stdout = ""
-        mock_run.return_value.stderr = (
-            "python: can't open file '/skill/zipsa-dist/1.report.py': "
-            "[Errno 2] No such file or directory\n"
-        )
+
+        def fake_run(argv, **kwargs):
+            result = type("R", (), {})()
+            if argv[:3] == ["docker", "image", "inspect"]:
+                result.returncode = 0
+                result.stdout = "[]"
+                result.stderr = ""
+            else:  # docker run — phase file invisible in the container
+                result.returncode = 2
+                result.stdout = ""
+                result.stderr = (
+                    "python: can't open file '/skill/zipsa-dist/1.report.py': "
+                    "[Errno 2] No such file or directory\n"
+                )
+            return result
+
+        mock_run.side_effect = fake_run
 
         result = runner.invoke(app, ["exec", str(skill)])
 

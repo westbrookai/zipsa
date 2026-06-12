@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -107,6 +108,47 @@ def _runner_for(phase_path: Path) -> list[str]:
             f"(supported: {', '.join('.' + e for e in sorted(RUNNERS))})"
         )
     return RUNNERS[ext]
+
+
+def _ensure_image(image: str) -> None:
+    """Pull the image up-front if it isn't local.
+
+    `docker run` would pull implicitly, but its progress would be
+    swallowed by our capture_output and the user would stare at
+    silence for minutes. An explicit pull inherits the terminal's
+    stderr so progress is visible.
+    """
+    try:
+        inspect = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise ExecRunnerError(
+            "docker not found — is Docker installed and running? "
+            "(or use --local)"
+        ) from e
+
+    if inspect.returncode == 0:
+        return
+
+    if "Cannot connect to the Docker daemon" in inspect.stderr:
+        raise ExecRunnerError(
+            "Docker daemon is not running — start Docker Desktop "
+            "(or use --local)"
+        )
+
+    print(
+        f"Pulling {image} (not found locally — this can take a few "
+        "minutes)...",
+        file=sys.stderr,
+    )
+    pull = subprocess.run(["docker", "pull", image])
+    if pull.returncode != 0:
+        raise ExecRunnerError(
+            f"docker pull {image} failed (exit {pull.returncode})"
+        )
 
 
 def _build_docker_argv(
@@ -183,6 +225,7 @@ def run_phase(
     if docker_image is not None:
         if skill_root is None:
             raise ExecRunnerError("skill_root is required for docker mode")
+        _ensure_image(docker_image)
         mode = "docker"
         argv = _build_docker_argv(
             phase_path,

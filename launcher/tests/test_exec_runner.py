@@ -447,6 +447,125 @@ class TestDockerMode:
             )
 
     @patch("zipsa.exec_runner.subprocess.run")
+    def test_image_present_no_pull(self, mock_run, tmp_path):
+        """When `docker image inspect` succeeds, no pull happens."""
+        skill, phase = self._phase(tmp_path)
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="myskill",
+            skill_root=skill,
+            out_dir=tmp_path,
+            docker_image="img",
+        )
+
+        invoked = [c.args[0] for c in mock_run.call_args_list]
+        assert ["docker", "image", "inspect", "img"] in invoked
+        assert not any(argv[:2] == ["docker", "pull"] for argv in invoked)
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_missing_image_pulled_with_stderr_notice(
+        self, mock_run, tmp_path, capsys
+    ):
+        """Missing image → notice on stderr + `docker pull` (stdio
+        inherited so progress is visible), then the actual run."""
+        skill, phase = self._phase(tmp_path)
+
+        def fake_run(argv, **kwargs):
+            result = type("R", (), {})()
+            if argv[:3] == ["docker", "image", "inspect"]:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "No such image"
+            elif argv[:2] == ["docker", "pull"]:
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+            else:  # docker run
+                result.returncode = 0
+                result.stdout = "{}\n"
+                result.stderr = ""
+            return result
+
+        mock_run.side_effect = fake_run
+
+        result = run_phase(
+            phase,
+            skill_name="myskill",
+            skill_root=skill,
+            out_dir=tmp_path,
+            docker_image="some-image:1.0",
+        )
+
+        assert result.exit_code == 0
+        invoked = [c.args[0] for c in mock_run.call_args_list]
+        assert ["docker", "pull", "some-image:1.0"] in invoked
+        # Pull must NOT capture output — progress goes to the terminal
+        pull_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "pull"]
+        )
+        assert not pull_call.kwargs.get("capture_output")
+        assert "some-image:1.0" in capsys.readouterr().err
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_pull_failure_raises(self, mock_run, tmp_path):
+        skill, phase = self._phase(tmp_path)
+
+        def fake_run(argv, **kwargs):
+            result = type("R", (), {})()
+            result.stdout = ""
+            result.stderr = ""
+            if argv[:3] == ["docker", "image", "inspect"]:
+                result.returncode = 1
+            elif argv[:2] == ["docker", "pull"]:
+                result.returncode = 1
+            else:
+                result.returncode = 0
+            return result
+
+        mock_run.side_effect = fake_run
+
+        with pytest.raises(ExecRunnerError, match="pull"):
+            run_phase(
+                phase,
+                skill_name="myskill",
+                skill_root=skill,
+                out_dir=tmp_path,
+                docker_image="img",
+            )
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_daemon_down_clear_message(self, mock_run, tmp_path):
+        """docker binary present but daemon not running → clear error,
+        not a confusing pull failure."""
+        skill, phase = self._phase(tmp_path)
+
+        def fake_run(argv, **kwargs):
+            result = type("R", (), {})()
+            result.returncode = 1
+            result.stdout = ""
+            result.stderr = (
+                "Cannot connect to the Docker daemon at "
+                "unix:///var/run/docker.sock. Is the docker daemon running?"
+            )
+            return result
+
+        mock_run.side_effect = fake_run
+
+        with pytest.raises(ExecRunnerError, match="daemon"):
+            run_phase(
+                phase,
+                skill_name="myskill",
+                skill_root=skill,
+                out_dir=tmp_path,
+                docker_image="img",
+            )
+
+    @patch("zipsa.exec_runner.subprocess.run")
     def test_default_out_dir_under_zipsa_home(self, mock_run, tmp_path):
         """Docker mode's default out dir must live under ~/.zipsa.
 
