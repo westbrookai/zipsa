@@ -23,9 +23,11 @@ Design decisions:
   no env-file).
 
 Gotchas:
-- `.md` files are LLM phases — refused here with a distinct error so
-  callers can explain "exec doesn't run LLM phases" rather than
-  "unknown extension".
+- `.md` files are LLM phases: the runner reads the file host-side,
+  assembles a prompt (md + ctx/prev + output contract), and pipes it
+  to `claude -p` — the file is never executed in the container. Only
+  LLM phase containers get --env-file (Claude auth); code phases stay
+  secret-free.
 - The runtime image runs as user `agent` (uid 1000). On Linux hosts a
   mounted /out owned by another uid may not be writable; macOS Docker
   Desktop handles this transparently (primary dev platform).
@@ -97,17 +99,40 @@ def _parse_result(stdout: str) -> dict | None:
 
 def _runner_for(phase_path: Path) -> list[str]:
     ext = phase_path.suffix.lstrip(".")
-    if ext == "md":
-        raise ExecRunnerError(
-            f"{phase_path.name}: LLM phases (.md) are not supported by "
-            "deterministic exec — code phases only"
-        )
     if ext not in RUNNERS:
         raise ExecRunnerError(
             f"{phase_path.name}: no runner for .{ext} "
-            f"(supported: {', '.join('.' + e for e in sorted(RUNNERS))})"
+            f"(supported: .md, {', '.join('.' + e for e in sorted(RUNNERS))})"
         )
     return RUNNERS[ext]
+
+
+# claude CLI invocation for .md (LLM) phases. --max-turns 1 because
+# LLM phases are pure reasoning — no tools, no loop.
+_LLM_COMMAND = ["claude", "-p", "--max-turns", "1"]
+
+
+def _build_llm_prompt(md_text: str, *, ctx: dict, prev: dict) -> str:
+    """Assemble the prompt for an LLM phase.
+
+    The .md file is the phase author's instruction; the runner appends
+    the input payload and the output contract (same last-JSON-object
+    rule the code phases follow) so the model's reply parses like any
+    other phase's stdout.
+    """
+    payload = json.dumps({"ctx": ctx, "prev": prev}, ensure_ascii=False)
+    return (
+        f"{md_text}\n"
+        "---\n"
+        "Input (ctx = run context, prev = previous phase's result):\n"
+        f"{payload}\n"
+        "---\n"
+        "Rules:\n"
+        "- You have no tools. Reason from the input only.\n"
+        "- The last line of your reply MUST be a single-line JSON "
+        "object — it is parsed as this phase's result.\n"
+        "- Any lines before it are treated as logs.\n"
+    )
 
 
 def _ensure_image(image: str) -> None:
@@ -157,26 +182,39 @@ def _build_docker_argv(
     skill_root: Path,
     out_dir: Path,
     image: str,
+    command: list[str] | None = None,
+    env_file: Path | None = None,
 ) -> list[str]:
     """Build the minimal `docker run` command for one phase.
 
-    Pure function — unit-testable without Docker. `-i` pipes the ctx
-    JSON through stdin; no `-t` (stdout must stay clean for parsing).
+    Pure function — unit-testable without Docker. `-i` pipes the stdin
+    payload through; no `-t` (stdout must stay clean for parsing).
+
+    `command` overrides the default <runner> <phase-file> invocation
+    (used by LLM phases, whose prompt arrives via stdin instead of a
+    file argument). `env_file` adds --env-file — only LLM phases get
+    it (Claude auth); code phases stay secret-free.
     """
-    container_phase = (
-        f"{_CONTAINER_SKILL_DIR}/zipsa-dist/{phase_path.name}"
-    )
-    return [
+    if command is None:
+        command = [
+            *_runner_for(phase_path),
+            f"{_CONTAINER_SKILL_DIR}/zipsa-dist/{phase_path.name}",
+        ]
+    argv = [
         "docker", "run",
         "--rm",
         "-i",
         "--name", f"zipsa-exec-{skill_root.name}-{os.getpid()}",
+    ]
+    if env_file is not None:
+        argv += ["--env-file", str(env_file)]
+    argv += [
         "-v", f"{skill_root.resolve()}:{_CONTAINER_SKILL_DIR}:ro",
         "-v", f"{out_dir}:{_CONTAINER_OUT_DIR}",
         image,
-        *_runner_for(phase_path),
-        container_phase,
+        *command,
     ]
+    return argv
 
 
 def run_phase(
@@ -225,31 +263,55 @@ def run_phase(
         else:
             out_dir = Path(tempfile.mkdtemp(prefix=f"zipsa-exec-{skill_name}-"))
 
+    is_llm = phase_path.suffix == ".md"
+
     if docker_image is not None:
         if skill_root is None:
             raise ExecRunnerError("skill_root is required for docker mode")
         _ensure_image(docker_image)
         mode = "docker"
-        argv = _build_docker_argv(
-            phase_path,
-            skill_root=skill_root,
-            out_dir=out_dir,
-            image=docker_image,
-        )
         ctx_out_dir = _CONTAINER_OUT_DIR
         cwd = None
+        if is_llm:
+            from .paths import global_env_file
+
+            env_file = global_env_file()
+            argv = _build_docker_argv(
+                phase_path,
+                skill_root=skill_root,
+                out_dir=out_dir,
+                image=docker_image,
+                command=list(_LLM_COMMAND),
+                env_file=env_file if env_file.exists() else None,
+            )
+        else:
+            argv = _build_docker_argv(
+                phase_path,
+                skill_root=skill_root,
+                out_dir=out_dir,
+                image=docker_image,
+            )
     else:
         mode = "local"
-        argv = [*_runner_for(phase_path), str(phase_path)]
         ctx_out_dir = str(out_dir)
         cwd = phase_path.parent
+        if is_llm:
+            # Host claude CLI uses the user's own login — no env wiring.
+            argv = list(_LLM_COMMAND)
+        else:
+            argv = [*_runner_for(phase_path), str(phase_path)]
 
     ctx = {
         "skill_name": skill_name,
         "user_query": user_query,
         "out_dir": ctx_out_dir,
     }
-    stdin_payload = json.dumps({"ctx": ctx, "prev": prev or {}}) + "\n"
+    if is_llm:
+        stdin_payload = _build_llm_prompt(
+            phase_path.read_text(), ctx=ctx, prev=prev or {},
+        )
+    else:
+        stdin_payload = json.dumps({"ctx": ctx, "prev": prev or {}}) + "\n"
 
     started = time.monotonic()
     try:
@@ -304,8 +366,8 @@ def run_phases(
     chain — the returned list ends with the failing phase's result.
 
     Pre-flight (before ANY phase runs): every phase must be runnable —
-    `.md` (LLM) phases and sub-phases (dotted ids like `3.1`,
-    branching) are rejected up front so a chain never dies halfway on
+    sub-phases (dotted ids like `3.1`, branching) and unknown
+    extensions are rejected up front so a chain never dies halfway on
     a known-bad phase.
     """
     for phase in phases:
@@ -314,7 +376,8 @@ def run_phases(
                 f"{phase.path.name}: branching (sub-phases) is not yet "
                 "supported — phases must have single-integer ids"
             )
-        _runner_for(phase.path)  # raises on .md / unknown ext
+        if phase.kind != "md":
+            _runner_for(phase.path)  # raises on unknown ext
 
     if out_dir is None:
         # Allocate once here so every phase shares it (run_phase would

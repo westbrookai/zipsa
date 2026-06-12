@@ -199,13 +199,21 @@ class TestExecErrors:
         assert result.exit_code == 1
         assert "branching" in result.output.lower()
 
-    def test_md_phase_rejected_with_llm_message(self, tmp_path):
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_md_phase_runs_via_claude(self, mock_run, tmp_path):
+        """Phase 2: .md phases run through claude -p."""
         skill = _make_skill(tmp_path, "llm-skill", {"1.think.md": "# think\n"})
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"thought": "done"}\n'
+        mock_run.return_value.stderr = ""
 
         result = runner.invoke(app, ["exec", str(skill), "--local"])
 
-        assert result.exit_code == 1
-        assert "LLM" in result.output
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["result"] == {"thought": "done"}
+        argv = mock_run.call_args.args[0]
+        assert argv[0] == "claude"
 
     def test_phase_failure_reported(self, tmp_path):
         skill = _make_skill(tmp_path, "boom", {
