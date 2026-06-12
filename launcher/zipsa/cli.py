@@ -465,6 +465,107 @@ def run(
         raise typer.Exit(1)
 
 
+@app.command(name="exec")
+def exec_skill(
+    path: Annotated[
+        Path,
+        typer.Argument(help="Path to a skill directory (containing zipsa-dist/)"),
+    ],
+    user_query: Annotated[
+        Optional[str],
+        typer.Argument(help="User input/query for the skill"),
+    ] = None,
+    local: Annotated[
+        bool,
+        typer.Option("--local", help="Run on the host instead of the runtime container (faster, less isolated)"),
+    ] = False,
+    image: Annotated[
+        str,
+        typer.Option("--image", "-i", help="Runtime image for docker mode"),
+    ] = _DEFAULT_IMAGE,
+    out: Annotated[
+        Optional[Path],
+        typer.Option("--out", help="Host directory for phase artifacts (mounted at /out; default: temp dir)"),
+    ] = None,
+):
+    """Run a single-phase skill deterministically (Phase 0).
+
+    The phase file in zipsa-dist/ runs inside the zipsa runtime
+    container by default (skill mounted read-only, artifacts via /out).
+    No LLM, no manifest. Result prints as JSON.
+    """
+    from .core.phase_discovery import PhaseDiscoveryError, discover_phases
+    from .exec_runner import ExecRunnerError, run_phase
+
+    if not path.is_dir():
+        typer.echo(f"Error: skill directory not found: {path}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        phases = discover_phases(path)
+    except PhaseDiscoveryError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if len(phases) != 1:
+        typer.echo(
+            f"Error: exec requires exactly one phase, found {len(phases)}: "
+            f"{', '.join(p.path.name for p in phases)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    skill_root = path.resolve()
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+
+    try:
+        outcome = run_phase(
+            phases[0].path,
+            skill_name=skill_root.name,
+            user_query=user_query or "",
+            out_dir=out,
+            skill_root=skill_root,
+            docker_image=None if local else image,
+        )
+    except ExecRunnerError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if outcome.exit_code != 0:
+        typer.echo(
+            f"Phase failed (exit {outcome.exit_code}):\n{outcome.stderr}",
+            err=True,
+        )
+        if (
+            outcome.mode == "docker"
+            and "/skill" in outcome.stderr
+            and "No such file" in outcome.stderr
+        ):
+            typer.echo(
+                "Hint: the skill path may be outside Docker Desktop's "
+                "file sharing list (Settings → Resources → File Sharing) "
+                "— such mounts come up empty inside the container. "
+                "Move the skill under a shared path (e.g. /Users) or "
+                "run with --local.",
+                err=True,
+            )
+        raise typer.Exit(outcome.exit_code)
+
+    typer.echo(json.dumps(
+        {
+            "skill_name": outcome.skill_name,
+            "mode": outcome.mode,
+            "result": outcome.result,
+            "exit_code": outcome.exit_code,
+            "duration_ms": outcome.duration_ms,
+            "out_dir": outcome.out_dir,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
 @app.command()
 def view(
     name: Annotated[
@@ -1084,7 +1185,7 @@ def connect(
 #
 # Keep in sync with @app.command(name=...) decorators above.
 _KNOWN_COMMANDS = frozenset({
-    "run", "view", "validate", "list", "where", "discover",
+    "run", "exec", "view", "validate", "list", "where", "discover",
     "configure", "runtimes", "install", "uninstall", "connect",
 })
 

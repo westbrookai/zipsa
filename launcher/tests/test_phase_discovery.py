@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from zipsa.core.phase_discovery import (
+    PHASE_EXTENSIONS,
     Phase,
     PhaseDiscoveryError,
     discover_phases,
@@ -102,6 +103,50 @@ class TestPhaseDiscoveryHappyPaths:
         phases = discover_phases(skill)
 
         assert [p.id_str for p in phases] == ["1", "2", "10"]
+
+
+class TestPhaseDiscoveryLanguages:
+    """Phase 0 supports multiple languages via file extension."""
+
+    def test_shell_phase_discovered(self, tmp_path):
+        skill = _make_skill(tmp_path, {"1.do.sh": "#!/bin/bash\necho hi\n"})
+
+        phases = discover_phases(skill)
+
+        assert len(phases) == 1
+        assert phases[0].kind == "sh"
+        assert phases[0].slug == "do"
+
+    def test_typescript_phase_discovered(self, tmp_path):
+        skill = _make_skill(tmp_path, {"1.do.ts": "console.log('hi');\n"})
+
+        phases = discover_phases(skill)
+
+        assert len(phases) == 1
+        assert phases[0].kind == "ts"
+
+    def test_javascript_phase_discovered(self, tmp_path):
+        skill = _make_skill(tmp_path, {"1.do.js": "console.log('hi');\n"})
+
+        phases = discover_phases(skill)
+
+        assert phases[0].kind == "js"
+
+    def test_go_phase_discovered(self, tmp_path):
+        skill = _make_skill(tmp_path, {"1.do.go": "package main\nfunc main(){}\n"})
+
+        phases = discover_phases(skill)
+
+        assert phases[0].kind == "go"
+
+    def test_extensions_constant_is_published(self):
+        """exec_runner uses this set; keep it in one place."""
+        assert "py" in PHASE_EXTENSIONS
+        assert "md" in PHASE_EXTENSIONS
+        assert "sh" in PHASE_EXTENSIONS
+        assert "ts" in PHASE_EXTENSIONS
+        assert "js" in PHASE_EXTENSIONS
+        assert "go" in PHASE_EXTENSIONS
 
 
 class TestPhaseDiscoveryIgnoredFiles:
