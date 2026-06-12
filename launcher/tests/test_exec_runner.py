@@ -766,6 +766,100 @@ class TestRunPhases:
         assert '"python_version": "3.12"' in claude_call.kwargs["input"]
 
 
+class TestExtraMounts:
+    """--mount: host paths mounted ro at the same absolute container
+    path (so tools that embed host paths, e.g. agenthud --with-git
+    resolving session cwd → .git, keep working)."""
+
+    def test_docker_argv_includes_extra_mounts(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+        mount_a = tmp_path / "claude-projects"
+        mount_a.mkdir()
+        mount_b = tmp_path / "code"
+        mount_b.mkdir()
+
+        argv = _build_docker_argv(
+            phase,
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            image="img",
+            extra_mounts=[mount_a, mount_b],
+        )
+
+        assert f"{mount_a}:{mount_a}:ro" in argv
+        assert f"{mount_b}:{mount_b}:ro" in argv
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_run_phase_passes_mounts(self, mock_run, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.write_text("# mocked\n")
+        mount = tmp_path / "data"
+        mount.mkdir()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            docker_image="img",
+            extra_mounts=[mount],
+        )
+
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        assert f"{mount}:{mount}:ro" in run_call.args[0]
+
+    def test_missing_mount_path_raises(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.write_text("# never run\n")
+
+        with pytest.raises(ExecRunnerError, match="mount"):
+            run_phase(
+                phase,
+                skill_name="s",
+                skill_root=skill,
+                out_dir=tmp_path / "o",
+                docker_image="img",
+                extra_mounts=[tmp_path / "nope"],
+            )
+
+    def test_local_mode_ignores_mounts(self, tmp_path):
+        """--local: host already sees everything; mounts are a no-op."""
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'ok': True}))\n"
+            ),
+        )
+
+        result = run_phase(
+            phase,
+            skill_name="s",
+            extra_mounts=[tmp_path / "does-not-exist"],
+        )
+
+        assert result.exit_code == 0
+        assert result.result == {"ok": True}
+
+
 class TestLlmPhase:
     """LLM (.md) phase specifics: prompt assembly + auth injection."""
 

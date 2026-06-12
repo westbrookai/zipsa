@@ -184,6 +184,7 @@ def _build_docker_argv(
     image: str,
     command: list[str] | None = None,
     env_file: Path | None = None,
+    extra_mounts: list[Path] | None = None,
 ) -> list[str]:
     """Build the minimal `docker run` command for one phase.
 
@@ -194,6 +195,10 @@ def _build_docker_argv(
     (used by LLM phases, whose prompt arrives via stdin instead of a
     file argument). `env_file` adds --env-file — only LLM phases get
     it (Claude auth); code phases stay secret-free.
+
+    `extra_mounts` are host paths mounted read-only at the SAME
+    absolute path inside the container — for tools that embed host
+    paths in their data (e.g. agenthud resolving session cwd → .git).
     """
     if command is None:
         command = [
@@ -211,6 +216,10 @@ def _build_docker_argv(
     argv += [
         "-v", f"{skill_root.resolve()}:{_CONTAINER_SKILL_DIR}:ro",
         "-v", f"{out_dir}:{_CONTAINER_OUT_DIR}",
+    ]
+    for mount in extra_mounts or []:
+        argv += ["-v", f"{mount}:{mount}:ro"]
+    argv += [
         image,
         *command,
     ]
@@ -226,6 +235,7 @@ def run_phase(
     skill_root: Path | None = None,
     docker_image: str | None = None,
     prev: dict | None = None,
+    extra_mounts: list[Path] | None = None,
     timeout_seconds: int = 600,
 ) -> ExecResult:
     """Execute one phase file and return its outcome.
@@ -238,6 +248,9 @@ def run_phase(
     ExecResult.out_dir). `skill_root` is required for docker mode.
     `prev` is the previous phase's result dict ({} for the first
     phase) — delivered to the phase as the stdin payload's "prev" key.
+    `extra_mounts` are host paths mounted ro at the same container
+    path (docker mode; ignored under local where the host is visible
+    anyway).
 
     Raises ExecRunnerError if the phase can't be started (file missing,
     extension unsupported, docker unavailable). A phase that starts but
@@ -268,6 +281,11 @@ def run_phase(
     if docker_image is not None:
         if skill_root is None:
             raise ExecRunnerError("skill_root is required for docker mode")
+        for mount in extra_mounts or []:
+            if not mount.exists():
+                raise ExecRunnerError(
+                    f"mount path does not exist: {mount}"
+                )
         _ensure_image(docker_image)
         mode = "docker"
         ctx_out_dir = _CONTAINER_OUT_DIR
@@ -283,6 +301,7 @@ def run_phase(
                 image=docker_image,
                 command=list(_LLM_COMMAND),
                 env_file=env_file if env_file.exists() else None,
+                extra_mounts=extra_mounts,
             )
         else:
             argv = _build_docker_argv(
@@ -290,6 +309,7 @@ def run_phase(
                 skill_root=skill_root,
                 out_dir=out_dir,
                 image=docker_image,
+                extra_mounts=extra_mounts,
             )
     else:
         mode = "local"
@@ -356,6 +376,7 @@ def run_phases(
     out_dir: Path | None = None,
     skill_root: Path | None = None,
     docker_image: str | None = None,
+    extra_mounts: list[Path] | None = None,
     timeout_seconds: int = 600,
 ) -> list[ExecResult]:
     """Run a skill's phases sequentially, chaining each result into the
@@ -404,6 +425,7 @@ def run_phases(
             skill_root=skill_root,
             docker_image=docker_image,
             prev=prev,
+            extra_mounts=extra_mounts,
             timeout_seconds=timeout_seconds,
         )
         results.append(outcome)

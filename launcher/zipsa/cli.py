@@ -487,6 +487,10 @@ def exec_skill(
         Optional[Path],
         typer.Option("--out", help="Host directory for phase artifacts (mounted at /out; default: temp dir)"),
     ] = None,
+    mount: Annotated[
+        Optional[list[Path]],
+        typer.Option("--mount", help="Host path mounted read-only at the same absolute path inside the container (repeatable). No-op with --local."),
+    ] = None,
 ):
     """Run a skill's phases deterministically (Phase 1).
 
@@ -520,6 +524,7 @@ def exec_skill(
             out_dir=out,
             skill_root=skill_root,
             docker_image=None if local else image,
+            extra_mounts=[m.expanduser().resolve() for m in mount or []],
         )
     except ExecRunnerError as e:
         typer.echo(f"Error: {e}", err=True)

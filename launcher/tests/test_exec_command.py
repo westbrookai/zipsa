@@ -142,6 +142,46 @@ class TestExecDockerDefault:
         assert "--local" in result.output
 
     @patch("zipsa.exec_runner.subprocess.run")
+    def test_mount_flag_repeatable(self, mock_run, tmp_path):
+        """--mount <host-path> (repeatable) mounts ro at the same
+        container path."""
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+        m1 = tmp_path / "claude-projects"
+        m1.mkdir()
+        m2 = tmp_path / "code"
+        m2.mkdir()
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        result = runner.invoke(app, [
+            "exec", str(skill),
+            "--mount", str(m1),
+            "--mount", str(m2),
+        ])
+
+        assert result.exit_code == 0, result.output
+        run_call = next(
+            c for c in mock_run.call_args_list
+            if c.args[0][:2] == ["docker", "run"]
+        )
+        argv = run_call.args[0]
+        assert f"{m1}:{m1}:ro" in argv
+        assert f"{m2}:{m2}:ro" in argv
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_mount_missing_path_errors(self, mock_run, tmp_path):
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, [
+            "exec", str(skill),
+            "--mount", str(tmp_path / "nope"),
+        ])
+
+        assert result.exit_code == 1
+        assert "mount" in result.output.lower()
+
+    @patch("zipsa.exec_runner.subprocess.run")
     def test_empty_mount_hint_on_file_not_found(self, mock_run, tmp_path):
         """Skill path outside Docker Desktop's file-sharing list mounts
         empty — the resulting 'No such file' error gets a hint."""
