@@ -89,6 +89,9 @@ def run_phase(
     extension unsupported, or `.md` LLM phase). A phase that starts but
     exits non-zero is reported in ExecResult, not raised.
     """
+    # Resolve before building argv: the subprocess runs with cwd set to
+    # the phase's directory, which would break a relative phase path.
+    phase_path = phase_path.resolve()
     if not phase_path.is_file():
         raise ExecRunnerError(f"phase file not found: {phase_path}")
 

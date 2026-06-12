@@ -54,6 +54,31 @@ class TestRunPhaseHappyPaths:
         assert result.result == {"lang": "python", "name": "hello-py"}
         assert result.skill_name == "hello-py"
 
+    def test_relative_phase_path(self, tmp_path, monkeypatch):
+        """A relative phase path must work even though the subprocess
+        runs with cwd set to the phase's directory.
+
+        Regression: `zipsa exec ../skills/hello-world` failed because
+        the relative path was passed to the interpreter verbatim while
+        cwd changed underneath it.
+        """
+        _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'ok': True}))\n"
+            ),
+        )
+        monkeypatch.chdir(tmp_path.parent)
+        relative = Path(tmp_path.name) / "1.do.py"
+
+        result = run_phase(relative, skill_name="x")
+
+        assert result.exit_code == 0, result.stderr
+        assert result.result == {"ok": True}
+
     def test_bash_phase(self, tmp_path):
         phase = _write(
             tmp_path,
