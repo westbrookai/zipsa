@@ -488,14 +488,15 @@ def exec_skill(
         typer.Option("--out", help="Host directory for phase artifacts (mounted at /out; default: temp dir)"),
     ] = None,
 ):
-    """Run a single-phase skill deterministically (Phase 0).
+    """Run a skill's phases deterministically (Phase 1).
 
-    The phase file in zipsa-dist/ runs inside the zipsa runtime
-    container by default (skill mounted read-only, artifacts via /out).
-    No LLM, no manifest. Result prints as JSON.
+    Phase files in zipsa-dist/ run sequentially inside the zipsa
+    runtime container by default (skill mounted read-only, shared
+    artifacts via /out, each phase's result chained into the next
+    phase's `prev`). No LLM, no manifest. Result prints as JSON.
     """
     from .core.phase_discovery import PhaseDiscoveryError, discover_phases
-    from .exec_runner import ExecRunnerError, run_phase
+    from .exec_runner import ExecRunnerError, run_phases
 
     if not path.is_dir():
         typer.echo(f"Error: skill directory not found: {path}", err=True)
@@ -507,21 +508,13 @@ def exec_skill(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
-    if len(phases) != 1:
-        typer.echo(
-            f"Error: exec requires exactly one phase, found {len(phases)}: "
-            f"{', '.join(p.path.name for p in phases)}",
-            err=True,
-        )
-        raise typer.Exit(1)
-
     skill_root = path.resolve()
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
 
     try:
-        outcome = run_phase(
-            phases[0].path,
+        results = run_phases(
+            phases,
             skill_name=skill_root.name,
             user_query=user_query or "",
             out_dir=out,
@@ -532,15 +525,18 @@ def exec_skill(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
-    if outcome.exit_code != 0:
+    last = results[-1]
+    if last.exit_code != 0:
+        failed_phase = phases[len(results) - 1]
         typer.echo(
-            f"Phase failed (exit {outcome.exit_code}):\n{outcome.stderr}",
+            f"Phase {failed_phase.id_str}.{failed_phase.slug} failed "
+            f"(exit {last.exit_code}):\n{last.stderr}",
             err=True,
         )
         if (
-            outcome.mode == "docker"
-            and "/skill" in outcome.stderr
-            and "No such file" in outcome.stderr
+            last.mode == "docker"
+            and "/skill" in last.stderr
+            and "No such file" in last.stderr
         ):
             typer.echo(
                 "Hint: the skill path may be outside Docker Desktop's "
@@ -550,16 +546,25 @@ def exec_skill(
                 "run with --local.",
                 err=True,
             )
-        raise typer.Exit(outcome.exit_code)
+        raise typer.Exit(last.exit_code)
 
     typer.echo(json.dumps(
         {
-            "skill_name": outcome.skill_name,
-            "mode": outcome.mode,
-            "result": outcome.result,
-            "exit_code": outcome.exit_code,
-            "duration_ms": outcome.duration_ms,
-            "out_dir": outcome.out_dir,
+            "skill_name": last.skill_name,
+            "mode": last.mode,
+            "result": last.result,
+            "exit_code": last.exit_code,
+            "duration_ms": sum(r.duration_ms for r in results),
+            "out_dir": last.out_dir,
+            "phases": [
+                {
+                    "id": p.id_str,
+                    "slug": p.slug,
+                    "exit_code": r.exit_code,
+                    "duration_ms": r.duration_ms,
+                }
+                for p, r in zip(phases, results)
+            ],
         },
         ensure_ascii=False,
         indent=2,
