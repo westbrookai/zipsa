@@ -186,17 +186,18 @@ class TestExecErrors:
         assert result.exit_code == 1
         assert "zipsa-dist" in result.output
 
-    def test_multi_phase_rejected(self, tmp_path):
-        skill = _make_skill(tmp_path, "two-phases", {
+    def test_sub_phase_rejected(self, tmp_path):
+        """Branching (dotted sub-phase ids) is post-Phase-1."""
+        skill = _make_skill(tmp_path, "branchy", {
             "1.first.py": PY_PHASE,
-            "2.second.py": PY_PHASE,
+            "2.1.branch-a.py": PY_PHASE,
+            "2.2.branch-b.py": PY_PHASE,
         })
 
         result = runner.invoke(app, ["exec", str(skill), "--local"])
 
         assert result.exit_code == 1
-        assert "exactly one phase" in result.output
-        assert "2" in result.output
+        assert "branching" in result.output.lower()
 
     def test_md_phase_rejected_with_llm_message(self, tmp_path):
         skill = _make_skill(tmp_path, "llm-skill", {"1.think.md": "# think\n"})
@@ -215,3 +216,58 @@ class TestExecErrors:
 
         assert result.exit_code == 3
         assert "kaboom" in result.output
+
+    def test_mid_chain_failure_names_phase(self, tmp_path):
+        """A failure in phase 2 of 3 reports WHICH phase died."""
+        skill = _make_skill(tmp_path, "chain-boom", {
+            "1.ok.py": PY_PHASE,
+            "2.boom.py": "import sys\nsys.stderr.write('dead\\n')\nsys.exit(7)\n",
+            "3.never.py": PY_PHASE,
+        })
+
+        result = runner.invoke(app, ["exec", str(skill), "--local"])
+
+        assert result.exit_code == 7
+        assert "2.boom" in result.output
+        assert "dead" in result.output
+
+
+class TestExecMultiPhase:
+    """Phase 1: sequential multi-phase chains."""
+
+    def test_two_phase_chain(self, tmp_path):
+        skill = _make_skill(tmp_path, "chain", {
+            "1.produce.py": (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'x': 41}))\n"
+            ),
+            "2.consume.py": (
+                "import json, sys\n"
+                "data = json.loads(sys.stdin.read())\n"
+                "print(json.dumps({'answer': data['prev']['x'] + 1}))\n"
+            ),
+        })
+
+        result = runner.invoke(app, ["exec", str(skill), "--local"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        # result = last phase's result
+        assert payload["result"] == {"answer": 42}
+        # per-phase summaries
+        assert [p["id"] for p in payload["phases"]] == ["1", "2"]
+        assert [p["slug"] for p in payload["phases"]] == ["produce", "consume"]
+        assert all(p["exit_code"] == 0 for p in payload["phases"])
+        assert all(p["duration_ms"] >= 0 for p in payload["phases"])
+
+    def test_single_phase_output_shape_unchanged(self, tmp_path):
+        """A 1-phase skill still gets the phases array (len 1)."""
+        skill = _make_skill(tmp_path, "solo", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, ["exec", str(skill), "--local"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["result"]["lang"] == "python"
+        assert len(payload["phases"]) == 1

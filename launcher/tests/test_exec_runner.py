@@ -21,13 +21,14 @@ import pytest
 
 from unittest.mock import patch
 
-from zipsa.core.phase_discovery import PHASE_EXTENSIONS
+from zipsa.core.phase_discovery import PHASE_EXTENSIONS, discover_phases
 from zipsa.exec_runner import (
     RUNNERS,
     ExecResult,
     ExecRunnerError,
     _build_docker_argv,
     run_phase,
+    run_phases,
 )
 
 
@@ -589,6 +590,151 @@ class TestDockerMode:
         )
 
         assert result.out_dir.startswith(str(zipsa_home()))
+
+
+ECHO_PREV = (
+    "import json, sys\n"
+    "data = json.loads(sys.stdin.read())\n"
+    "print(json.dumps({'got': data['prev']}))\n"
+)
+
+
+def _skill(tmp_path, files: dict[str, str]):
+    """Create a skill dir + return (skill_root, discovered phases)."""
+    skill = tmp_path / "skill"
+    dist = skill / "zipsa-dist"
+    dist.mkdir(parents=True)
+    for name, body in files.items():
+        (dist / name).write_text(body)
+    return skill, discover_phases(skill)
+
+
+class TestRunPhases:
+    """Sequential multi-phase orchestration (Phase 1)."""
+
+    def test_two_phase_chain_via_prev(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.produce.py": (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'x': 1}))\n"
+            ),
+            "2.consume.py": ECHO_PREV,
+        })
+
+        results = run_phases(phases, skill_name="s", skill_root=skill)
+
+        assert len(results) == 2
+        assert results[0].result == {"x": 1}
+        assert results[1].result == {"got": {"x": 1}}
+
+    def test_first_phase_prev_is_empty(self, tmp_path):
+        skill, phases = _skill(tmp_path, {"1.solo.py": ECHO_PREV})
+
+        results = run_phases(phases, skill_name="s", skill_root=skill)
+
+        assert results[0].result == {"got": {}}
+
+    def test_no_json_result_chains_empty_prev(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.silent.py": "import sys\nsys.stdin.read()\nprint('just logs')\n",
+            "2.consume.py": ECHO_PREV,
+        })
+
+        results = run_phases(phases, skill_name="s", skill_root=skill)
+
+        assert results[0].result is None
+        assert results[1].result == {"got": {}}
+
+    def test_failure_stops_chain(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.ok.py": (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({}))\n"
+            ),
+            "2.boom.py": "import sys\nsys.stdin.read()\nsys.exit(3)\n",
+            "3.never.py": (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "pathlib.Path(ctx['out_dir'], 'ran3').touch()\n"
+                "print(json.dumps({}))\n"
+            ),
+        })
+        out = tmp_path / "out"
+        out.mkdir()
+
+        results = run_phases(
+            phases, skill_name="s", skill_root=skill, out_dir=out,
+        )
+
+        assert len(results) == 2
+        assert results[1].exit_code == 3
+        assert not (out / "ran3").exists()
+
+    def test_out_dir_shared_across_phases(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.write.py": (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "pathlib.Path(ctx['out_dir'], 'data.txt').write_text('shared')\n"
+                "print(json.dumps({}))\n"
+            ),
+            "2.read.py": (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "content = pathlib.Path(ctx['out_dir'], 'data.txt').read_text()\n"
+                "print(json.dumps({'content': content}))\n"
+            ),
+        })
+
+        results = run_phases(phases, skill_name="s", skill_root=skill)
+
+        assert results[1].result == {"content": "shared"}
+        # Both phases reported the same out dir
+        assert results[0].out_dir == results[1].out_dir
+
+    def test_sub_phase_rejected_before_any_run(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.mark.py": (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "pathlib.Path(ctx['out_dir'], 'ran1').touch()\n"
+                "print(json.dumps({}))\n"
+            ),
+            "2.1.branch-a.py": "print('{}')\n",
+            "2.2.branch-b.py": "print('{}')\n",
+        })
+        out = tmp_path / "out"
+        out.mkdir()
+
+        with pytest.raises(ExecRunnerError, match="branching"):
+            run_phases(
+                phases, skill_name="s", skill_root=skill, out_dir=out,
+            )
+
+        # Pre-flight: phase 1 must NOT have run
+        assert not (out / "ran1").exists()
+
+    def test_md_phase_rejected_before_any_run(self, tmp_path):
+        skill, phases = _skill(tmp_path, {
+            "1.mark.py": (
+                "import json, sys, pathlib\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "pathlib.Path(ctx['out_dir'], 'ran1').touch()\n"
+                "print(json.dumps({}))\n"
+            ),
+            "2.think.md": "# llm phase\n",
+        })
+        out = tmp_path / "out"
+        out.mkdir()
+
+        with pytest.raises(ExecRunnerError, match="LLM"):
+            run_phases(
+                phases, skill_name="s", skill_root=skill, out_dir=out,
+            )
+
+        assert not (out / "ran1").exists()
 
 
 class TestRunnersTable:

@@ -187,6 +187,7 @@ def run_phase(
     out_dir: Path | None = None,
     skill_root: Path | None = None,
     docker_image: str | None = None,
+    prev: dict | None = None,
     timeout_seconds: int = 600,
 ) -> ExecResult:
     """Execute one phase file and return its outcome.
@@ -197,6 +198,8 @@ def run_phase(
 
     `out_dir` defaults to a fresh temp directory (reported in
     ExecResult.out_dir). `skill_root` is required for docker mode.
+    `prev` is the previous phase's result dict ({} for the first
+    phase) — delivered to the phase as the stdin payload's "prev" key.
 
     Raises ExecRunnerError if the phase can't be started (file missing,
     extension unsupported, docker unavailable). A phase that starts but
@@ -246,7 +249,7 @@ def run_phase(
         "user_query": user_query,
         "out_dir": ctx_out_dir,
     }
-    stdin_payload = json.dumps({"ctx": ctx}) + "\n"
+    stdin_payload = json.dumps({"ctx": ctx, "prev": prev or {}}) + "\n"
 
     started = time.monotonic()
     try:
@@ -281,3 +284,68 @@ def run_phase(
         stdout=proc.stdout,
         stderr=proc.stderr,
     )
+
+
+def run_phases(
+    phases: list,
+    *,
+    skill_name: str,
+    user_query: str = "",
+    out_dir: Path | None = None,
+    skill_root: Path | None = None,
+    docker_image: str | None = None,
+    timeout_seconds: int = 600,
+) -> list[ExecResult]:
+    """Run a skill's phases sequentially, chaining each result into the
+    next phase's `prev`.
+
+    `phases` is the ordered list from `phase_discovery.discover_phases`.
+    All phases share one out_dir. A phase that exits non-zero stops the
+    chain — the returned list ends with the failing phase's result.
+
+    Pre-flight (before ANY phase runs): every phase must be runnable —
+    `.md` (LLM) phases and sub-phases (dotted ids like `3.1`,
+    branching) are rejected up front so a chain never dies halfway on
+    a known-bad phase.
+    """
+    for phase in phases:
+        if len(phase.id_tuple) > 1:
+            raise ExecRunnerError(
+                f"{phase.path.name}: branching (sub-phases) is not yet "
+                "supported — phases must have single-integer ids"
+            )
+        _runner_for(phase.path)  # raises on .md / unknown ext
+
+    if out_dir is None:
+        # Allocate once here so every phase shares it (run_phase would
+        # otherwise mint a fresh temp dir per phase).
+        if docker_image is not None:
+            from .paths import zipsa_home
+
+            base = zipsa_home() / "exec-out"
+            base.mkdir(parents=True, exist_ok=True)
+            out_dir = Path(tempfile.mkdtemp(prefix=f"{skill_name}-", dir=base))
+        else:
+            out_dir = Path(
+                tempfile.mkdtemp(prefix=f"zipsa-exec-{skill_name}-")
+            )
+
+    results: list[ExecResult] = []
+    prev: dict = {}
+    for phase in phases:
+        outcome = run_phase(
+            phase.path,
+            skill_name=skill_name,
+            user_query=user_query,
+            out_dir=out_dir,
+            skill_root=skill_root,
+            docker_image=docker_image,
+            prev=prev,
+            timeout_seconds=timeout_seconds,
+        )
+        results.append(outcome)
+        if outcome.exit_code != 0:
+            break
+        prev = outcome.result or {}
+
+    return results
