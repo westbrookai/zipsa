@@ -465,6 +465,17 @@ def run(
         raise typer.Exit(1)
 
 
+def _parse_mount_spec(spec: str) -> "tuple[Path, str]":
+    """Parse a --mount value: `HOST` or `HOST:CONTAINER`.
+
+    HOST gets ~-expansion and resolution; CONTAINER defaults to the
+    resolved host path (same-path mount).
+    """
+    host_str, sep, container = spec.partition(":")
+    host = Path(host_str).expanduser().resolve()
+    return host, (container if sep else str(host))
+
+
 @app.command(name="exec")
 def exec_skill(
     path: Annotated[
@@ -486,6 +497,10 @@ def exec_skill(
     out: Annotated[
         Optional[Path],
         typer.Option("--out", help="Host directory for phase artifacts (mounted at /out; default: temp dir)"),
+    ] = None,
+    mount: Annotated[
+        Optional[list[str]],
+        typer.Option("--mount", help="Host path mounted read-only in the container (repeatable). HOST mounts at the same absolute path; HOST:CONTAINER overrides the container path. No-op with --local."),
     ] = None,
 ):
     """Run a skill's phases deterministically (Phase 1).
@@ -520,6 +535,7 @@ def exec_skill(
             out_dir=out,
             skill_root=skill_root,
             docker_image=None if local else image,
+            extra_mounts=[_parse_mount_spec(m) for m in mount or []],
         )
     except ExecRunnerError as e:
         typer.echo(f"Error: {e}", err=True)

@@ -106,7 +106,23 @@ zipsa exec ./my-skill "user query"          # docker (default)
 zipsa exec ./my-skill "user query" --local  # host, fast authoring loop
 zipsa exec ./my-skill --out ./artifacts     # choose the /out host dir
 zipsa exec ./my-skill --image custom:tag    # override runtime image
+zipsa exec ./my-skill --mount ~/.claude/projects --mount ~/code
+                                            # host paths visible ro at the SAME
+                                            # absolute path in the container
+                                            # (repeatable; no-op with --local)
+zipsa exec ./my-skill --mount ~/.claude/projects:/home/agent/.claude/projects
+                                            # HOST:CONTAINER overrides the
+                                            # container path
 ```
+
+`--mount` is for skills whose tools embed host paths in their data
+(e.g. agenthud resolving a session's `cwd` to its `.git`) or read
+fixed locations under the container home. Document the mounts your
+skill needs in its SKILL.md run example — the caller supplies them.
+
+The host's timezone is injected as `TZ` automatically — date
+arithmetic in a phase ("yesterday") means the user's yesterday, not
+UTC's.
 
 Output:
 
