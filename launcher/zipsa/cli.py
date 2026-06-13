@@ -476,6 +476,62 @@ def _parse_mount_spec(spec: str) -> "tuple[Path, str]":
     return host, (container if sep else str(host))
 
 
+@app.command(name="create")
+def create_skill(
+    intent: Annotated[
+        str,
+        typer.Argument(help="What the skill should do (natural language)"),
+    ],
+    into: Annotated[
+        Path,
+        typer.Option("--into", help="Target skill directory (created if absent)"),
+    ],
+):
+    """Author a new zipsa skill via the zipsa-skill-builder workflow.
+
+    Spawns a separate `claude -p` process that reads the workflow +
+    AUTHORING.md, writes the phase files into <into>/zipsa-dist/, and
+    self-tests with `zipsa exec --local`. Its output streams to your
+    terminal — you watch the authoring happen, and the same intent
+    reproduces. Runs with bypassed permissions (same trust as running
+    claude yourself in this repo); review the diff before committing.
+    """
+    from .create import find_repo_root, run_create
+
+    root = find_repo_root(Path.cwd())
+    if root is None:
+        typer.echo(
+            "Error: not inside a repo with the zipsa-skill-builder skill "
+            "(.claude/skills/zipsa-skill-builder/). Run from the zipsa repo.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    skill_path = into if into.is_absolute() else (root / into)
+    skill_path = skill_path.resolve()
+    skill_path.mkdir(parents=True, exist_ok=True)
+
+    # The spawned agent self-tests with `zipsa exec`. Prefer a `zipsa`
+    # on PATH (production); fall back to this interpreter's `-m zipsa`
+    # for dev checkouts where only `uv run zipsa` works.
+    if shutil.which("zipsa"):
+        zipsa_cmd = "zipsa exec"
+    else:
+        zipsa_cmd = f"{sys.executable} -m zipsa exec"
+
+    try:
+        rc = run_create(intent, skill_path, root=root, zipsa_cmd=zipsa_cmd)
+    except FileNotFoundError:
+        typer.echo(
+            "Error: `claude` not found on PATH — install Claude Code to "
+            "use `zipsa create`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    raise typer.Exit(rc)
+
+
 @app.command(name="exec")
 def exec_skill(
     path: Annotated[
@@ -1206,7 +1262,7 @@ def connect(
 #
 # Keep in sync with @app.command(name=...) decorators above.
 _KNOWN_COMMANDS = frozenset({
-    "run", "exec", "view", "validate", "list", "where", "discover",
+    "run", "exec", "create", "view", "validate", "list", "where", "discover",
     "configure", "runtimes", "install", "uninstall", "connect",
 })
 
