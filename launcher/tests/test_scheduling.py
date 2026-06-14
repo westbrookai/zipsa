@@ -18,7 +18,35 @@ from zipsa.scheduling import (
     ScheduledJob,
     build_exec_command,
     cron_to_launchd_intervals,
+    resolve_zipsa_command,
 )
+
+
+class TestResolveZipsaCommand:
+    """The scheduled command's program must be ABSOLUTE — launchd/cron
+    do not resolve ProgramArguments[0] via PATH (bare 'zipsa' → the job
+    fails to exec, e.g. launchd exit 78)."""
+
+    def test_uses_absolute_path_when_on_path(self, monkeypatch):
+        monkeypatch.setattr(
+            "zipsa.scheduling.shutil.which", lambda _: "/opt/homebrew/bin/zipsa"
+        )
+        assert resolve_zipsa_command() == ["/opt/homebrew/bin/zipsa"]
+
+    def test_falls_back_to_interpreter_m_zipsa(self, monkeypatch):
+        monkeypatch.setattr("zipsa.scheduling.shutil.which", lambda _: None)
+        cmd = resolve_zipsa_command()
+        assert cmd[1:] == ["-m", "zipsa"]
+        assert Path(cmd[0]).is_absolute()
+
+    def test_never_bare_zipsa(self, monkeypatch):
+        """Regression: a bare 'zipsa' baked into a launchd plist made the
+        job exit 78 (could not exec). The program must be absolute."""
+        monkeypatch.setattr(
+            "zipsa.scheduling.shutil.which", lambda _: "/abs/zipsa"
+        )
+        assert resolve_zipsa_command()[0] != "zipsa"
+        assert Path(resolve_zipsa_command()[0]).is_absolute()
 
 
 class TestCronToLaunchd:

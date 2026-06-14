@@ -17,9 +17,25 @@ from __future__ import annotations
 
 import platform
 import plistlib
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def resolve_zipsa_command() -> list[str]:
+    """The `zipsa` invocation to bake into a scheduled job.
+
+    Must be an ABSOLUTE program — launchd (and cron) do not resolve
+    ProgramArguments[0] via PATH. Prefer the absolute path of a `zipsa`
+    on PATH (brew / pip / the active venv's console script); fall back
+    to this interpreter's `-m zipsa` (also absolute) for dev runs.
+    """
+    found = shutil.which("zipsa")
+    if found:
+        return [found]
+    return [sys.executable, "-m", "zipsa"]
 
 
 class CronError(Exception):
