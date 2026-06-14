@@ -185,6 +185,10 @@ cleanly if the credential is absent.
 (weather treats it as "IP-based location"; erroring out is also fine
 — just be deliberate).
 
+**Scheduled skill**: keep the skill schedule-agnostic (it just runs
+once). The user wires the cadence separately:
+`zipsa schedule add <label> --cron "0 8 * * *" <path> [--mount ...]`.
+
 ## 9. Not yet (don't design against these)
 
 - HITL (a *skill* asking the user mid-run — distinct from `zipsa
@@ -192,8 +196,6 @@ cleanly if the credential is absent.
 - Environment-variable injection for code phases (use a mounted file
   for secrets — §6)
 - Branching (sub-phase XOR)
-- Scheduling (run at 8am) — keep skills schedule-agnostic; wire cron /
-  launchd to `zipsa exec` separately
 - install-by-name, composition (one skill calling another)
 - Tools in LLM phases
 
