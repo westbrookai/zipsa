@@ -479,22 +479,24 @@ def _parse_mount_spec(spec: str) -> "tuple[Path, str]":
 @app.command(name="create")
 def create_skill(
     intent: Annotated[
+        Optional[str],
+        typer.Argument(help="Rough description of the agent you want to create"),
+    ] = None,
+    image: Annotated[
         str,
-        typer.Argument(help="What the skill should do (natural language)"),
-    ],
-    into: Annotated[
-        Path,
-        typer.Option("--into", help="Target skill directory (created if absent)"),
-    ],
+        typer.Option("--image", "-i", help="Runtime image for the authoring container"),
+    ] = _DEFAULT_IMAGE,
 ):
-    """Author a new zipsa skill via the zipsa-skill-builder workflow.
+    """Author a new zipsa skill, interactively, in the runtime container.
 
-    Spawns a separate `claude -p` process that reads the workflow +
-    AUTHORING.md, writes the phase files into <into>/zipsa-dist/, and
-    self-tests with `zipsa exec --local`. Its output streams to your
-    terminal — you watch the authoring happen, and the same intent
-    reproduces. Runs with bypassed permissions (same trust as running
-    claude yourself in this repo); review the diff before committing.
+    Spawns the pinned runtime image's claude as an interactive session:
+    it converses with you, writes the skill into a staging dir, tests it
+    via the real `zipsa exec` (orchestrated by the host), and — once you
+    agree on a name — promotes it into skills/<name>/. The name is
+    decided last; nothing touches the repo until then.
+
+    Run from the zipsa repo (needs the zipsa-skill-builder skill +
+    AUTHORING.md). Reviews the diff before committing.
     """
     from .create import find_repo_root, run_create
 
@@ -507,24 +509,19 @@ def create_skill(
         )
         raise typer.Exit(1)
 
-    skill_path = into if into.is_absolute() else (root / into)
-    skill_path = skill_path.resolve()
-    skill_path.mkdir(parents=True, exist_ok=True)
-
-    # The spawned agent self-tests with `zipsa exec`. Prefer a `zipsa`
-    # on PATH (production); fall back to this interpreter's `-m zipsa`
-    # for dev checkouts where only `uv run zipsa` works.
-    if shutil.which("zipsa"):
-        zipsa_cmd = "zipsa exec"
-    else:
-        zipsa_cmd = f"{sys.executable} -m zipsa exec"
+    if not intent:
+        intent = typer.prompt(
+            "What kind of agent would you like to create?"
+        ).strip()
+        if not intent:
+            typer.echo("Error: no intent given.", err=True)
+            raise typer.Exit(1)
 
     try:
-        rc = run_create(intent, skill_path, root=root, zipsa_cmd=zipsa_cmd)
+        rc = run_create(intent, repo_root=root, image=image)
     except FileNotFoundError:
         typer.echo(
-            "Error: `claude` not found on PATH — install Claude Code to "
-            "use `zipsa create`.",
+            "Error: `docker` not found — install Docker to use `zipsa create`.",
             err=True,
         )
         raise typer.Exit(1)

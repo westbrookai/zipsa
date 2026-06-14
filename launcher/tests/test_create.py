@@ -1,142 +1,171 @@
-"""Tests for `zipsa create` — author a skill via a separate claude -p run.
+"""Tests for zipsa.create — interactive containerized authoring (Step 3).
 
-The whole point of `create` (vs the assistant hand-authoring) is that
-authoring happens in a fresh, observable, reproducible claude process.
-These tests pin the subprocess wiring; the actual authoring quality is
-the LLM's job, verified by E2E.
+`zipsa create` spawns the authoring claude INSIDE the pinned runtime
+container (version-consistent), mounts a staging dir rw + the repo ro,
+points it at a host CreateServer (exec + promote tools), and runs it
+interactively. zipsa never enters the container; the host orchestrates
+test runs via the exec tool.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from zipsa.create import (
     build_create_prompt,
+    build_docker_argv,
+    build_mcp_config,
     find_repo_root,
     run_create,
 )
 
 
 def _make_repo(root: Path) -> Path:
-    (root / ".claude" / "skills" / "zipsa-skill-builder").mkdir(parents=True)
-    (root / ".claude" / "skills" / "zipsa-skill-builder" / "SKILL.md").write_text(
-        "# zipsa-skill-builder\n"
-    )
+    sb = root / ".claude" / "skills" / "zipsa-skill-builder"
+    sb.mkdir(parents=True)
+    (sb / "SKILL.md").write_text("# zipsa-skill-builder\n")
     (root / "skills").mkdir()
     (root / "skills" / "AUTHORING.md").write_text("# authoring\n")
     return root
 
 
 class TestFindRepoRoot:
-    def test_finds_root_from_subdir(self, tmp_path):
+    def test_finds_from_subdir(self, tmp_path):
         root = _make_repo(tmp_path / "repo")
-        deep = root / "launcher" / "zipsa"
+        deep = root / "a" / "b"
         deep.mkdir(parents=True)
-
         assert find_repo_root(deep) == root
 
-    def test_finds_root_at_self(self, tmp_path):
-        root = _make_repo(tmp_path / "repo")
-
-        assert find_repo_root(root) == root
-
-    def test_returns_none_when_no_skill(self, tmp_path):
+    def test_none_when_absent(self, tmp_path):
         plain = tmp_path / "plain"
         plain.mkdir()
-
         assert find_repo_root(plain) is None
 
 
 class TestBuildCreatePrompt:
-    def test_prompt_carries_intent_path_and_workflow(self, tmp_path):
-        skill_path = tmp_path / "skills" / "umbrella-reminder"
-
-        prompt = build_create_prompt("8am umbrella alert", skill_path)
-
-        assert "8am umbrella alert" in prompt
-        assert str(skill_path) in prompt
+    def test_carries_intent_staging_and_tools(self, tmp_path):
+        staging = tmp_path / ".zipsa" / "staging" / "abc"
+        prompt = build_create_prompt("umbrella alert at 8am", staging)
+        assert "umbrella alert at 8am" in prompt
+        assert str(staging) in prompt
         assert "zipsa-skill-builder" in prompt
         assert "AUTHORING.md" in prompt
-        # Must instruct the self-test loop
-        assert "zipsa exec" in prompt
-        assert "--local" in prompt
+        assert "mcp__zipsa__exec" in prompt
+        assert "mcp__zipsa__promote" in prompt
 
-    def test_custom_zipsa_cmd_woven_in(self, tmp_path):
-        prompt = build_create_prompt(
-            "x", tmp_path / "s", zipsa_cmd="/venv/python -m zipsa exec",
+
+class TestBuildMcpConfig:
+    def test_points_at_host_server_with_token(self):
+        cfg = build_mcp_config(port=54321, token="tok-xyz")
+        zipsa = cfg["mcpServers"]["zipsa"]
+        assert zipsa["type"] == "http"
+        assert "host.docker.internal:54321/mcp" in zipsa["url"]
+        assert "tok-xyz" in zipsa["headersHelper"]
+
+
+class TestBuildDockerArgv:
+    def test_command_shape(self, tmp_path):
+        staging = tmp_path / ".zipsa" / "staging" / "abc"
+        staging.mkdir(parents=True)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        mcpcfg = tmp_path / "mcp.json"
+        mcpcfg.write_text("{}")
+
+        argv = build_docker_argv(
+            image="img:test",
+            staging_path=staging,
+            repo_root=repo,
+            mcp_config_host=mcpcfg,
+            prompt="do the thing",
+            env_file=None,
         )
-        assert "/venv/python -m zipsa exec" in prompt
+
+        assert argv[0:2] == ["docker", "run"]
+        assert "--rm" in argv
+        assert "-it" in argv
+        assert f"{staging}:{staging}:rw" in argv
+        assert f"{repo}:{repo}:ro" in argv
+        assert any(a.startswith(f"{mcpcfg}:") and a.endswith(":ro") for a in argv)
+        assert "img:test" in argv
+        assert "claude" in argv
+        assert "do the thing" in argv
+        assert "--mcp-config" in argv
+        assert "--strict-mcp-config" in argv
+        assert "bypassPermissions" in argv
+        w = argv.index("-w")
+        assert argv[w + 1] == str(repo)
+
+    def test_env_file_added_when_present(self, tmp_path):
+        staging = tmp_path / ".zipsa" / "staging" / "abc"
+        staging.mkdir(parents=True)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        mcpcfg = tmp_path / "mcp.json"
+        mcpcfg.write_text("{}")
+        env_file = tmp_path / ".env"
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=t\n")
+
+        argv = build_docker_argv(
+            image="i", staging_path=staging, repo_root=repo,
+            mcp_config_host=mcpcfg, prompt="p", env_file=env_file,
+        )
+
+        i = argv.index("--env-file")
+        assert argv[i + 1] == str(env_file)
 
 
 class TestRunCreate:
     @patch("zipsa.create.subprocess.run")
-    def test_invokes_claude_headless_with_bypass(self, mock_run, tmp_path):
-        root = _make_repo(tmp_path / "repo")
-        skill_path = root / "skills" / "foo"
+    @patch("zipsa.create.CreateServer")
+    def test_lifecycle_and_staging(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir()
+        repo = _make_repo(tmp_path / "repo")
+        server = MagicMock()
+        server.port = 55555
+        server.token = "tok"
+        mock_server_cls.return_value = server
         mock_run.return_value.returncode = 0
 
-        rc = run_create("do a thing", skill_path, root=root)
+        rc = run_create("make a thing", repo_root=repo, image="img:test")
 
         assert rc == 0
+        server.start.assert_called_once()
+        server.stop.assert_called_once()
+        staging_root = tmp_path / "home" / "staging"
+        made = [p for p in staging_root.iterdir() if p.is_dir()]
+        assert len(made) == 1
         argv = mock_run.call_args.args[0]
-        assert argv[0] == "claude"
-        assert "-p" in argv
-        assert "--permission-mode" in argv
-        assert "bypassPermissions" in argv
-        # The prompt is passed as an arg
-        assert any("do a thing" in a for a in argv)
-        # claude runs from the repo root so it discovers the skill + docs
-        assert mock_run.call_args.kwargs["cwd"] == root
+        assert argv[0] == "docker"
+        assert "img:test" in argv
 
     @patch("zipsa.create.subprocess.run")
-    def test_stdio_inherited_for_observability(self, mock_run, tmp_path):
-        """No capture_output — claude's progress streams to the user's
-        terminal. That visibility is the reason create exists."""
-        root = _make_repo(tmp_path / "repo")
-        mock_run.return_value.returncode = 0
+    @patch("zipsa.create.CreateServer")
+    def test_propagates_exit_code(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir()
+        repo = _make_repo(tmp_path / "repo")
+        server = MagicMock(); server.port = 1; server.token = "t"
+        mock_server_cls.return_value = server
+        mock_run.return_value.returncode = 7
 
-        run_create("x", root / "skills" / "foo", root=root)
-
-        kwargs = mock_run.call_args.kwargs
-        assert not kwargs.get("capture_output")
-
-    @patch("zipsa.create.subprocess.run")
-    def test_propagates_claude_exit_code(self, mock_run, tmp_path):
-        root = _make_repo(tmp_path / "repo")
-        mock_run.return_value.returncode = 2
-
-        rc = run_create("x", root / "skills" / "foo", root=root)
-
-        assert rc == 2
-
-    @patch("zipsa.create.subprocess.run", side_effect=FileNotFoundError)
-    def test_missing_claude_raises(self, mock_run, tmp_path):
-        root = _make_repo(tmp_path / "repo")
-
-        with pytest.raises(FileNotFoundError):
-            run_create("x", root / "skills" / "foo", root=root)
+        rc = run_create("x", repo_root=repo, image="i")
+        assert rc == 7
 
     @patch("zipsa.create.subprocess.run")
-    def test_injects_claude_auth_from_env_file(self, mock_run, tmp_path):
-        """The spawned claude is headless — it needs
-        CLAUDE_CODE_OAUTH_TOKEN in its env (the host login isn't picked
-        up). Same token the container LLM phases get via --env-file."""
-        root = _make_repo(tmp_path / "repo")
-        env_file = tmp_path / "zipsa.env"
-        env_file.write_text(
-            "# comment\nCLAUDE_CODE_OAUTH_TOKEN=tok-123\nOTHER=val\n"
-        )
-        mock_run.return_value.returncode = 0
+    @patch("zipsa.create.CreateServer")
+    def test_server_stopped_even_on_docker_error(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir()
+        repo = _make_repo(tmp_path / "repo")
+        server = MagicMock(); server.port = 1; server.token = "t"
+        mock_server_cls.return_value = server
+        mock_run.side_effect = RuntimeError("boom")
 
-        run_create(
-            "x", root / "skills" / "foo", root=root, env_file=env_file,
-        )
-
-        env = mock_run.call_args.kwargs["env"]
-        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-123"
-        assert env["OTHER"] == "val"
-        # Inherits the rest of the environment too (PATH etc.)
-        assert "PATH" in env
+        with pytest.raises(RuntimeError):
+            run_create("x", repo_root=repo, image="i")
+        server.stop.assert_called_once()
