@@ -114,6 +114,18 @@ class TestDockerExecutor:
         assert env_file.exists()
         assert env_file.read_text() == ""
 
+    def test_zipsa_mcp_entry_has_generous_timeout(self, tmp_path):
+        """HITL tools block on the human; the zipsa MCP server entry must
+        carry a per-call timeout well above Claude Code's ~60s default,
+        else `ask` dies when the user takes a moment to answer."""
+        import json as _json
+        skill_dir = Path(__file__).parent / "fixtures/manifests/minimal.yaml"
+        skill = Skill.load(skill_dir)
+        claude_json_path = skill.build_claude_json(output_dir=tmp_path, hitl_port=12345)
+        cfg = _json.loads(claude_json_path.read_text())
+        ws = next(iter(cfg["projects"].values()))
+        assert ws["mcpServers"]["zipsa"]["timeout"] >= 300_000
+
     def test_build_docker_command_uses_env_file(self, tmp_path):
         """Docker command should use --env-file instead of -e flags."""
         executor = DockerExecutor()

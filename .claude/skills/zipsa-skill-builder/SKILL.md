@@ -65,28 +65,52 @@ platform feature — don't hack around it.
 
 ### 5. Test for real
 
+**Inside `zipsa create`** (you're in the runtime container, files are
+in a staging dir): call **`mcp__zipsa__exec`** with the staging path
+and a representative query. The host runs the skill the real way (a
+fresh runtime container per phase) and hands back the result —
+read its `phases[]` and `result`. If the skill reads a credential or
+data file, pass `mounts` (HOST:CONTAINER strings, e.g.
+`~/.zipsa/credentials/x.json:/mnt/creds/x.json`) so it's testable for
+real.
+
+**You run headless** — whenever you need the user to do or answer
+something (set up an API token, confirm a name, paste a value), you
+MUST call `mcp__zipsa__ask`/`confirm`/`choose` to block and wait.
+Never just print a request and end your turn: if you stop calling
+tools the session ends and the user can't reply.
+
+**Outside** (direct Claude Code session, files already under skills/):
 ```bash
 zipsa exec <skill-path> "<representative query>" --local   # fast loop
 zipsa exec <skill-path> "<representative query>"           # docker, the real thing
 ```
 
-Run at least: one happy path per language the user will actually use
-(e.g. a Korean and an English query if the skill is language-aware),
+Either way, run at least: one happy path per language the user will
+actually use (e.g. Korean and English if the skill is language-aware),
 the empty-query case, and one failure case (bad input → clean exit 1
-+ readable stderr). Read the `phases[]` timings — a code phase taking
-LLM-scale time is a smell.
++ readable stderr). A code phase taking LLM-scale time is a smell.
 
 Iterate with the user until they're satisfied. Their feedback is new
 raw intent — go back to step 1's discipline (ask, don't guess) for
 anything vague.
 
-### 6. Done means
+### 6. Finalize
 
-- [ ] `zipsa exec` (docker mode) passes the happy path
+The skill name is decided **last** — only once the user is happy. Until
+then the draft has no committed name.
+
+**Inside `zipsa create`**: propose a kebab-case name based on what you
+built, confirm it with the user, then call **`mcp__zipsa__promote`**
+with the staging path + name. That moves the skill into skills/<name>/.
+
+**Outside**: place the files at skills/<name>/ yourself.
+
+Done means:
+- [ ] the real (docker) run passes the happy path
 - [ ] failure case exits non-zero with a clear stderr message
 - [ ] `SKILL.md` matches what the skill actually does
-- [ ] no dead files in the skill dir (no manifest.yaml, no
-      pyproject.toml, no leftover templates)
+- [ ] no dead files (no manifest.yaml, no pyproject.toml, no templates)
 
 ## Migrating a legacy skill
 
