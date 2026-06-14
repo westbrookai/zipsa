@@ -75,13 +75,15 @@ class TestScheduleList:
     def test_list(self, mock_get):
         sched = MagicMock()
         sched.list.return_value = [
-            ScheduledJob(label="umbrella", command=["zipsa", "exec", "/x"]),
+            ScheduledJob(label="umbrella", command=["zipsa", "exec", "/x"],
+                         schedule="daily 08:00"),
         ]
         mock_get.return_value = sched
 
         result = runner.invoke(app, ["schedule", "list"])
         assert result.exit_code == 0
         assert "umbrella" in result.output
+        assert "daily 08:00" in result.output  # WHEN it runs is shown
 
 
 class TestScheduleRemove:
