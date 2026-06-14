@@ -13,6 +13,10 @@ This Docker image provides a ready-to-use environment for running SKILL-based ag
 - **Codex**: Alternative agent runtime
 - **Gemini CLI**: Google's Gemini agent
 
+It also bundles the language toolchains `zipsa exec` dispatches skill
+phases with: **Python** (`uv`/`pipx`), **Node.js** (`npx`, for `.js`/`.ts`
+via `tsx`), and **Go** (`go run`, for `.go` phases).
+
 **Base Image:** Debian Slim (Multi-stage Build)
 **Image Size:** ~1.9GB (54.9% reduction from initial 4.2GB)
 **Use Case:** Runtime-agnostic SKILL execution

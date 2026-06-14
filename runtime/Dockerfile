@@ -46,6 +46,12 @@ ARG FX_VERSION="35.0.0"
 ARG YQ_VERSION="4.53.2"
 ARG UV_VERSION="0.11.15"
 
+# Go toolchain (for .go skill phases run via `go run`)
+ARG GO_VERSION="1.26.4"
+# Per-arch tarball checksums (https://go.dev/dl/?mode=json)
+ARG GO_SHA256_AMD64="1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f"
+ARG GO_SHA256_ARM64="ef758ae7c6cf9267c9c0ef080b8965f453d89ab2d25d9eb22de4405925238768"
+
 #-----------------------------------------------------------
 # Stage 1: Builder - Node.js + all npm packages
 #-----------------------------------------------------------
@@ -124,6 +130,9 @@ ARG GEMINI_CLI_VERSION
 ARG FX_VERSION
 ARG YQ_VERSION
 ARG UV_VERSION
+ARG GO_VERSION
+ARG GO_SHA256_AMD64
+ARG GO_SHA256_ARM64
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="Zipsa Runtime"
@@ -198,6 +207,28 @@ RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}
     -o /usr/local/bin/yq && \
     chmod +x /usr/local/bin/yq && \
     yq --version
+
+# Install Go toolchain (pinned, checksum-verified) for `.go` skill
+# phases, which `zipsa exec` dispatches via `go run`. Trim the docs/
+# tests/api trees (unused for compilation) to claw back ~30MB.
+RUN ARCH="$(dpkg --print-architecture)" && \
+    case "${ARCH}" in \
+        amd64) GO_SHA256="${GO_SHA256_AMD64}" ;; \
+        arm64) GO_SHA256="${GO_SHA256_ARM64}" ;; \
+        *) echo "unsupported architecture for Go: ${ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz && \
+    echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz && \
+    rm -rf /usr/local/go/test /usr/local/go/api /usr/local/go/doc && \
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
+    ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt && \
+    go version
+
+# Pin Go to the bundled toolchain — never auto-download a different one
+# (a skill's go.mod could otherwise trigger a network fetch at run time).
+ENV GOTOOLCHAIN=local
 
 # Create non-root user
 RUN groupadd -r agent -g 1000 && \
