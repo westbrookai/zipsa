@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -458,3 +459,53 @@ def run_phases(
         prev = outcome.result or {}
 
     return results
+
+
+def new_run_dir(skill_name: str) -> Path:
+    """Create and return a fresh run directory for a `zipsa exec` run:
+    ~/.zipsa/<skill_name>/runs/<timestamp>/. Mirrors the legacy run dir
+    convention (minus the @version, which exec skills don't carry)."""
+    from . import paths as zipsa_paths
+
+    ts = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
+    run_dir = zipsa_paths.zipsa_home() / skill_name / "runs" / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def write_run_record(
+    run_dir: Path,
+    summary: dict,
+    results: list[ExecResult],
+    *,
+    phases: "list[tuple[str, str]] | None" = None,
+) -> None:
+    """Persist what exec already has in memory: the summary dict plus the
+    per-phase stdout/stderr. Best-effort — a logging failure must not
+    sink the run.
+
+    `phases` is a list of (id, slug) parallel to `results`, used for
+    `=== phase <id>.<slug> ===` markers in the logs.
+    """
+    try:
+        (run_dir / "result.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2)
+        )
+
+        def _stream(attr: str) -> str:
+            chunks = []
+            for i, r in enumerate(results):
+                if phases and i < len(phases):
+                    pid, slug = phases[i]
+                    chunks.append(f"=== phase {pid}.{slug} ===\n")
+                else:
+                    chunks.append(f"=== phase {i + 1} ===\n")
+                chunks.append(getattr(r, attr) or "")
+                if not getattr(r, attr, "").endswith("\n"):
+                    chunks.append("\n")
+            return "".join(chunks)
+
+        (run_dir / "stdout.log").write_text(_stream("stdout"))
+        (run_dir / "stderr.log").write_text(_stream("stderr"))
+    except OSError:
+        pass
