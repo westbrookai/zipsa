@@ -136,6 +136,21 @@ else
     print_fail "Gemini CLI not found or not executable"
 fi
 
+# Test 9b: Go toolchain can compile and run a single-file program
+# (`zipsa exec` dispatches .go phases via `go run`, so a working
+# compiler + writable build cache is the real requirement — not just
+# `go version`).
+print_test "Go can 'go run' a single-file program"
+GO_PROGRAM='package main; import "fmt"; func main() { fmt.Println("go-ok") }'
+GO_OUTPUT=$(docker run --rm "$IMAGE_NAME" sh -c \
+    "printf '%s' '${GO_PROGRAM}' > /tmp/main.go && go run /tmp/main.go" 2>&1 || true)
+if [ "$GO_OUTPUT" = "go-ok" ]; then
+    GO_VERSION=$(docker run --rm "$IMAGE_NAME" go version 2>&1 | head -n1)
+    print_pass "Go works: ${GO_VERSION}"
+else
+    print_fail "Go could not run a program (output: ${GO_OUTPUT})"
+fi
+
 # Test 10: MCP servers can be invoked (npx test)
 print_test "MCP servers can be invoked via npx"
 # Test by checking if npx can download the package (don't run it, just verify it can be fetched)
