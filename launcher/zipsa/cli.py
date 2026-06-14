@@ -500,12 +500,12 @@ def schedule_add(
     today) to run it. Pass the same --mount you'd use with `zipsa exec`
     for credential files.
     """
-    from .scheduling import CronError, SchedulerUnavailable, build_exec_command
+    from .scheduling import (
+        CronError, SchedulerUnavailable, build_exec_command,
+        resolve_zipsa_command,
+    )
 
-    import shutil as _shutil
-    import sys as _sys
-    zipsa = ["zipsa"] if _shutil.which("zipsa") else [_sys.executable, "-m", "zipsa"]
-
+    zipsa = resolve_zipsa_command()
     skill_path = path.resolve()
     command = build_exec_command(
         zipsa=zipsa,
