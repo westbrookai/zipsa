@@ -652,7 +652,12 @@ def exec_skill(
     phase's `prev`). No LLM, no manifest. Result prints as JSON.
     """
     from .core.phase_discovery import PhaseDiscoveryError, discover_phases
-    from .exec_runner import ExecRunnerError, run_phases
+    from .exec_runner import (
+        ExecRunnerError,
+        new_run_dir,
+        run_phases,
+        write_run_record,
+    )
 
     if not path.is_dir():
         typer.echo(f"Error: skill directory not found: {path}", err=True)
@@ -665,15 +670,24 @@ def exec_skill(
         raise typer.Exit(1)
 
     skill_root = path.resolve()
+    # One run dir per invocation holds result.json + stdout/stderr logs
+    # + artifacts/ (unless --out redirects artifacts elsewhere).
+    # Scheduled runs are otherwise invisible — this is the only record
+    # they leave behind.
+    run_dir = new_run_dir(skill_root.name)
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = out
+    else:
+        artifacts_dir = run_dir / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         results = run_phases(
             phases,
             skill_name=skill_root.name,
             user_query=user_query or "",
-            out_dir=out,
+            out_dir=artifacts_dir,
             skill_root=skill_root,
             docker_image=None if local else image,
             extra_mounts=[_parse_mount_spec(m) for m in mount or []],
@@ -683,6 +697,29 @@ def exec_skill(
         raise typer.Exit(1)
 
     last = results[-1]
+    summary = {
+        "skill_name": last.skill_name,
+        "mode": last.mode,
+        "result": last.result,
+        "exit_code": last.exit_code,
+        "duration_ms": sum(r.duration_ms for r in results),
+        "out_dir": last.out_dir,
+        "run_dir": str(run_dir),
+        "phases": [
+            {
+                "id": p.id_str,
+                "slug": p.slug,
+                "exit_code": r.exit_code,
+                "duration_ms": r.duration_ms,
+            }
+            for p, r in zip(phases, results)
+        ],
+    }
+    write_run_record(
+        run_dir, summary, results,
+        phases=[(p.id_str, p.slug) for p in phases[:len(results)]],
+    )
+
     if last.exit_code != 0:
         failed_phase = phases[len(results) - 1]
         typer.echo(
@@ -705,27 +742,7 @@ def exec_skill(
             )
         raise typer.Exit(last.exit_code)
 
-    typer.echo(json.dumps(
-        {
-            "skill_name": last.skill_name,
-            "mode": last.mode,
-            "result": last.result,
-            "exit_code": last.exit_code,
-            "duration_ms": sum(r.duration_ms for r in results),
-            "out_dir": last.out_dir,
-            "phases": [
-                {
-                    "id": p.id_str,
-                    "slug": p.slug,
-                    "exit_code": r.exit_code,
-                    "duration_ms": r.duration_ms,
-                }
-                for p, r in zip(phases, results)
-            ],
-        },
-        ensure_ascii=False,
-        indent=2,
-    ))
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 @app.command()

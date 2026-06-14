@@ -978,6 +978,34 @@ class TestLlmPhase:
         assert "claude" in argv
 
     @patch("zipsa.exec_runner.subprocess.run")
+    def test_local_md_phase_disables_session_persistence(self, mock_run, tmp_path):
+        """`claude -p` for an LLM phase must not persist a session — in
+        local mode its cwd is the skill dir, so a persisted session
+        lands in ~/.claude/projects/<skill> and pollutes the user's
+        session tree (agenthud then surfaces it)."""
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.greet.md"
+        phase.write_text("# greet\n")
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "out",
+            docker_image=None,  # local
+        )
+
+        argv = mock_run.call_args.args[0]
+        assert argv[:2] == ["claude", "-p"]
+        assert "--no-session-persistence" in argv
+
+    @patch("zipsa.exec_runner.subprocess.run")
     def test_docker_md_phase_no_env_file_when_absent(self, mock_run, tmp_path):
         skill = tmp_path / "s"
         dist = skill / "zipsa-dist"
@@ -1049,3 +1077,47 @@ class TestRunnersTable:
     def test_md_not_in_runners(self):
         """`.md` is an LLM phase — handled (refused) separately."""
         assert "md" not in RUNNERS
+
+
+def _fake_result(*, stdout="", stderr="", exit_code=0):
+    from zipsa.exec_runner import ExecResult
+    return ExecResult(
+        skill_name="x", mode="local", result=None, exit_code=exit_code,
+        duration_ms=1, out_dir="/tmp", stdout=stdout, stderr=stderr,
+    )
+
+
+class TestRunRecord:
+    """zipsa exec persists a lightweight run record (run lacked nothing;
+    exec was throwing away what it already had in memory)."""
+
+    def test_new_run_dir_under_zipsa_home(self, tmp_path, monkeypatch):
+        from zipsa.exec_runner import new_run_dir
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+
+        d = new_run_dir("umbrella")
+
+        assert d.is_dir()
+        assert d.parent == tmp_path / "umbrella" / "runs"
+
+    def test_write_run_record(self, tmp_path):
+        from zipsa.exec_runner import write_run_record
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        summary = {"skill_name": "x", "exit_code": 0, "result": {"ok": True}}
+        results = [
+            _fake_result(stdout="phase1 out\n{}\n", stderr=""),
+            _fake_result(stdout="phase2 out\n", stderr="warn\n", exit_code=2),
+        ]
+
+        write_run_record(run_dir, summary, results,
+                         phases=[("1", "fetch"), ("2", "send")])
+
+        import json as _json
+        saved = _json.loads((run_dir / "result.json").read_text())
+        assert saved == summary
+        out = (run_dir / "stdout.log").read_text()
+        assert "phase1 out" in out and "phase2 out" in out
+        assert "1.fetch" in out and "2.send" in out   # phase markers
+        err = (run_dir / "stderr.log").read_text()
+        assert "warn" in err

@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,7 +110,12 @@ def _runner_for(phase_path: Path) -> list[str]:
 
 # claude CLI invocation for .md (LLM) phases. --max-turns 1 because
 # LLM phases are pure reasoning — no tools, no loop.
-_LLM_COMMAND = ["claude", "-p", "--max-turns", "1"]
+# --no-session-persistence: an LLM phase is a one-shot inference, not a
+# conversation. In local mode claude's cwd is the skill dir, so a
+# persisted session would land in ~/.claude/projects/<skill> and
+# pollute the user's session tree (agenthud would surface it as a stray
+# session under the skill).
+_LLM_COMMAND = ["claude", "-p", "--max-turns", "1", "--no-session-persistence"]
 
 
 def _build_llm_prompt(md_text: str, *, ctx: dict, prev: dict) -> str:
@@ -458,3 +464,53 @@ def run_phases(
         prev = outcome.result or {}
 
     return results
+
+
+def new_run_dir(skill_name: str) -> Path:
+    """Create and return a fresh run directory for a `zipsa exec` run:
+    ~/.zipsa/<skill_name>/runs/<timestamp>/. Mirrors the legacy run dir
+    convention (minus the @version, which exec skills don't carry)."""
+    from . import paths as zipsa_paths
+
+    ts = datetime.now().astimezone().strftime("%Y-%m-%d_%H%M%S_%f")[:23]
+    run_dir = zipsa_paths.zipsa_home() / skill_name / "runs" / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def write_run_record(
+    run_dir: Path,
+    summary: dict,
+    results: list[ExecResult],
+    *,
+    phases: "list[tuple[str, str]] | None" = None,
+) -> None:
+    """Persist what exec already has in memory: the summary dict plus the
+    per-phase stdout/stderr. Best-effort — a logging failure must not
+    sink the run.
+
+    `phases` is a list of (id, slug) parallel to `results`, used for
+    `=== phase <id>.<slug> ===` markers in the logs.
+    """
+    try:
+        (run_dir / "result.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2)
+        )
+
+        def _stream(attr: str) -> str:
+            chunks = []
+            for i, r in enumerate(results):
+                if phases and i < len(phases):
+                    pid, slug = phases[i]
+                    chunks.append(f"=== phase {pid}.{slug} ===\n")
+                else:
+                    chunks.append(f"=== phase {i + 1} ===\n")
+                chunks.append(getattr(r, attr) or "")
+                if not getattr(r, attr, "").endswith("\n"):
+                    chunks.append("\n")
+            return "".join(chunks)
+
+        (run_dir / "stdout.log").write_text(_stream("stdout"))
+        (run_dir / "stderr.log").write_text(_stream("stderr"))
+    except OSError:
+        pass

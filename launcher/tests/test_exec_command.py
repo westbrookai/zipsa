@@ -342,3 +342,47 @@ class TestExecMultiPhase:
         payload = json.loads(result.output)
         assert payload["result"]["lang"] == "python"
         assert len(payload["phases"]) == 1
+
+
+class TestExecRunLogging:
+    """`zipsa exec` persists a run record under ZIPSA_HOME so scheduled
+    (and ad-hoc) runs are observable — exec used to discard everything."""
+
+    def test_run_record_written(self, tmp_path, monkeypatch):
+        import os
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        skill = _make_skill(tmp_path, "logged", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, ["exec", str(skill), "hi", "--local"])
+        assert result.exit_code == 0, result.output
+
+        runs = home / "logged" / "runs"
+        assert runs.is_dir()
+        run_dirs = list(runs.iterdir())
+        assert len(run_dirs) == 1
+        rd = run_dirs[0]
+        saved = json.loads((rd / "result.json").read_text())
+        assert saved["skill_name"] == "logged"
+        assert saved["result"]["q"] == "hi"
+        assert (rd / "stdout.log").exists()
+        assert (rd / "stderr.log").exists()
+        # the printed JSON points at the run dir
+        assert str(rd) in result.output
+
+    def test_failed_run_still_records(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        skill = _make_skill(tmp_path, "boom", {
+            "1.fail.py": "import sys\nsys.stderr.write('kaboom\\n')\nsys.exit(1)\n",
+        })
+
+        result = runner.invoke(app, ["exec", str(skill), "--local"])
+        assert result.exit_code == 1
+
+        runs = home / "boom" / "runs"
+        assert runs.is_dir()
+        rd = next(runs.iterdir())
+        saved = json.loads((rd / "result.json").read_text())
+        assert saved["exit_code"] == 1
+        assert "kaboom" in (rd / "stderr.log").read_text()
