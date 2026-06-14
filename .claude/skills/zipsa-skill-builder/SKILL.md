@@ -69,7 +69,16 @@ platform feature — don't hack around it.
 in a staging dir): call **`mcp__zipsa__exec`** with the staging path
 and a representative query. The host runs the skill the real way (a
 fresh runtime container per phase) and hands back the result —
-read its `phases[]` and `result`.
+read its `phases[]` and `result`. If the skill reads a credential or
+data file, pass `mounts` (HOST:CONTAINER strings, e.g.
+`~/.zipsa/credentials/x.json:/mnt/creds/x.json`) so it's testable for
+real.
+
+**You run headless** — whenever you need the user to do or answer
+something (set up an API token, confirm a name, paste a value), you
+MUST call `mcp__zipsa__ask`/`confirm`/`choose` to block and wait.
+Never just print a request and end your turn: if you stop calling
+tools the session ends and the user can't reply.
 
 **Outside** (direct Claude Code session, files already under skills/):
 ```bash

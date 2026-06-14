@@ -24,7 +24,10 @@ class ExecSkillHandler:
     def __init__(self, docker_image: str) -> None:
         self._image = docker_image
 
-    def run(self, *, staging_path: str, args: str = "") -> dict:
+    def run(
+        self, *, staging_path: str, args: str = "",
+        mounts: "list[str] | None" = None,
+    ) -> dict:
         path = Path(staging_path).resolve()
 
         staging_root = (zipsa_paths.zipsa_home() / "staging").resolve()
@@ -41,6 +44,18 @@ class ExecSkillHandler:
                 "exec_staging_not_found", f"no such staging dir: {path}",
             )
 
+        # Parse HOST[:CONTAINER] mount specs so a draft that needs a
+        # credential/data file (e.g. telegram.json) is testable for real.
+        extra_mounts: list[tuple[Path, str]] = []
+        for spec in mounts or []:
+            host_str, sep, container = spec.partition(":")
+            host = Path(host_str).expanduser().resolve()
+            if not host.exists():
+                return self._fail(
+                    "exec_mount_not_found", f"mount host path missing: {host}",
+                )
+            extra_mounts.append((host, container if sep else str(host)))
+
         try:
             phases = discover_phases(path)
         except PhaseDiscoveryError as e:
@@ -52,6 +67,7 @@ class ExecSkillHandler:
             user_query=args,
             skill_root=path,
             docker_image=self._image,
+            extra_mounts=extra_mounts,
         )
 
         last = results[-1]

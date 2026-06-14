@@ -75,13 +75,27 @@ def build_create_prompt(intent: str, staging_path: Path) -> str:
         f"phase files into {staging_path}/zipsa-dist/ plus a short SKILL.md.\n\n"
         f"Test by calling mcp__zipsa__exec with staging_path={staging_path} —\n"
         "this runs the skill the real way (a fresh runtime container per\n"
-        "phase) and returns the result. Iterate until it works and the user\n"
+        "phase) and returns the result. If the skill reads a credential or\n"
+        "data file, pass mounts (HOST:CONTAINER strings) to exec so the file\n"
+        "is available during the test. Iterate until it works and the user\n"
         "is happy.\n\n"
+        "IMPORTANT: you run headless — whenever you need the user to do or\n"
+        "answer something (set up a bot, paste a token, confirm a name), you\n"
+        "MUST call mcp__zipsa__ask/confirm/choose to block and wait. Never\n"
+        "just print a request and stop: if you stop calling tools the session\n"
+        "ends and the user cannot reply.\n\n"
         "Only when the user agrees on a name, call mcp__zipsa__promote with\n"
         f"staging_path={staging_path} and the chosen kebab-case name — this\n"
         "moves the skill into the repo. The name is decided last; it can\n"
         "change freely until you call promote.\n"
     )
+
+
+# Per-call timeout (ms) for the create MCP server's tools. ask/confirm/
+# choose block on the human; exec runs a full per-phase container test.
+# Claude Code's default (~60s first-byte) is far too short — verified that
+# a generous per-server timeout lets a multi-minute tool call survive.
+_MCP_TOOL_TIMEOUT_MS = 600_000
 
 
 def build_mcp_config(port: int, token: str) -> dict:
@@ -96,6 +110,7 @@ def build_mcp_config(port: int, token: str) -> dict:
                 "headersHelper": (
                     f'echo \'{{"Authorization": "Bearer {token}"}}\''
                 ),
+                "timeout": _MCP_TOOL_TIMEOUT_MS,
             }
         }
     }

@@ -103,11 +103,16 @@ class TestTools:
         s = CreateServer(_io_(), exec_h, _FakeHandler({}))
         s.start()
         try:
-            data = _mcp_call(s, "exec",
-                             {"staging_path": "/x/staging/a", "args": "q"})
+            data = _mcp_call(s, "exec", {
+                "staging_path": "/x/staging/a", "args": "q",
+                "mounts": ["/h/c.json:/mnt/c.json"],
+            })
             text = data["result"]["content"][0]["text"]
             assert json.loads(text)["result"] == {"hi": 1}
-            assert exec_h.calls == [{"staging_path": "/x/staging/a", "args": "q"}]
+            assert exec_h.calls == [{
+                "staging_path": "/x/staging/a", "args": "q",
+                "mounts": ["/h/c.json:/mnt/c.json"],
+            }]
         finally:
             s.stop()
 

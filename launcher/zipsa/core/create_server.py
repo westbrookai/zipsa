@@ -97,12 +97,20 @@ class CreateServer:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         @mcp.tool(name="exec")
-        def exec_skill(staging_path: str, args: str = "") -> dict:
+        def exec_skill(
+            staging_path: str, args: str = "",
+            mounts: list[str] | None = None,
+        ) -> dict:
             """Test the draft skill: run it through the real `zipsa exec`
             (docker mode, a fresh runtime container per phase) and return
             the result. `staging_path` is the skill dir; `args` is an
-            optional user_query to exercise it with."""
-            return exec_handler.run(staging_path=staging_path, args=args)
+            optional user_query to exercise it with; `mounts` is a list of
+            HOST:CONTAINER strings (e.g.
+            "~/.zipsa/credentials/telegram.json:/mnt/creds/telegram.json")
+            for skills that read a credential/data file."""
+            return exec_handler.run(
+                staging_path=staging_path, args=args, mounts=mounts or [],
+            )
 
         @mcp.tool(name="promote")
         def promote_skill(staging_path: str, name: str) -> dict:

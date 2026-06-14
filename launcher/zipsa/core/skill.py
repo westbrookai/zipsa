@@ -7,6 +7,11 @@ import yaml
 
 from .models import SkillManifest
 
+# Per-call timeout (ms) for the zipsa MCP server's tools as seen by Claude
+# Code. HITL tools (ask/confirm/choose) block on the human; the client's
+# default (~60s) is too short for thoughtful answers. 10 minutes per call.
+_HITL_TOOL_TIMEOUT_MS = 600_000
+
 
 class Skill:
     """Skill definition loader and configuration builder."""
@@ -226,6 +231,10 @@ class Skill:
                 "headersHelper": (
                     f'echo \'{{"Authorization": "Bearer {mcp_token_override}"}}\''
                 ),
+                # HITL tools block on the human; without a generous per-call
+                # timeout Claude Code's default (~60s first-byte) kills the
+                # tool call when the user takes a moment to answer.
+                "timeout": _HITL_TOOL_TIMEOUT_MS,
             }
         elif hitl_port is not None:
             # Top-level run path: point at our own HitlServer; token is read
@@ -236,6 +245,7 @@ class Skill:
                 "headersHelper": (
                     'echo \'{"Authorization": "Bearer \'"$ZIPSA_HITL_TOKEN"\'"}\''
                 ),
+                "timeout": _HITL_TOOL_TIMEOUT_MS,
             }
 
         claude_config = {

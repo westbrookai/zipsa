@@ -65,6 +65,12 @@ class TestBuildMcpConfig:
         assert "host.docker.internal:54321/mcp" in zipsa["url"]
         assert "tok-xyz" in zipsa["headersHelper"]
 
+    def test_generous_tool_timeout(self):
+        """HITL/exec tools block minutes; the per-server timeout must be
+        well above Claude Code's ~60s default."""
+        cfg = build_mcp_config(port=1, token="t")
+        assert cfg["mcpServers"]["zipsa"]["timeout"] >= 300_000
+
 
 class TestBuildDockerArgv:
     def test_command_shape(self, tmp_path):
