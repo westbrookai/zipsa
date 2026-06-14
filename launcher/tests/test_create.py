@@ -86,13 +86,18 @@ class TestBuildDockerArgv:
 
         assert argv[0:2] == ["docker", "run"]
         assert "--rm" in argv
-        assert "-it" in argv
+        # headless: no stdin into the container (host stdin is the HITL
+        # reader's); no TTY. stdout still streams via the subprocess.
+        assert "-i" not in argv
+        assert "-t" not in argv
         assert f"{staging}:{staging}:rw" in argv
         assert f"{repo}:{repo}:ro" in argv
         assert any(a.startswith(f"{mcpcfg}:") and a.endswith(":ro") for a in argv)
         assert "img:test" in argv
-        assert "claude" in argv
-        assert "do the thing" in argv
+        # headless claude: claude -p "<prompt>"
+        ci = argv.index("claude")
+        assert argv[ci + 1] == "-p"
+        assert argv[ci + 2] == "do the thing"
         assert "--mcp-config" in argv
         assert "--strict-mcp-config" in argv
         assert "bypassPermissions" in argv

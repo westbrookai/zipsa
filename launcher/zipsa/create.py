@@ -1,9 +1,13 @@
 """`zipsa create` — interactive containerized skill authoring (Step 3).
 
-The authoring agent runs INSIDE the pinned runtime container (so it's
-the same claude version skills run on), converses with the user, and
-self-tests via two host MCP tools:
+The authoring agent runs headless (`claude -p`) INSIDE the pinned
+runtime container (so it's the same claude version skills run on) and
+reaches back to a host MCP server for everything — exactly the
+mechanism the legacy `zipsa run` path uses, with three extra tools:
 
+- `mcp__zipsa__ask/confirm/choose` — converse with the host user (HITL,
+  routed to the host terminal). This is how it clarifies + iterates;
+  there is no interactive TTY into the container.
 - `mcp__zipsa__exec(staging)` — the host runs the real `zipsa exec`
   (docker, a fresh runtime container per phase) and returns the result.
 - `mcp__zipsa__promote(staging, name)` — the host names + moves the
@@ -99,14 +103,19 @@ def build_docker_argv(
     prompt: str,
     env_file: Path | None,
 ) -> list[str]:
-    """Build the interactive `docker run` for the authoring session.
+    """Build the headless `docker run` for the authoring session.
 
-    Pure function — unit-testable without docker. Staging is mounted rw
-    at its own host path; the repo ro (for AUTHORING.md + the skill);
-    the mcp-config ro; workdir = repo so relative refs + skill discovery
-    resolve. claude runs interactively (-it) with the prompt seeded.
+    Pure function — unit-testable without docker. claude runs headless
+    (`-p`) — there is no interactive TTY into the container; the agent
+    converses with the host user via the ask/confirm/choose MCP tools.
+    No `-i`/`-t`: the container needs no stdin (the prompt is an arg,
+    the conversation is over MCP), and leaving stdin to the container
+    would race the host HITL reader for the user's keystrokes. The
+    container's stdout still streams back (subprocess inherits it).
+    Staging is mounted rw at its own host path; the repo ro (for
+    AUTHORING.md + the skill); the mcp-config ro; workdir = repo.
     """
-    argv = ["docker", "run", "--rm", "-it"]
+    argv = ["docker", "run", "--rm"]
     if env_file is not None:
         argv += ["--env-file", str(env_file)]
     if platform.system() == "Linux":
@@ -117,7 +126,7 @@ def build_docker_argv(
         "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
         "-w", str(repo_root),
         image,
-        "claude", prompt,
+        "claude", "-p", prompt,
         "--mcp-config", _CONTAINER_MCP_CONFIG,
         "--strict-mcp-config",
         "--permission-mode", "bypassPermissions",
@@ -139,7 +148,11 @@ def run_create(
     staging dir, writes the mcp-config, runs the interactive container,
     and tears the server down afterwards.
     """
+    import sys
+    import threading
+
     from . import paths as zipsa_paths
+    from .core.hitl_mcp import HitlIO
 
     if env_file is None:
         env_file = zipsa_paths.global_env_file()
@@ -148,7 +161,16 @@ def run_create(
     staging_root.mkdir(parents=True, exist_ok=True)
     staging_path = Path(tempfile.mkdtemp(prefix="draft-", dir=staging_root))
 
+    # HITL routes the agent's ask/confirm/choose to the host terminal —
+    # the conversation channel (claude runs headless in the container).
+    hitl_io = HitlIO(
+        stdin=sys.stdin,
+        stdout=sys.stdout,
+        stdout_lock=threading.Lock(),
+        is_interactive=sys.stdin.isatty(),
+    )
     server = CreateServer(
+        hitl_io,
         ExecSkillHandler(docker_image=image),
         PromoteSkillHandler(dest_root=repo_root / "skills"),
     )
@@ -166,7 +188,10 @@ def run_create(
             prompt=build_create_prompt(intent, staging_path),
             env_file=env_file if env_file.exists() else None,
         )
-        proc = subprocess.run(argv)
+        # stdin=DEVNULL: the host terminal's stdin belongs exclusively to
+        # the HITL reader (CreateServer's ask/confirm/choose), not the
+        # container. stdout/stderr inherit so the agent's progress shows.
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
         return proc.returncode
     finally:
         server.stop()

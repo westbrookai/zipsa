@@ -7,13 +7,25 @@ are injected so these tests never touch docker or the filesystem move.
 
 from __future__ import annotations
 
+import io as _io
 import json
 import socket
+import threading
 
 import httpx
 import pytest
 
 from zipsa.core.create_server import CreateServer
+from zipsa.core.hitl_mcp import HitlIO
+
+
+def _io_(stdin_text: str = ""):
+    return HitlIO(
+        stdin=_io.StringIO(stdin_text),
+        stdout=_io.StringIO(),
+        stdout_lock=threading.Lock(),
+        is_interactive=True,
+    )
 
 
 class _FakeHandler:
@@ -62,7 +74,7 @@ def _mcp_call(server, name, arguments):
 
 class TestLifecycle:
     def test_start_assigns_port_and_token(self):
-        s = CreateServer(_FakeHandler({}), _FakeHandler({}))
+        s = CreateServer(_io_(), _FakeHandler({}), _FakeHandler({}))
         s.start()
         try:
             assert isinstance(s.port, int) and s.port > 0
@@ -71,7 +83,7 @@ class TestLifecycle:
             s.stop()
 
     def test_listening_then_released(self):
-        s = CreateServer(_FakeHandler({}), _FakeHandler({}))
+        s = CreateServer(_io_(), _FakeHandler({}), _FakeHandler({}))
         s.start()
         port = s.port
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -88,7 +100,7 @@ class TestLifecycle:
 class TestTools:
     def test_exec_tool_delegates_to_handler(self):
         exec_h = _FakeHandler({"status": "ok", "result": {"hi": 1}})
-        s = CreateServer(exec_h, _FakeHandler({}))
+        s = CreateServer(_io_(), exec_h, _FakeHandler({}))
         s.start()
         try:
             data = _mcp_call(s, "exec",
@@ -101,7 +113,7 @@ class TestTools:
 
     def test_promote_tool_delegates_to_handler(self):
         promote_h = _FakeHandler({"status": "ok", "path": "/repo/skills/foo"})
-        s = CreateServer(_FakeHandler({}), promote_h)
+        s = CreateServer(_io_(), _FakeHandler({}), promote_h)
         s.start()
         try:
             data = _mcp_call(s, "promote",
@@ -112,10 +124,21 @@ class TestTools:
         finally:
             s.stop()
 
+    def test_ask_tool_routes_to_host_terminal(self):
+        """The conversation channel: ask reads the host user's reply via
+        HitlIO (claude runs headless, talks back over MCP)."""
+        s = CreateServer(_io_("seoul\n"), _FakeHandler({}), _FakeHandler({}))
+        s.start()
+        try:
+            data = _mcp_call(s, "ask", {"prompt": "Which city?"})
+            assert data["result"]["content"][0]["text"] == "seoul"
+        finally:
+            s.stop()
+
 
 class TestAuth:
     def test_missing_token_rejected(self):
-        s = CreateServer(_FakeHandler({}), _FakeHandler({}))
+        s = CreateServer(_io_(), _FakeHandler({}), _FakeHandler({}))
         s.start()
         try:
             r = httpx.post(

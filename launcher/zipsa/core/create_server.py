@@ -1,14 +1,21 @@
 """CreateServer — focused host MCP server for `zipsa create`.
 
-Exposes exactly two tools to the authoring container: `exec` (test the
-draft via the real host `zipsa exec`) and `promote` (name + move into
-the repo). Deliberately NOT the full HitlServer surface — the authoring
-agent needs only these two.
+The authoring agent runs headless (`claude -p`) inside the runtime
+container and reaches back here over HTTP MCP for everything it needs:
 
-Reuses the legacy run path's building blocks (free-port picker, allowed
-host list, Bearer-token middleware) but stays a separate class so the
-DockerExecutor run path is untouched. Handlers are injected so the
-server is testable without docker or real filesystem moves.
+- ask / confirm / choose — converse with the host user (HITL), exactly
+  the mechanism the legacy `zipsa run` path uses (routed to the host
+  terminal via HitlIO).
+- exec — test the draft via the real host `zipsa exec` (per-phase
+  container).
+- promote — name + move the draft into the repo.
+
+Deliberately NOT the full HitlServer surface (no memory / run_skill /
+write_skill_files). Reuses the legacy run path's building blocks
+(free-port picker, allowed-host list, Bearer-token middleware, HITL
+handlers) but stays a separate class so DockerExecutor is untouched.
+Handlers are injected so the server is testable without docker or real
+filesystem moves.
 """
 
 from __future__ import annotations
@@ -23,16 +30,19 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .caller_context import CallerContextMiddleware, CallerInfo
+from .hitl_mcp import AskHandler, ChooseHandler, ConfirmHandler, HitlIO, HitlUnattended
 from .hitl_runner import _ALLOWED_HOSTS, _pick_free_port
 
 
 class CreateServer:
     def __init__(
         self,
+        hitl_io: HitlIO,
         exec_handler,
         promote_handler,
         caller: "CallerInfo | None" = None,
     ) -> None:
+        self._io = hitl_io
         self._exec_handler = exec_handler
         self._promote_handler = promote_handler
         self._caller = caller or CallerInfo("skill-builder", "create")
@@ -58,6 +68,33 @@ class CreateServer:
 
         exec_handler = self._exec_handler
         promote_handler = self._promote_handler
+        ask_h = AskHandler(self._io)
+        confirm_h = ConfirmHandler(self._io)
+        choose_h = ChooseHandler(self._io)
+
+        @mcp.tool()
+        def ask(prompt: str) -> str:
+            """Ask the host user a free-text question and return their reply."""
+            try:
+                return ask_h.run(prompt=prompt)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
+        @mcp.tool()
+        def confirm(message: str, default: bool | None = None) -> bool:
+            """Ask the host user a yes/no question."""
+            try:
+                return confirm_h.run(message=message, default=default)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
+
+        @mcp.tool()
+        def choose(prompt: str, options: list[str]) -> str:
+            """Ask the host user to choose one of the given options."""
+            try:
+                return choose_h.run(prompt=prompt, options=options)
+            except HitlUnattended as e:
+                raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         @mcp.tool(name="exec")
         def exec_skill(staging_path: str, args: str = "") -> dict:
