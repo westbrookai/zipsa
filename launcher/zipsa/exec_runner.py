@@ -110,7 +110,12 @@ def _runner_for(phase_path: Path) -> list[str]:
 
 # claude CLI invocation for .md (LLM) phases. --max-turns 1 because
 # LLM phases are pure reasoning — no tools, no loop.
-_LLM_COMMAND = ["claude", "-p", "--max-turns", "1"]
+# --no-session-persistence: an LLM phase is a one-shot inference, not a
+# conversation. In local mode claude's cwd is the skill dir, so a
+# persisted session would land in ~/.claude/projects/<skill> and
+# pollute the user's session tree (agenthud would surface it as a stray
+# session under the skill).
+_LLM_COMMAND = ["claude", "-p", "--max-turns", "1", "--no-session-persistence"]
 
 
 def _build_llm_prompt(md_text: str, *, ctx: dict, prev: dict) -> str:

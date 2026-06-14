@@ -978,6 +978,34 @@ class TestLlmPhase:
         assert "claude" in argv
 
     @patch("zipsa.exec_runner.subprocess.run")
+    def test_local_md_phase_disables_session_persistence(self, mock_run, tmp_path):
+        """`claude -p` for an LLM phase must not persist a session — in
+        local mode its cwd is the skill dir, so a persisted session
+        lands in ~/.claude/projects/<skill> and pollutes the user's
+        session tree (agenthud then surfaces it)."""
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.greet.md"
+        phase.write_text("# greet\n")
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "{}\n"
+        mock_run.return_value.stderr = ""
+
+        run_phase(
+            phase,
+            skill_name="s",
+            skill_root=skill,
+            out_dir=tmp_path / "out",
+            docker_image=None,  # local
+        )
+
+        argv = mock_run.call_args.args[0]
+        assert argv[:2] == ["claude", "-p"]
+        assert "--no-session-persistence" in argv
+
+    @patch("zipsa.exec_runner.subprocess.run")
     def test_docker_md_phase_no_env_file_when_absent(self, mock_run, tmp_path):
         skill = tmp_path / "s"
         dist = skill / "zipsa-dist"
