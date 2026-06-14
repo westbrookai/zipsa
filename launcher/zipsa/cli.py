@@ -486,28 +486,23 @@ def create_skill(
         str,
         typer.Option("--image", "-i", help="Runtime image for the authoring container"),
     ] = _DEFAULT_IMAGE,
+    skills_dir: Annotated[
+        Path,
+        typer.Option("--skills-dir", help="Where the finished skill is promoted (default: ./skills)"),
+    ] = Path("skills"),
 ):
-    """Author a new zipsa skill, interactively, in the runtime container.
+    """Author a new zipsa skill, with the user, in the runtime container.
 
-    Spawns the pinned runtime image's claude as an interactive session:
-    it converses with you, writes the skill into a staging dir, tests it
-    via the real `zipsa exec` (orchestrated by the host), and — once you
-    agree on a name — promotes it into skills/<name>/. The name is
-    decided last; nothing touches the repo until then.
+    Spawns the pinned runtime image's claude headless: it converses with
+    you over HITL, writes the skill into a staging dir, tests it via the
+    real `zipsa exec` (orchestrated by the host), and — once you agree on
+    a name — promotes it into <skills-dir>/<name>/. The name is decided
+    last; nothing lands until then.
 
-    Run from the zipsa repo (needs the zipsa-skill-builder skill +
-    AUTHORING.md). Reviews the diff before committing.
+    The authoring workflow + contract ship with the launcher, so this
+    works anywhere; only Docker and a Claude login are required.
     """
-    from .create import find_repo_root, run_create
-
-    root = find_repo_root(Path.cwd())
-    if root is None:
-        typer.echo(
-            "Error: not inside a repo with the zipsa-skill-builder skill "
-            "(.claude/skills/zipsa-skill-builder/). Run from the zipsa repo.",
-            err=True,
-        )
-        raise typer.Exit(1)
+    from .create import run_create
 
     if not intent:
         intent = typer.prompt(
@@ -518,7 +513,9 @@ def create_skill(
             raise typer.Exit(1)
 
     try:
-        rc = run_create(intent, repo_root=root, image=image)
+        rc = run_create(
+            intent, skills_dir=skills_dir.resolve(), image=image,
+        )
     except FileNotFoundError:
         typer.echo(
             "Error: `docker` not found — install Docker to use `zipsa create`.",
