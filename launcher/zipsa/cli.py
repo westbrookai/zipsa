@@ -31,6 +31,7 @@ from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
 from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
 from .runtimes import list_runtimes
+from .scheduling import get_scheduler
 
 
 _LAUNCHER_VERSION = pkg_version("zipsa")
@@ -474,6 +475,96 @@ def _parse_mount_spec(spec: str) -> "tuple[Path, str]":
     host_str, sep, container = spec.partition(":")
     host = Path(host_str).expanduser().resolve()
     return host, (container if sep else str(host))
+
+
+schedule_app = typer.Typer(
+    name="schedule", help="Schedule a skill to run on a cron (host scheduler).",
+    no_args_is_help=True,
+)
+app.add_typer(schedule_app, name="schedule")
+
+
+@schedule_app.command(name="add")
+def schedule_add(
+    path: Annotated[Path, typer.Argument(help="Skill directory to run")],
+    cron: Annotated[str, typer.Option("--cron", help="Cron expression, e.g. \"0 8 * * *\"")],
+    user_query: Annotated[Optional[str], typer.Argument(help="Optional query for the skill")] = None,
+    mount: Annotated[Optional[list[str]], typer.Option("--mount", help="HOST[:CONTAINER] mount, repeatable (e.g. credential file)")] = None,
+    image: Annotated[str, typer.Option("--image", "-i", help="Runtime image")] = _DEFAULT_IMAGE,
+):
+    """Register a host cron job that runs `zipsa exec <path> ...`.
+
+    The schedule is named after the skill (the directory basename);
+    scheduling the same skill again just gets the next number. The skill
+    stays schedule-agnostic — this wires the OS scheduler (macOS launchd
+    today) to run it. Pass the same --mount you'd use with `zipsa exec`
+    for credential files.
+    """
+    from .scheduling import CronError, SchedulerUnavailable, build_exec_command
+
+    import shutil as _shutil
+    import sys as _sys
+    zipsa = ["zipsa"] if _shutil.which("zipsa") else [_sys.executable, "-m", "zipsa"]
+
+    skill_path = path.resolve()
+    command = build_exec_command(
+        zipsa=zipsa,
+        skill_path=skill_path,
+        mounts=[m for m in (mount or [])],
+        query=user_query,
+    )
+    # exec needs a non-default image only if overridden; bake it in when set.
+    if image != _DEFAULT_IMAGE:
+        command += ["--image", image]
+
+    try:
+        sched = get_scheduler()
+        label = sched.add(label=skill_path.name, cron=cron, command=command)
+    except CronError as e:
+        typer.echo(f"Error: invalid cron — {e}", err=True)
+        raise typer.Exit(1)
+    except SchedulerUnavailable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Scheduled '{label}' ({cron}): {' '.join(command)}")
+
+
+@schedule_app.command(name="list")
+def schedule_list():
+    """List scheduled zipsa jobs."""
+    from .scheduling import SchedulerUnavailable
+
+    try:
+        jobs = get_scheduler().list()
+    except SchedulerUnavailable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if not jobs:
+        typer.echo("No scheduled skills.")
+        return
+    for j in jobs:
+        typer.echo(f"  {j.label}\n    {' '.join(j.command)}")
+
+
+@schedule_app.command(name="remove")
+def schedule_remove(
+    label: Annotated[str, typer.Argument(help="The scheduled job's name")],
+):
+    """Remove a scheduled zipsa job."""
+    from .scheduling import SchedulerUnavailable
+
+    try:
+        removed = get_scheduler().remove(label)
+    except SchedulerUnavailable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    if not removed:
+        typer.echo(f"No scheduled job named '{label}'.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Removed scheduled job '{label}'.")
 
 
 @app.command(name="create")
@@ -1256,8 +1347,8 @@ def connect(
 #
 # Keep in sync with @app.command(name=...) decorators above.
 _KNOWN_COMMANDS = frozenset({
-    "run", "exec", "create", "view", "validate", "list", "where", "discover",
-    "configure", "runtimes", "install", "uninstall", "connect",
+    "run", "exec", "create", "schedule", "view", "validate", "list", "where",
+    "discover", "configure", "runtimes", "install", "uninstall", "connect",
 })
 
 
