@@ -18,8 +18,28 @@ from zipsa.scheduling import (
     ScheduledJob,
     build_exec_command,
     cron_to_launchd_intervals,
+    describe_intervals,
     resolve_zipsa_command,
 )
+
+
+class TestDescribeIntervals:
+    def test_daily_at_time(self):
+        assert describe_intervals([{"Minute": 0, "Hour": 8}]) == "daily 08:00"
+
+    def test_minute_only_every_hour(self):
+        assert describe_intervals([{"Minute": 30}]) == "hourly at :30"
+
+    def test_weekdays(self):
+        out = describe_intervals(
+            [{"Minute": 0, "Hour": 8, "Weekday": d} for d in range(1, 6)]
+        )
+        assert "08:00" in out
+        assert "Mon" in out and "Fri" in out
+
+    def test_single_weekday(self):
+        out = describe_intervals([{"Minute": 0, "Hour": 9, "Weekday": 6}])
+        assert "Sat" in out and "09:00" in out
 
 
 class TestResolveZipsaCommand:
@@ -170,6 +190,10 @@ class TestLaunchdScheduler:
         assert all(isinstance(j, ScheduledJob) for j in jobs)
         a = next(j for j in jobs if j.label == "a")
         assert a.command == ["zipsa", "exec", "/a"]
+        # list now carries WHEN it runs
+        assert a.schedule == "daily 08:00"
+        b = next(j for j in jobs if j.label == "b")
+        assert b.schedule == "hourly at :30"
 
     @patch("zipsa.scheduling.subprocess.run")
     def test_remove(self, mock_run, tmp_path):

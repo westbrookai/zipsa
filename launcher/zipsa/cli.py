@@ -545,7 +545,7 @@ def schedule_list():
         typer.echo("No scheduled skills.")
         return
     for j in jobs:
-        typer.echo(f"  {j.label}\n    {' '.join(j.command)}")
+        typer.echo(f"  {j.label}  ({j.schedule})\n    {' '.join(j.command)}")
 
 
 @schedule_app.command(name="remove")

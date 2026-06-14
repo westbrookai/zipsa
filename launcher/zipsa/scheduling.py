@@ -50,6 +50,46 @@ class SchedulerUnavailable(Exception):
 class ScheduledJob:
     label: str
     command: list[str]
+    schedule: str  # human-readable, e.g. "daily 08:00"
+
+
+_WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def describe_intervals(intervals: list[dict]) -> str:
+    """A short human description of launchd StartCalendarInterval(s),
+    e.g. "daily 08:00", "hourly at :30", "Mon–Fri 08:00"."""
+    if not intervals:
+        return "?"
+
+    def hhmm(d: dict) -> "str | None":
+        if "Hour" in d:
+            return f"{d['Hour']:02d}:{d.get('Minute', 0):02d}"
+        if "Minute" in d:
+            return f"hourly at :{d['Minute']:02d}"
+        return None
+
+    weekdays = sorted({d["Weekday"] for d in intervals if "Weekday" in d})
+    times = {hhmm(d) for d in intervals}
+
+    # Same time across a set of weekdays → "Mon–Fri 08:00" / "Sat 09:00".
+    if weekdays and len(times) == 1:
+        t = next(iter(times))
+        names = [_WEEKDAY_NAMES[w] for w in weekdays]
+        if len(names) == 1:
+            return f"{names[0]} {t}"
+        contiguous = weekdays == list(range(weekdays[0], weekdays[-1] + 1))
+        span = f"{names[0]}–{names[-1]}" if contiguous else ",".join(names)
+        return f"{span} {t}"
+
+    if len(intervals) == 1:
+        d = intervals[0]
+        if "Hour" in d:
+            return f"daily {hhmm(d)}"
+        return hhmm(d) or "?"
+
+    # Multiple distinct times (e.g. */30) — list them.
+    return ", ".join(sorted(t for t in times if t))
 
 
 def _parse_field(field: str, lo: int, hi: int) -> "list[int] | None":
@@ -206,8 +246,12 @@ class LaunchdScheduler:
         for p in sorted(self._dir.glob(f"{self._PREFIX}*.plist")):
             data = plistlib.loads(p.read_bytes())
             label = data.get("Label", p.stem)[len(self._PREFIX):]
+            sci = data.get("StartCalendarInterval", {})
+            intervals = sci if isinstance(sci, list) else [sci]
             jobs.append(ScheduledJob(
-                label=label, command=list(data.get("ProgramArguments", [])),
+                label=label,
+                command=list(data.get("ProgramArguments", [])),
+                schedule=describe_intervals(intervals),
             ))
         return jobs
 
