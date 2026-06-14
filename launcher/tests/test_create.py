@@ -174,3 +174,28 @@ class TestRunCreate:
         with pytest.raises(RuntimeError):
             run_create("x", repo_root=repo, image="i")
         server.stop.assert_called_once()
+
+
+class TestIsInteractive:
+    def test_tty_is_interactive(self):
+        from zipsa.create import _is_interactive
+
+        class _TTY:
+            def isatty(self): return True
+        assert _is_interactive(_TTY()) is True
+
+    def test_non_tty_not_interactive(self, monkeypatch):
+        from zipsa.create import _is_interactive
+        monkeypatch.delenv("ZIPSA_FORCE_INTERACTIVE", raising=False)
+
+        class _Pipe:
+            def isatty(self): return False
+        assert _is_interactive(_Pipe()) is False
+
+    def test_force_interactive_env_overrides(self, monkeypatch):
+        from zipsa.create import _is_interactive
+        monkeypatch.setenv("ZIPSA_FORCE_INTERACTIVE", "1")
+
+        class _Pipe:
+            def isatty(self): return False
+        assert _is_interactive(_Pipe()) is True

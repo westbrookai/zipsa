@@ -33,10 +33,17 @@ Gotchas:
 from __future__ import annotations
 
 import json
+import os
 import platform
 import subprocess
 import tempfile
 from pathlib import Path
+
+
+def _is_interactive(stdin) -> bool:
+    """True when HITL prompts can reach a human — a real TTY, or a
+    non-TTY driver that opted in via ZIPSA_FORCE_INTERACTIVE=1."""
+    return stdin.isatty() or os.environ.get("ZIPSA_FORCE_INTERACTIVE") == "1"
 
 from .core.create_server import CreateServer
 from .core.exec_skill_handler import ExecSkillHandler
@@ -163,11 +170,14 @@ def run_create(
 
     # HITL routes the agent's ask/confirm/choose to the host terminal —
     # the conversation channel (claude runs headless in the container).
+    # ZIPSA_FORCE_INTERACTIVE=1 lets a non-TTY driver (web UI, or a relay
+    # feeding answers via a pipe) act as the user, same hook the executor
+    # uses for the legacy run path.
     hitl_io = HitlIO(
         stdin=sys.stdin,
         stdout=sys.stdout,
         stdout_lock=threading.Lock(),
-        is_interactive=sys.stdin.isatty(),
+        is_interactive=_is_interactive(sys.stdin),
     )
     server = CreateServer(
         hitl_io,
