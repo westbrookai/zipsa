@@ -49,45 +49,36 @@ from .core.create_server import CreateServer
 from .core.exec_skill_handler import ExecSkillHandler
 from .core.promote_skill_handler import PromoteSkillHandler
 
-_SKILL_REL = Path(".claude/skills/zipsa-skill-builder/SKILL.md")
+# The authoring contract + workflow ship WITH the launcher (not with any
+# skill), so `zipsa create` works regardless of where skills live (repo
+# today, registry later). Inlined into the agent's prompt — no repo mount.
+_AUTHORING_DIR = Path(__file__).parent / "authoring"
 _CONTAINER_MCP_CONFIG = "/tmp/zipsa-create-mcp.json"
 
 
-def find_repo_root(start: Path) -> Path | None:
-    """Walk up from `start` for the dir holding the zipsa-skill-builder
-    skill (+ skills/AUTHORING.md). Returns None if not found."""
-    start = start.resolve()
-    for d in (start, *start.parents):
-        if (d / _SKILL_REL).is_file():
-            return d
-    return None
+def _bundled(name: str) -> str:
+    return (_AUTHORING_DIR / name).read_text()
 
 
 def build_create_prompt(intent: str, staging_path: Path) -> str:
-    """The first message handed to the in-container authoring claude."""
+    """The prompt handed to the in-container authoring claude.
+
+    The workflow + contract are bundled with the launcher and inlined
+    here, so the agent needs nothing from any repo — just this prompt,
+    the MCP tools, and the staging dir.
+    """
     return (
-        "You are authoring a new zipsa skill, interactively, with the user.\n"
-        "Read the workflow in .claude/skills/zipsa-skill-builder/SKILL.md and\n"
-        "the contract in skills/AUTHORING.md first, then follow them.\n\n"
+        "You are authoring a new zipsa skill, with the user, via the zipsa\n"
+        "MCP tools. Follow the WORKFLOW and honor the CONTRACT below.\n\n"
         f"User's rough intent: {intent}\n"
-        f"Staging directory (write the skill here): {staging_path}\n\n"
-        "Clarify the intent with the user (ask, don't guess). Author the\n"
-        f"phase files into {staging_path}/zipsa-dist/ plus a short SKILL.md.\n\n"
-        f"Test by calling mcp__zipsa__exec with staging_path={staging_path} —\n"
-        "this runs the skill the real way (a fresh runtime container per\n"
-        "phase) and returns the result. If the skill reads a credential or\n"
-        "data file, pass mounts (HOST:CONTAINER strings) to exec so the file\n"
-        "is available during the test. Iterate until it works and the user\n"
-        "is happy.\n\n"
-        "IMPORTANT: you run headless — whenever you need the user to do or\n"
-        "answer something (set up a bot, paste a token, confirm a name), you\n"
-        "MUST call mcp__zipsa__ask/confirm/choose to block and wait. Never\n"
-        "just print a request and stop: if you stop calling tools the session\n"
-        "ends and the user cannot reply.\n\n"
-        "Only when the user agrees on a name, call mcp__zipsa__promote with\n"
-        f"staging_path={staging_path} and the chosen kebab-case name — this\n"
-        "moves the skill into the repo. The name is decided last; it can\n"
-        "change freely until you call promote.\n"
+        f"Staging directory (write the skill files here): {staging_path}\n"
+        f"Test with mcp__zipsa__exec(staging_path=\"{staging_path}\", ...);\n"
+        f"finalize with mcp__zipsa__promote(staging_path=\"{staging_path}\",\n"
+        "name=...). The name is decided LAST, after the user is happy.\n\n"
+        "===== WORKFLOW =====\n"
+        f"{_bundled('skill-builder.md')}\n"
+        "===== CONTRACT (AUTHORING guide) =====\n"
+        f"{_bundled('AUTHORING.md')}\n"
     )
 
 
@@ -120,7 +111,6 @@ def build_docker_argv(
     *,
     image: str,
     staging_path: Path,
-    repo_root: Path,
     mcp_config_host: Path,
     prompt: str,
     env_file: Path | None,
@@ -134,8 +124,10 @@ def build_docker_argv(
     the conversation is over MCP), and leaving stdin to the container
     would race the host HITL reader for the user's keystrokes. The
     container's stdout still streams back (subprocess inherits it).
-    Staging is mounted rw at its own host path; the repo ro (for
-    AUTHORING.md + the skill); the mcp-config ro; workdir = repo.
+
+    The only mounts are the staging dir (rw, where the skill is written)
+    and the mcp-config (ro). No repo mount — the workflow + contract are
+    inlined into the prompt, so create needs nothing from any repo.
     """
     argv = ["docker", "run", "--rm"]
     if env_file is not None:
@@ -144,9 +136,8 @@ def build_docker_argv(
         argv += ["--add-host", "host.docker.internal:host-gateway"]
     argv += [
         "-v", f"{staging_path}:{staging_path}:rw",
-        "-v", f"{repo_root}:{repo_root}:ro",
         "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
-        "-w", str(repo_root),
+        "-w", str(staging_path),
         image,
         "claude", "-p", prompt,
         "--mcp-config", _CONTAINER_MCP_CONFIG,
@@ -159,16 +150,17 @@ def build_docker_argv(
 def run_create(
     intent: str,
     *,
-    repo_root: Path,
+    skills_dir: Path,
     image: str,
     env_file: Path | None = None,
 ) -> int:
-    """Author a skill via an interactive container session. Returns the
+    """Author a skill via a headless container session. Returns the
     container claude's exit code.
 
-    Starts a host CreateServer (exec + promote), spins up a fresh
-    staging dir, writes the mcp-config, runs the interactive container,
-    and tears the server down afterwards.
+    Starts a host CreateServer (ask/confirm/choose + exec + promote),
+    spins up a fresh staging dir, writes the mcp-config, runs the
+    headless authoring container, and tears the server down afterwards.
+    `skills_dir` is where promote lands the finished skill.
     """
     import sys
     import threading
@@ -197,7 +189,7 @@ def run_create(
     server = CreateServer(
         hitl_io,
         ExecSkillHandler(docker_image=image),
-        PromoteSkillHandler(dest_root=repo_root / "skills"),
+        PromoteSkillHandler(dest_root=skills_dir),
     )
     server.start()
     try:
@@ -208,7 +200,6 @@ def run_create(
         argv = build_docker_argv(
             image=image,
             staging_path=staging_path,
-            repo_root=repo_root,
             mcp_config_host=mcp_config_host,
             prompt=build_create_prompt(intent, staging_path),
             env_file=env_file if env_file.exists() else None,

@@ -1,8 +1,9 @@
 # Skill Authoring Guide
 
 > The contract for writing zipsa skills that run under `zipsa exec`.
-> This is the single source of truth for authors (human or LLM).
-> Verified against the runtime as of Phase 2 (PRs #109, #110, #111).
+> This is the single source of truth for authors (human or LLM). It
+> ships with the launcher (`zipsa/authoring/`), not with any skill —
+> the launcher owns the contract.
 
 ## 1. Anatomy
 
@@ -93,32 +94,50 @@ Constraints:
   computation, network, or files belongs in a code phase before or
   after.
 - Single turn. Keep the task focused.
-- Auth is injected automatically (host `~/.zipsa/.env` →
-  `CLAUDE_CODE_OAUTH_TOKEN`); code phases never see it.
+- Claude auth is injected automatically for `.md` phases (host
+  `~/.zipsa/.env` → `CLAUDE_CODE_OAUTH_TOKEN`).
 
 A good `.md` phase says: what the input means, what to produce, what
-keys go in the result. See `skills/weather/zipsa-dist/2.report.md`.
+keys go in the result. See `weather/zipsa-dist/2.report.md`.
 
-## 6. Running
+## 6. Credentials & secrets
+
+Code phases get **no environment-variable injection** (by design —
+they stay env-clean). The supported way to give a code phase a secret
+(API token, bot credentials) is a **mounted file**:
+
+1. Keep the secret in a host file, e.g.
+   `~/.zipsa/credentials/<service>.json`.
+2. The caller mounts it at run time:
+   ```bash
+   zipsa exec ./my-skill \
+     --mount ~/.zipsa/credentials/telegram.json:/mnt/creds/telegram.json
+   ```
+3. The code phase reads it from the container path:
+   ```python
+   creds = json.loads(Path("/mnt/creds/telegram.json").read_text())
+   ```
+   If the file/key is missing, `exit(1)` with a clear message.
+
+Document the mount your skill needs in its `SKILL.md` run example —
+the caller (or `zipsa create`'s test step) supplies it. Never bake a
+secret into the skill files.
+
+## 7. Running
 
 ```bash
 zipsa exec ./my-skill "user query"          # docker (default)
 zipsa exec ./my-skill "user query" --local  # host, fast authoring loop
 zipsa exec ./my-skill --out ./artifacts     # choose the /out host dir
 zipsa exec ./my-skill --image custom:tag    # override runtime image
-zipsa exec ./my-skill --mount ~/.claude/projects --mount ~/code
-                                            # host paths visible ro at the SAME
-                                            # absolute path in the container
-                                            # (repeatable; no-op with --local)
-zipsa exec ./my-skill --mount ~/.claude/projects:/home/agent/.claude/projects
-                                            # HOST:CONTAINER overrides the
-                                            # container path
+zipsa exec ./my-skill --mount ~/data        # host path ro at the SAME
+                                            # container path (repeatable)
+zipsa exec ./my-skill --mount ~/x.json:/mnt/x.json   # HOST:CONTAINER form
 ```
 
-`--mount` is for skills whose tools embed host paths in their data
-(e.g. agenthud resolving a session's `cwd` to its `.git`) or read
-fixed locations under the container home. Document the mounts your
-skill needs in its SKILL.md run example — the caller supplies them.
+`--mount` serves two needs: secrets (§6) and tools that embed host
+paths in their data (e.g. agenthud resolving a session's `cwd` to its
+`.git`). No-op under `--local` (the host is already visible).
 
 The host's timezone is injected as `TZ` automatically — date
 arithmetic in a phase ("yesterday") means the user's yesterday, not
@@ -142,18 +161,14 @@ Output:
 ```
 
 Gotchas:
-- **Docker file sharing (macOS):** skill paths outside Docker
-  Desktop's shared list (e.g. `/tmp`) mount empty and fail with
-  "can't open file /skill/...". Keep skills under `/Users`.
-- First run pulls the runtime image (~2GB) — progress shows on
-  stderr.
-- Code phases run with **no secrets and no env injection**. If your
-  phase needs an API token, that platform feature doesn't exist yet
-  (see §8).
+- **Docker file sharing (macOS):** skill paths and mount sources
+  outside Docker Desktop's shared list (e.g. `/tmp`) mount empty.
+  Keep skills + mounted files under `/Users`.
+- First run pulls the runtime image (~2GB) — progress shows on stderr.
 
-## 7. Patterns
+## 8. Patterns
 
-**Fetch → report** (the canonical hybrid — see `skills/weather/`):
+**Fetch → report** (the canonical hybrid — see `weather/`):
 deterministic fetch/parse in `.py`, natural-language output in `.md`.
 
 **Artifact handoff**: phase 1 writes `/out/big.json` + returns
@@ -162,16 +177,24 @@ deterministic fetch/parse in `.py`, natural-language output in `.md`.
 **Validate-first**: phase 1 checks preconditions and exits 1 with a
 clear stderr message before any expensive work happens.
 
+**Credential-gated send** (see `wahroonga-umbrella-alert/`): a code
+phase reads a mounted token file and calls an external API; exits 1
+cleanly if the credential is absent.
+
 **Empty-query default**: decide explicitly what no-input means
 (weather treats it as "IP-based location"; erroring out is also fine
 — just be deliberate).
 
-## 8. Not yet (don't design against these)
+## 9. Not yet (don't design against these)
 
-- HITL (asking the user mid-run)
-- Credentials / env injection for code phases
+- HITL (a *skill* asking the user mid-run — distinct from `zipsa
+  create`'s authoring HITL)
+- Environment-variable injection for code phases (use a mounted file
+  for secrets — §6)
 - Branching (sub-phase XOR)
-- Scheduling, install-by-name, composition (calling other skills)
+- Scheduling (run at 8am) — keep skills schedule-agnostic; wire cron /
+  launchd to `zipsa exec` separately
+- install-by-name, composition (one skill calling another)
 - Tools in LLM phases
 
 When a skill genuinely needs one of these, that's a platform feature
