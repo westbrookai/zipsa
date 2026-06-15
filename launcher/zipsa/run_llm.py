@@ -47,6 +47,7 @@ def build_run_prompt(skill_root: Path, user_input: str) -> str:
 def build_run_argv(
     *, image: str, skill_root: Path, mcp_config_host: Path,
     prompt: str, env_file: Path | None,
+    extra_mounts: "list[tuple[Path, str]] | None" = None,
 ) -> list[str]:
     # Docker bind mounts require absolute host paths — resolve here so the
     # function is safe to call with a relative skill_root in isolation.
@@ -59,6 +60,10 @@ def build_run_argv(
     argv += [
         "-v", f"{skill_root}:{skill_root}:ro",
         "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
+    ]
+    for host, container in extra_mounts or []:
+        argv += ["-v", f"{host}:{container}:ro"]
+    argv += [
         "-w", str(skill_root),
         image,
         "claude", "-p", prompt,
@@ -72,6 +77,7 @@ def build_run_argv(
 def run_skill_llm(
     skill_root: Path, user_input: str, *,
     image: str, env_file: Path | None = None,
+    extra_mounts: "list[tuple[Path, str]] | None" = None,
 ) -> int:
     """Execute a skill as an LLM following SKILL.md, calling scripts via
     the host RunServer's exec tool. Returns the container claude's exit code."""
@@ -98,6 +104,7 @@ def run_skill_llm(
             image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
             prompt=build_run_prompt(skill_root, user_input),
             env_file=env_file if env_file.exists() else None,
+            extra_mounts=extra_mounts,
         )
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
         return proc.returncode

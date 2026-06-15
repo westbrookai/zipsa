@@ -1,31 +1,41 @@
-"""`zipsa create` — interactive containerized skill authoring (Step 3).
+"""`zipsa forge` — interactive containerized skill authoring loop.
 
-The authoring agent runs headless (`claude -p`) INSIDE the pinned
-runtime container (so it's the same claude version skills run on) and
-reaches back to a host MCP server for everything — exactly the
-mechanism the legacy `zipsa run` path uses, with three extra tools:
+The forge agent runs headless (`claude -p`) INSIDE the pinned runtime
+container (so it's the same claude version skills run on) and reaches
+back to a host MCP server for everything — exactly the mechanism the
+`zipsa run` path uses, with these extra tools:
 
 - `mcp__zipsa__ask/confirm/choose` — converse with the host user (HITL,
   routed to the host terminal). This is how it clarifies + iterates;
   there is no interactive TTY into the container.
-- `mcp__zipsa__exec(staging)` — the host runs the real `zipsa exec`
-  (docker, a fresh runtime container per phase) and returns the result.
-- `mcp__zipsa__promote(staging, name)` — the host names + moves the
-  draft into the repo's skills/<name>/.
+- `mcp__zipsa__exec(script, ...)` — the host runs ONE of the draft's
+  scripts (docker, fresh runtime container) and returns the result.
+- `mcp__zipsa__run(args, ...)` — the host runs the WHOLE draft through
+  the real run-time (an LLM following SKILL.md) — the user's real
+  experience.
+- `mcp__zipsa__promote(name)` — the host names + moves the draft into
+  the repo's skills/<name>/.
 
-zipsa never enters the authoring container — it only makes HTTP MCP
-calls to the host CreateServer. The host spawns per-phase containers,
-so there's no docker-in-docker and no zipsa baked into the image (the
-runtime image and zipsa version independently).
+The exec/run/promote tools are PATH-SCOPED by the ForgeServer (it
+injects the staging path), so the agent never passes a staging path.
+
+zipsa never enters the forge container — it only makes HTTP MCP calls
+to the host ForgeServer. The host spawns per-test containers, so
+there's no docker-in-docker and no zipsa baked into the image (the
+runtime image and zipsa version evolve independently).
 
 The skill name is decided LAST (via promote); until then the draft
 lives in a temp staging dir and the repo is untouched.
 
+`run_create` remains as a deprecated alias of `run_forge` for backward
+compatibility, so `zipsa create` + the relay workflow (and the docs
+that reference `zipsa create`) still work.
+
 Gotchas:
-- Staging is mounted into the container at its own host path, so the
-  path the agent passes to `exec`/`promote` is host-valid as-is.
-- The authoring container's claude gets CLAUDE auth via --env-file
-  ~/.zipsa/.env (same token the per-phase containers use).
+- Staging is mounted into the container at its own host path, so files
+  the agent writes are host-valid as-is.
+- The forge container's claude gets CLAUDE auth via --env-file
+  ~/.zipsa/.env (same token the per-test containers use).
 - Runs claude with bypassed permissions inside the container (same
   trust as the user authoring in their own repo).
 """
@@ -45,9 +55,13 @@ def _is_interactive(stdin) -> bool:
     non-TTY driver that opted in via ZIPSA_FORCE_INTERACTIVE=1."""
     return stdin.isatty() or os.environ.get("ZIPSA_FORCE_INTERACTIVE") == "1"
 
-from .core.create_server import CreateServer
-from .core.exec_skill_handler import ExecSkillHandler
+from .core.forge_server import ForgeServer
 from .core.promote_skill_handler import PromoteSkillHandler
+from .core.run_script_handler import RunScriptHandler
+
+# RunDraftHandler is imported lazily inside run_forge: it pulls in run_llm,
+# which imports back from this module (_is_interactive, build_mcp_config),
+# so a top-level import here forms a circular import.
 
 # The authoring contract + workflow ship WITH the launcher (not with any
 # skill), so `zipsa create` works regardless of where skills live (repo
@@ -82,6 +96,42 @@ def build_create_prompt(intent: str, staging_path: Path) -> str:
     )
 
 
+def build_forge_prompt(intent: str, staging_path: Path) -> str:
+    """The prompt handed to the in-container forge authoring claude.
+
+    Like build_create_prompt, but drives the full forge loop: capture
+    requirements in INTENT.md, draft, exec-debug individual scripts, run
+    the WHOLE draft through the real run-time, iterate, and promote LAST.
+
+    Forge tools are PATH-SCOPED — the server injects the staging path, so
+    the agent calls exec/run/promote WITHOUT a staging_path arg (unlike
+    create). The staging dir is still where the agent writes files.
+    """
+    return (
+        "You are authoring (forging) a new zipsa skill, with the user, via\n"
+        "the zipsa MCP tools. Follow the WORKFLOW and honor the CONTRACT below.\n\n"
+        f"User's rough intent: {intent}\n"
+        f"Staging directory (write the skill files here): {staging_path}\n\n"
+        "===== FORGE LOOP =====\n"
+        "1. Agree the requirements with the user, then write INTENT.md in the\n"
+        "   staging dir capturing the why and the acceptance criteria.\n"
+        "2. Draft SKILL.md + the scripts.\n"
+        "3. Debug individual scripts fast with\n"
+        '   mcp__zipsa__exec(script="...", args="...").\n'
+        "4. Test the WHOLE skill through the real run-time (an LLM following\n"
+        '   SKILL.md, calling scripts) with mcp__zipsa__run(args="...").\n'
+        "5. Iterate on 2-4 until BOTH the user AND you are satisfied.\n"
+        "6. Finalize LAST with mcp__zipsa__promote(name=\"...\"). The name is\n"
+        "   decided last, after the user is happy.\n"
+        "Note: exec/run/promote are path-scoped — do NOT pass a staging_path\n"
+        "argument; the host already knows the draft location.\n\n"
+        "===== WORKFLOW =====\n"
+        f"{_bundled('skill-builder.md')}\n"
+        "===== CONTRACT (AUTHORING guide) =====\n"
+        f"{_bundled('AUTHORING.md')}\n"
+    )
+
+
 # Per-call timeout (ms) for the create MCP server's tools. ask/confirm/
 # choose block on the human; exec runs a full per-phase container test.
 # Claude Code's default (~60s first-byte) is far too short — verified that
@@ -91,7 +141,7 @@ _MCP_TOOL_TIMEOUT_MS = 600_000
 
 def build_mcp_config(port: int, token: str) -> dict:
     """The --mcp-config the container claude uses to reach the host
-    CreateServer. Container → host via host.docker.internal; token
+    ForgeServer. Container → host via host.docker.internal; token
     embedded directly (the file is host-private and mounted ro)."""
     return {
         "mcpServers": {
@@ -147,26 +197,33 @@ def build_docker_argv(
     return argv
 
 
-def run_create(
+def run_forge(
     intent: str,
     *,
     skills_dir: Path,
     image: str,
     env_file: Path | None = None,
 ) -> int:
-    """Author a skill via a headless container session. Returns the
+    """Forge a skill via a headless container session. Returns the
     container claude's exit code.
 
-    Starts a host CreateServer (ask/confirm/choose + exec + promote),
-    spins up a fresh staging dir, writes the mcp-config, runs the
-    headless authoring container, and tears the server down afterwards.
-    `skills_dir` is where promote lands the finished skill.
+    Starts a host ForgeServer (ask/confirm/choose + path-scoped exec +
+    run + promote), spins up a fresh staging dir, writes the mcp-config,
+    runs the headless forge container, and tears the server down
+    afterwards. `skills_dir` is where promote lands the finished skill.
+
+    Unlike create's exec=run_phases model, forge gives the agent two
+    test tools: exec (one script, fast debug) via RunScriptHandler and
+    run (the whole draft through the real run-time) via RunDraftHandler.
+    Both are scoped to the staging dir by the ForgeServer, so the agent
+    never names a staging path.
     """
     import sys
     import threading
 
     from . import paths as zipsa_paths
     from .core.hitl_mcp import HitlIO
+    from .core.run_draft_handler import RunDraftHandler
 
     if env_file is None:
         env_file = zipsa_paths.global_env_file()
@@ -186,10 +243,12 @@ def run_create(
         stdout_lock=threading.Lock(),
         is_interactive=_is_interactive(sys.stdin),
     )
-    server = CreateServer(
+    server = ForgeServer(
         hitl_io,
-        ExecSkillHandler(docker_image=image),
-        PromoteSkillHandler(dest_root=skills_dir),
+        exec_handler=RunScriptHandler(docker_image=image, skill_root=staging_path),
+        run_handler=RunDraftHandler(image=image, skill_root=staging_path),
+        promote_handler=PromoteSkillHandler(dest_root=skills_dir),
+        staging_path=str(staging_path),
     )
     server.start()
     try:
@@ -201,13 +260,26 @@ def run_create(
             image=image,
             staging_path=staging_path,
             mcp_config_host=mcp_config_host,
-            prompt=build_create_prompt(intent, staging_path),
+            prompt=build_forge_prompt(intent, staging_path),
             env_file=env_file if env_file.exists() else None,
         )
         # stdin=DEVNULL: the host terminal's stdin belongs exclusively to
-        # the HITL reader (CreateServer's ask/confirm/choose), not the
+        # the HITL reader (ForgeServer's ask/confirm/choose), not the
         # container. stdout/stderr inherit so the agent's progress shows.
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
         return proc.returncode
     finally:
         server.stop()
+
+
+def run_create(
+    intent: str,
+    *,
+    skills_dir: Path,
+    image: str,
+    env_file: Path | None = None,
+) -> int:
+    """Deprecated alias of run_forge, kept for library/external callers
+    after the create→forge rename. (The `zipsa create` CLI command calls
+    run_forge directly; it does not route through this wrapper.)"""
+    return run_forge(intent, skills_dir=skills_dir, image=image, env_file=env_file)

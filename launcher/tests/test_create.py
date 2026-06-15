@@ -104,54 +104,22 @@ class TestBuildDockerArgv:
 
 
 class TestRunCreate:
-    @patch("zipsa.create.subprocess.run")
-    @patch("zipsa.create.CreateServer")
-    def test_lifecycle_promote_dest_and_staging(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
-        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
-        (tmp_path / "home").mkdir()
-        skills_dir = tmp_path / "repo" / "skills"
-        server = MagicMock(); server.port = 5; server.token = "tok"
-        mock_server_cls.return_value = server
-        mock_run.return_value.returncode = 0
-
-        rc = run_create("make a thing", skills_dir=skills_dir, image="img:test")
-
+    @patch("zipsa.create.run_forge")
+    def test_delegates_to_run_forge(self, mock_forge, tmp_path):
+        mock_forge.return_value = 0
+        rc = run_create("make a thing", skills_dir=tmp_path / "skills",
+                        image="img:test")
         assert rc == 0
-        server.start.assert_called_once()
-        server.stop.assert_called_once()
-        # promote handler points at the given skills_dir
-        _, kwargs = mock_server_cls.call_args
-        # CreateServer(hitl_io, exec_handler, promote_handler) — positional
-        promote_handler = mock_server_cls.call_args.args[2]
-        assert promote_handler._dest_root == skills_dir
-        # staging dir created under ~/.zipsa/staging
-        made = [p for p in (tmp_path / "home" / "staging").iterdir() if p.is_dir()]
-        assert len(made) == 1
-        assert mock_run.call_args.args[0][0] == "docker"
+        mock_forge.assert_called_once()
+        # same intent + skills_dir + image forwarded
+        assert mock_forge.call_args.args[0] == "make a thing"
+        assert mock_forge.call_args.kwargs["skills_dir"] == tmp_path / "skills"
+        assert mock_forge.call_args.kwargs["image"] == "img:test"
 
-    @patch("zipsa.create.subprocess.run")
-    @patch("zipsa.create.CreateServer")
-    def test_propagates_exit_code(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
-        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
-        (tmp_path / "home").mkdir()
-        server = MagicMock(); server.port = 1; server.token = "t"
-        mock_server_cls.return_value = server
-        mock_run.return_value.returncode = 7
-
+    @patch("zipsa.create.run_forge")
+    def test_propagates_exit_code(self, mock_forge, tmp_path):
+        mock_forge.return_value = 7
         assert run_create("x", skills_dir=tmp_path / "s", image="i") == 7
-
-    @patch("zipsa.create.subprocess.run")
-    @patch("zipsa.create.CreateServer")
-    def test_server_stopped_on_error(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
-        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
-        (tmp_path / "home").mkdir()
-        server = MagicMock(); server.port = 1; server.token = "t"
-        mock_server_cls.return_value = server
-        mock_run.side_effect = RuntimeError("boom")
-
-        with pytest.raises(RuntimeError):
-            run_create("x", skills_dir=tmp_path / "s", image="i")
-        server.stop.assert_called_once()
 
 
 class TestIsInteractive:

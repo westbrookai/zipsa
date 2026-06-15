@@ -54,6 +54,15 @@ class TestBuildRunArgv:
         i = argv.index("--env-file")
         assert argv[i + 1] == str(ef)
 
+    def test_extra_mounts_added_ro(self, tmp_path):
+        root = _skill(tmp_path)
+        argv = build_run_argv(
+            image="img", skill_root=root, mcp_config_host=tmp_path / "m.json",
+            prompt="P", env_file=None,
+            extra_mounts=[(Path("/host/c.json"), "/mnt/c.json")],
+        )
+        assert "/host/c.json:/mnt/c.json:ro" in argv
+
 
 class TestRunSkillLlm:
     @patch("zipsa.run_llm.subprocess.run")
