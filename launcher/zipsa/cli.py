@@ -319,7 +319,7 @@ def run(
         # These legacy-executor flags have no meaning on the LLM run-time path
         # yet; fail loudly rather than silently ignoring them (esp. --dry-run,
         # which a user runs expecting a preview, not a real run).
-        for flag, val in (("--dry-run", dry_run), ("--shell", shell)):
+        for flag, val in (("--dry-run", dry_run), ("--shell", shell), ("--env", env)):
             if val:
                 typer.echo(
                     f"Error: {flag} is not supported for exec-format skills yet.",

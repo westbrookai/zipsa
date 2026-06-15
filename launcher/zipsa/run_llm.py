@@ -6,6 +6,7 @@ SKILL.md as the instruction, a host MCP server exposing exec + HITL.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -89,7 +90,9 @@ def run_skill_llm(
         mcp_config = build_mcp_config(server.port, server.token)
         cfg_dir = zipsa_paths.zipsa_home() / "run"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        mcp_config_host = Path(tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=cfg_dir)[1])
+        fd, cfg_path = tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=cfg_dir)
+        os.close(fd)  # mkstemp opens the file; we only need the path
+        mcp_config_host = Path(cfg_path)
         mcp_config_host.write_text(json.dumps(mcp_config))
         argv = build_run_argv(
             image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,

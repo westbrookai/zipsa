@@ -2028,6 +2028,24 @@ class TestRunDispatch:
         assert not mock_run_llm.called
 
     @patch("zipsa.cli.run_skill_llm")
+    def test_shell_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        res = runner.invoke(app, ["run", str(root), "--shell"])
+        assert res.exit_code == 2
+        assert "--shell" in res.output
+        assert not mock_run_llm.called
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_env_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        res = runner.invoke(app, ["run", str(root), "--env", "K=V"])
+        assert res.exit_code == 2
+        assert "--env" in res.output
+        assert not mock_run_llm.called
+
+    @patch("zipsa.cli.run_skill_llm")
     @patch("zipsa.cli.DockerExecutor")
     def test_legacy_manifest_skill_uses_docker_executor(self, mock_exec, mock_run_llm, tmp_path):
         # A skill directory with manifest.yaml (but no zipsa-dist/) is legacy.
