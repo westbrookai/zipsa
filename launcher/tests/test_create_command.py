@@ -3,6 +3,9 @@
 `zipsa create [intent] [--image] [--skills-dir]` — intent optional
 (host prompts in English if absent). No repo dependency; promote lands
 in --skills-dir (default ./skills).
+
+`create` is now a deprecated alias of `zipsa forge`; both delegate to
+`run_forge`, so these tests patch `zipsa.cli.run_forge`.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ runner = CliRunner()
 
 
 class TestCreateCommand:
-    @patch("zipsa.create.run_create")
+    @patch("zipsa.cli.run_forge")
     def test_intent_and_default_skills_dir(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         mock_run.return_value = 0
@@ -29,7 +32,7 @@ class TestCreateCommand:
         assert mock_run.call_args.args[0] == "8am umbrella alert"
         assert mock_run.call_args.kwargs["skills_dir"] == (tmp_path / "skills").resolve()
 
-    @patch("zipsa.create.run_create")
+    @patch("zipsa.cli.run_forge")
     def test_skills_dir_option(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         mock_run.return_value = 0
@@ -38,7 +41,7 @@ class TestCreateCommand:
 
         assert mock_run.call_args.kwargs["skills_dir"] == (tmp_path / "mylib").resolve()
 
-    @patch("zipsa.create.run_create")
+    @patch("zipsa.cli.run_forge")
     def test_prompts_for_intent_when_absent(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         mock_run.return_value = 0
@@ -49,20 +52,20 @@ class TestCreateCommand:
         assert "what" in result.output.lower()
         assert mock_run.call_args.args[0] == "a telegram weather bot"
 
-    @patch("zipsa.create.run_create")
+    @patch("zipsa.cli.run_forge")
     def test_propagates_exit_code(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         mock_run.return_value = 5
         assert runner.invoke(app, ["create", "x"]).exit_code == 5
 
-    @patch("zipsa.create.run_create", side_effect=FileNotFoundError)
+    @patch("zipsa.cli.run_forge", side_effect=FileNotFoundError)
     def test_docker_missing_message(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["create", "x"])
         assert result.exit_code == 1
         assert "docker" in result.output.lower()
 
-    @patch("zipsa.create.run_create")
+    @patch("zipsa.cli.run_forge")
     def test_no_into_option(self, mock_run, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         mock_run.return_value = 0
