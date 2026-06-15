@@ -38,7 +38,7 @@ drafting `SKILL.md` or any scripts. Capture the agreed requirements: the
 *why* and the acceptance criteria (what "done" looks like). INTENT.md is
 a first-class artifact that travels with the skill.
 
-### 2. Decide the phase split
+### 2. Decide the script split
 Deterministic work → code scripts; reasoning → instructions in
 `SKILL.md`. Most skills are one of: a single `.py`; `1.fetch.py` +
 natural-language output; or a longer pipeline. Pick the language per
