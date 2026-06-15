@@ -37,3 +37,7 @@ class TestRunForge:
         srv.start.assert_called_once(); srv.stop.assert_called_once()
         argv = mock_run.call_args.args[0]
         assert "claude" in argv
+        # staging_path forwarded to ForgeServer as a str under ZIPSA_HOME/staging
+        sp = mock_srv.call_args.kwargs["staging_path"]
+        assert isinstance(sp, str)
+        assert "staging" in sp

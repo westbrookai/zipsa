@@ -27,9 +27,9 @@ runtime image and zipsa version evolve independently).
 The skill name is decided LAST (via promote); until then the draft
 lives in a temp staging dir and the repo is untouched.
 
-`run_create` / `build_create_prompt` remain as thin backward-compatible
-aliases of the forge entry points so `zipsa create` + the relay
-workflow still work.
+`run_create` remains as a deprecated alias of `run_forge` for backward
+compatibility, so `zipsa create` + the relay workflow (and the docs
+that reference `zipsa create`) still work.
 
 Gotchas:
 - Staging is mounted into the container at its own host path, so files
@@ -141,7 +141,7 @@ _MCP_TOOL_TIMEOUT_MS = 600_000
 
 def build_mcp_config(port: int, token: str) -> dict:
     """The --mcp-config the container claude uses to reach the host
-    CreateServer. Container → host via host.docker.internal; token
+    ForgeServer. Container → host via host.docker.internal; token
     embedded directly (the file is host-private and mounted ro)."""
     return {
         "mcpServers": {
