@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import patch
 from zipsa.core.run_script_handler import RunScriptHandler
 
 

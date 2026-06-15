@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .phase_discovery import discover_phases
+from .phase_discovery import PhaseDiscoveryError, discover_phases
 from ..exec_runner import run_phase
 
 
@@ -17,14 +17,18 @@ class RunScriptHandler:
         self._image = docker_image
         self._root = skill_root.resolve()
 
-    def _fail(self, code: str, message: str) -> dict:
+    @staticmethod
+    def _fail(code: str, message: str) -> dict:
         return {"status": "failed", "error": {"code": code, "message": message}}
 
     def _resolve(self, script: str) -> "Path | None":
         # Match against discovered phases by id, slug, "id.slug", or filename.
+        # A discovery failure (no zipsa-dist/, bad phase names) means the
+        # script isn't runnable either — treat as "not found". Anything
+        # unexpected propagates rather than masquerading as not-found.
         try:
             phases = discover_phases(self._root)
-        except Exception:
+        except PhaseDiscoveryError:
             return None
         for p in phases:
             if script in (p.id_str, p.slug, f"{p.id_str}.{p.slug}", p.path.name):
@@ -45,7 +49,7 @@ class RunScriptHandler:
         )
         return {
             "status": "ok" if outcome.exit_code == 0 else "failed",
-            "script": f"{path.name}",
+            "script": path.name,
             "result": outcome.result,
             "exit_code": outcome.exit_code,
             "duration_ms": outcome.duration_ms,
