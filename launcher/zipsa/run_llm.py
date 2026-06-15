@@ -38,8 +38,11 @@ def build_run_prompt(skill_root: Path, user_input: str) -> str:
 
 def build_run_argv(
     *, image: str, skill_root: Path, mcp_config_host: Path,
-    prompt: str, env_file: "Path | None",
+    prompt: str, env_file: Path | None,
 ) -> list[str]:
+    # Docker bind mounts require absolute host paths — resolve here so the
+    # function is safe to call with a relative skill_root in isolation.
+    skill_root = skill_root.resolve()
     argv = ["docker", "run", "--rm"]
     if env_file is not None:
         argv += ["--env-file", str(env_file)]

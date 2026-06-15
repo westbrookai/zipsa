@@ -34,6 +34,8 @@ class TestBuildRunArgv:
         )
         assert argv[:3] == ["docker", "run", "--rm"]
         assert f"{root}:{root}:ro" in argv         # skill mounted read-only
+        # the mcp-config file is actually mounted into the container
+        assert f"{tmp_path / 'm.json'}:/tmp/zipsa-run-mcp.json:ro" in argv
         assert "--mcp-config" in argv
         assert "claude" in argv and "-p" in argv
         assert "bypassPermissions" in argv
