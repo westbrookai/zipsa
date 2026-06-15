@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
-from .run_llm import run_skill_llm
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
 from .core.requires import (
@@ -31,6 +30,7 @@ from .core.requires import (
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
 from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
+from .run_llm import run_skill_llm
 from .runtimes import list_runtimes
 from .scheduling import get_scheduler
 
@@ -312,10 +312,21 @@ def run(
 
     # Dispatch: exec-format skills (SKILL.md + zipsa-dist/, no manifest.yaml)
     # route to the LLM run-time immediately, before Skill.load (which requires
-    # manifest.yaml). Accept a filesystem path or an installed skill name.
-    _skill_dir_candidate = Path(name) if Path(name).is_dir() else None
-    if _skill_dir_candidate is not None and _is_exec_format(_skill_dir_candidate):
-        rc = run_skill_llm(_skill_dir_candidate, user_input or "", image=image)
+    # manifest.yaml). Referenced by filesystem path (exec-format skills aren't
+    # installed by the manifest-based installer yet).
+    skill_path = Path(name)
+    if skill_path.is_dir() and _is_exec_format(skill_path):
+        # These legacy-executor flags have no meaning on the LLM run-time path
+        # yet; fail loudly rather than silently ignoring them (esp. --dry-run,
+        # which a user runs expecting a preview, not a real run).
+        for flag, val in (("--dry-run", dry_run), ("--shell", shell)):
+            if val:
+                typer.echo(
+                    f"Error: {flag} is not supported for exec-format skills yet.",
+                    err=True,
+                )
+                raise typer.Exit(2)
+        rc = run_skill_llm(skill_path, user_input or "", image=image)
         raise typer.Exit(rc)
 
     # Resume eligibility state — resolved inside the try block below.
