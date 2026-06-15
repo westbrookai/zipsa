@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
 from .core.executor import DockerExecutor
+from .run_llm import run_skill_llm
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
 from .core.requires import (
@@ -66,6 +67,21 @@ def _resolve_skill_path(name: str) -> Path:
             )
         return p
     return resolve_skill(name)
+
+
+def _is_exec_format(skill_dir: Path) -> bool:
+    """Return True for skills authored for the new LLM run-time.
+
+    An exec-format skill has SKILL.md + zipsa-dist/ phase scripts but
+    deliberately omits manifest.yaml (the legacy marker). Presence of all
+    three signals an ambiguous hybrid — treat it as legacy so DockerExecutor
+    can handle it with the full manifest-aware pipeline.
+    """
+    return (
+        (skill_dir / "SKILL.md").is_file()
+        and (skill_dir / "zipsa-dist").is_dir()
+        and not (skill_dir / "manifest.yaml").exists()
+    )
 
 
 _MAX_CALL_DEPTH = 5
@@ -293,6 +309,14 @@ def run(
     """Execute a skill with the specified runtime."""
     # Reject cyclic invocations and depth-capped chains before any expensive work.
     _check_call_trace(name)
+
+    # Dispatch: exec-format skills (SKILL.md + zipsa-dist/, no manifest.yaml)
+    # route to the LLM run-time immediately, before Skill.load (which requires
+    # manifest.yaml). Accept a filesystem path or an installed skill name.
+    _skill_dir_candidate = Path(name) if Path(name).is_dir() else None
+    if _skill_dir_candidate is not None and _is_exec_format(_skill_dir_candidate):
+        rc = run_skill_llm(_skill_dir_candidate, user_input or "", image=image)
+        raise typer.Exit(rc)
 
     # Resume eligibility state — resolved inside the try block below.
     resume_from: Optional[int] = None

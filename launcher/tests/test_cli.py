@@ -1998,6 +1998,44 @@ class TestListRequiresIndicator:
         assert "needs configure" not in result.output
 
 
+class TestRunDispatch:
+    @patch("zipsa.cli.run_skill_llm")
+    def test_exec_format_skill_uses_llm_runtime(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = tmp_path / "weather"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")          # no manifest.yaml
+        mock_run_llm.return_value = 0
+        from zipsa.cli import app
+        from typer.testing import CliRunner
+        res = CliRunner().invoke(app, ["run", str(root), "Sydney"])
+        assert res.exit_code == 0, res.output
+        called_root, called_input = mock_run_llm.call_args.args[:2]
+        assert Path(called_root).name == "weather"
+        assert called_input == "Sydney"
+
+    @patch("zipsa.cli.DockerExecutor")
+    def test_legacy_manifest_skill_uses_docker_executor(self, mock_exec, tmp_path, monkeypatch):
+        # A skill directory with manifest.yaml (but no zipsa-dist/) is legacy.
+        # We pass it as an installed skill name via _resolve_skill_path so the
+        # full DockerExecutor path is exercised (filesystem-path names go through
+        # resolve_skill which only handles installed names).
+        root = tmp_path / "legacy"; root.mkdir()
+        (root / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: legacy, version: 0.1.0}\n"
+            "spec: {purpose: test, instructions: ./SKILL.md, tools: {builtin: []}}\n"
+        )
+        (root / "SKILL.md").write_text("# legacy")
+        from zipsa.cli import app
+        from typer.testing import CliRunner
+        with patch("zipsa.cli._resolve_skill_path", return_value=root):
+            mock_exec.return_value.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            CliRunner().invoke(app, ["run", "legacy"])
+        assert mock_exec.called    # legacy path still taken, not LLM runtime
+
+
 class TestCallTraceCycleDetection:
     """ZIPSA_CALL_TRACE and ZIPSA_CALL_DEPTH env vars are set by a
     parent skill's RunSkillHandler when spawning a child. The child
