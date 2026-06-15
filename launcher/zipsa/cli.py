@@ -13,6 +13,7 @@ from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
+from .create import run_forge
 from .core.executor import DockerExecutor
 from .core.install_health import check_install
 from .core.renderer import OutputMode, render
@@ -617,19 +618,11 @@ def create_skill(
         typer.Option("--skills-dir", help="Where the finished skill is promoted (default: ./skills)"),
     ] = Path("skills"),
 ):
-    """Author a new zipsa skill, with the user, in the runtime container.
+    """Author a new zipsa skill (alias of `forge`).
 
-    Spawns the pinned runtime image's claude headless: it converses with
-    you over HITL, writes the skill into a staging dir, tests it via the
-    real `zipsa exec` (orchestrated by the host), and — once you agree on
-    a name — promotes it into <skills-dir>/<name>/. The name is decided
-    last; nothing lands until then.
-
-    The authoring workflow + contract ship with the launcher, so this
-    works anywhere; only Docker and a Claude login are required.
+    Kept for backward compatibility; delegates to the same forge loop as
+    `zipsa forge`. See `zipsa forge --help` for details.
     """
-    from .create import run_create
-
     if not intent:
         intent = typer.prompt(
             "What kind of agent would you like to create?"
@@ -639,12 +632,63 @@ def create_skill(
             raise typer.Exit(1)
 
     try:
-        rc = run_create(
+        rc = run_forge(
             intent, skills_dir=skills_dir.resolve(), image=image,
         )
     except FileNotFoundError:
         typer.echo(
             "Error: `docker` not found — install Docker to use `zipsa create`.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    raise typer.Exit(rc)
+
+
+@app.command(name="forge")
+def forge_skill(
+    intent: Annotated[
+        Optional[str],
+        typer.Argument(help="Rough description of the agent you want to forge"),
+    ] = None,
+    image: Annotated[
+        str,
+        typer.Option("--image", "-i", help="Runtime image for the authoring container"),
+    ] = _DEFAULT_IMAGE,
+    skills_dir: Annotated[
+        Path,
+        typer.Option("--skills-dir", help="Where the finished skill is promoted (default: ./skills)"),
+    ] = Path("skills"),
+):
+    """Forge a new zipsa skill, with the user, in the runtime container.
+
+    Spawns the pinned runtime image's claude headless and runs the forge
+    loop: it captures your INTENT.md first, drafts the skill into a
+    staging dir, then iterates — testing each draft via `exec` (one
+    script, fast debug) and `run` (the whole draft through the real
+    run-time), both scoped to the staging dir by the host. It keeps
+    refining until the skill works, and — once you agree on a name —
+    promotes it into <skills-dir>/<name>/. The name is decided last;
+    nothing lands until then.
+
+    The authoring workflow + contract ship with the launcher, so this
+    works anywhere; only Docker and a Claude login are required.
+    """
+    if not intent:
+        intent = typer.prompt(
+            "What would you like to forge?"
+        ).strip()
+        if not intent:
+            typer.echo("Error: no intent given.", err=True)
+            raise typer.Exit(1)
+
+    try:
+        rc = run_forge(
+            intent, skills_dir=skills_dir.resolve(), image=image,
+        )
+    except FileNotFoundError:
+        typer.echo(
+            "Error: `docker` not found — install Docker to use `zipsa forge`.",
             err=True,
         )
         raise typer.Exit(1)
@@ -1399,8 +1443,9 @@ def connect(
 #
 # Keep in sync with @app.command(name=...) decorators above.
 _KNOWN_COMMANDS = frozenset({
-    "run", "exec", "create", "schedule", "view", "validate", "list", "where",
-    "discover", "configure", "runtimes", "install", "uninstall", "connect",
+    "run", "exec", "create", "forge", "schedule", "view", "validate", "list",
+    "where", "discover", "configure", "runtimes", "install", "uninstall",
+    "connect",
 })
 
 

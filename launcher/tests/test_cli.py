@@ -2157,3 +2157,23 @@ class TestRunResumeFlag:
                                 catch_exceptions=False)
         assert result.exit_code == 2
         assert "previous failed run found" in (result.stderr or "")
+
+
+class TestForgeCommand:
+    """Test forge command and create alias."""
+
+    @patch("zipsa.cli.run_forge")
+    def test_forge_invokes_run_forge(self, mock_forge, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        mock_forge.return_value = 0
+        res = runner.invoke(app, ["forge", "a weather alert"])
+        assert res.exit_code == 0, res.output
+        assert mock_forge.call_args.args[0] == "a weather alert"
+
+    @patch("zipsa.cli.run_forge")
+    def test_create_alias_still_works(self, mock_forge, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        mock_forge.return_value = 0
+        res = runner.invoke(app, ["create", "x"])
+        assert res.exit_code == 0, res.output
+        assert mock_forge.called
