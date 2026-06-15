@@ -17,6 +17,7 @@ from __future__ import annotations
 import secrets
 import socket
 import threading
+import time
 from typing import Optional
 
 import uvicorn
@@ -113,13 +114,14 @@ class RunServer:
         deadline, step, elapsed = 5.0, 0.05, 0.0
         while elapsed < deadline:
             try:
-                sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sk.settimeout(0.5)
-                sk.connect(("127.0.0.1", self.port))
-                sk.close()
+                # `with` closes the socket even when connect() raises, so a
+                # slow-to-bind server doesn't leak one FD per failed probe.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                    sk.settimeout(0.5)
+                    sk.connect(("127.0.0.1", self.port))
                 return
             except OSError:
-                threading.Event().wait(step)
+                time.sleep(step)
                 elapsed += step
         raise RuntimeError(f"RunServer failed to listen on port {self.port}")
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 import secrets
 import socket
 import threading
+import time
 from typing import Optional
 
 import uvicorn
@@ -138,13 +139,14 @@ class CreateServer:
         deadline, step, elapsed = 5.0, 0.05, 0.0
         while elapsed < deadline:
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.5)
-                s.connect(("127.0.0.1", self.port))
-                s.close()
+                # `with` closes the socket even when connect() raises, so a
+                # slow-to-bind server doesn't leak one FD per failed probe.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    s.connect(("127.0.0.1", self.port))
                 return
             except OSError:
-                threading.Event().wait(step)
+                time.sleep(step)
                 elapsed += step
         raise RuntimeError(f"CreateServer failed to listen on port {self.port}")
 
