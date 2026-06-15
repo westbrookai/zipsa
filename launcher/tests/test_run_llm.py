@@ -49,3 +49,42 @@ class TestBuildRunArgv:
         )
         i = argv.index("--env-file")
         assert argv[i + 1] == str(ef)
+
+
+from unittest.mock import patch, MagicMock
+
+
+class TestRunSkillLlm:
+    @patch("zipsa.run_llm.subprocess.run")
+    @patch("zipsa.run_llm.RunServer")
+    def test_starts_server_runs_container_stops_server(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        root = tmp_path / "weather"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")
+        srv = MagicMock(); srv.port = 51111; srv.token = "tok"
+        mock_server_cls.return_value = srv
+        mock_run.return_value.returncode = 0
+
+        from zipsa.run_llm import run_skill_llm
+        rc = run_skill_llm(root, "Sydney", image="img")
+
+        assert rc == 0
+        srv.start.assert_called_once()
+        srv.stop.assert_called_once()                      # torn down even on success
+        argv = mock_run.call_args.args[0]
+        assert argv[:2] == ["docker", "run"]
+        assert "claude" in argv
+
+    @patch("zipsa.run_llm.subprocess.run", side_effect=RuntimeError("boom"))
+    @patch("zipsa.run_llm.RunServer")
+    def test_server_stopped_on_error(self, mock_server_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        root = tmp_path / "w"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# w\n")
+        srv = MagicMock(); srv.port = 51112; srv.token = "t"
+        mock_server_cls.return_value = srv
+        from zipsa.run_llm import run_skill_llm
+        import pytest
+        with pytest.raises(RuntimeError):
+            run_skill_llm(root, "", image="img")
+        srv.stop.assert_called_once()

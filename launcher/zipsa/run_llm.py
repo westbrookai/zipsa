@@ -8,10 +8,17 @@ from __future__ import annotations
 import json
 import platform
 import subprocess
+import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from .create import build_mcp_config  # reuse the container mcp-config shape
+from . import paths as zipsa_paths
+from .core.hitl_mcp import HitlIO
+from .core.run_server import RunServer
+from .core.run_script_handler import RunScriptHandler
+from .create import _is_interactive
 
 _CONTAINER_MCP_CONFIG = "/tmp/zipsa-run-mcp.json"
 
@@ -59,3 +66,36 @@ def build_run_argv(
         "--permission-mode", "bypassPermissions",
     ]
     return argv
+
+
+def run_skill_llm(
+    skill_root: Path, user_input: str, *,
+    image: str, env_file: "Path | None" = None,
+) -> int:
+    """Execute a skill as an LLM following SKILL.md, calling scripts via
+    the host RunServer's exec tool. Returns the container claude's exit code."""
+    if env_file is None:
+        env_file = zipsa_paths.global_env_file()
+    skill_root = skill_root.resolve()
+
+    hitl_io = HitlIO(
+        stdin=sys.stdin, stdout=sys.stdout,
+        stdout_lock=threading.Lock(), is_interactive=_is_interactive(sys.stdin),
+    )
+    server = RunServer(hitl_io, RunScriptHandler(docker_image=image, skill_root=skill_root))
+    server.start()
+    try:
+        mcp_config = build_mcp_config(server.port, server.token)
+        cfg_dir = zipsa_paths.zipsa_home() / "run"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        mcp_config_host = Path(tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=cfg_dir)[1])
+        mcp_config_host.write_text(json.dumps(mcp_config))
+        argv = build_run_argv(
+            image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
+            prompt=build_run_prompt(skill_root, user_input),
+            env_file=env_file if env_file.exists() else None,
+        )
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
+        return proc.returncode
+    finally:
+        server.stop()
