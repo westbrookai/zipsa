@@ -247,9 +247,9 @@ ENV PATH="/home/agent/.local/bin:${PATH}"
 # Install uv (pinned version) and configure shell
 RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && \
     uv --version && uvx --version && \
-    echo 'alias ll="ls -lah"' >> /home/agent/.bashrc && \
-    echo 'alias claude-help="claude --help"' >> /home/agent/.bashrc && \
-    echo 'export PS1="\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "' >> /home/agent/.bashrc
+    printf '%s\n' 'alias ll="ls -lah"' >> /home/agent/.bashrc && \
+    printf '%s\n' 'alias claude-help="claude --help"' >> /home/agent/.bashrc && \
+    printf '%s\n' 'export PS1="\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "' >> /home/agent/.bashrc
 
 WORKDIR /home/agent/workspace
 
