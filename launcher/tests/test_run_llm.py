@@ -1,4 +1,8 @@
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from zipsa.run_llm import build_run_prompt, build_run_argv
 
 
@@ -51,9 +55,6 @@ class TestBuildRunArgv:
         assert argv[i + 1] == str(ef)
 
 
-from unittest.mock import patch, MagicMock
-
-
 class TestRunSkillLlm:
     @patch("zipsa.run_llm.subprocess.run")
     @patch("zipsa.run_llm.RunServer")
@@ -84,7 +85,6 @@ class TestRunSkillLlm:
         srv = MagicMock(); srv.port = 51112; srv.token = "t"
         mock_server_cls.return_value = srv
         from zipsa.run_llm import run_skill_llm
-        import pytest
         with pytest.raises(RuntimeError):
             run_skill_llm(root, "", image="img")
         srv.stop.assert_called_once()

@@ -13,12 +13,12 @@ import tempfile
 import threading
 from pathlib import Path
 
-from .create import build_mcp_config  # reuse the container mcp-config shape
 from . import paths as zipsa_paths
+# reuse create's container mcp-config shape + interactivity check
+from .create import _is_interactive, build_mcp_config
 from .core.hitl_mcp import HitlIO
 from .core.run_server import RunServer
 from .core.run_script_handler import RunScriptHandler
-from .create import _is_interactive
 
 _CONTAINER_MCP_CONFIG = "/tmp/zipsa-run-mcp.json"
 
@@ -70,7 +70,7 @@ def build_run_argv(
 
 def run_skill_llm(
     skill_root: Path, user_input: str, *,
-    image: str, env_file: "Path | None" = None,
+    image: str, env_file: Path | None = None,
 ) -> int:
     """Execute a skill as an LLM following SKILL.md, calling scripts via
     the host RunServer's exec tool. Returns the container claude's exit code."""
@@ -84,6 +84,7 @@ def run_skill_llm(
     )
     server = RunServer(hitl_io, RunScriptHandler(docker_image=image, skill_root=skill_root))
     server.start()
+    mcp_config_host: Path | None = None
     try:
         mcp_config = build_mcp_config(server.port, server.token)
         cfg_dir = zipsa_paths.zipsa_home() / "run"
@@ -99,3 +100,8 @@ def run_skill_llm(
         return proc.returncode
     finally:
         server.stop()
+        # The mcp-config carries the bearer token — don't leave it lying
+        # around once the session ends. (One file per run would otherwise
+        # accumulate under ~/.zipsa/run/.)
+        if mcp_config_host is not None:
+            mcp_config_host.unlink(missing_ok=True)
