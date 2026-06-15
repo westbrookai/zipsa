@@ -8,7 +8,7 @@
 #-----------------------------------------------------------
 
 # Image version (injected at publish time via --build-arg)
-ARG ZIPSA_RUNTIME_VERSION="0.4.8"
+ARG ZIPSA_RUNTIME_VERSION="0.4.9"
 
 # System packages (apt)
 ARG CURL_VERSION="7.88.1-10+deb12u14"
