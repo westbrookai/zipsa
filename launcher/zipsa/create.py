@@ -279,6 +279,7 @@ def run_create(
     image: str,
     env_file: Path | None = None,
 ) -> int:
-    """Deprecated alias of run_forge. The create→forge rename keeps this
-    so the relay workflow + docs that reference `zipsa create` still work."""
+    """Deprecated alias of run_forge, kept for library/external callers
+    after the create→forge rename. (The `zipsa create` CLI command calls
+    run_forge directly; it does not route through this wrapper.)"""
     return run_forge(intent, skills_dir=skills_dir, image=image, env_file=env_file)
