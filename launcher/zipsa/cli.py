@@ -30,6 +30,7 @@ from .core.requires import (
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
 from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
+from .run_llm import run_skill_llm
 from .runtimes import list_runtimes
 from .scheduling import get_scheduler
 
@@ -66,6 +67,21 @@ def _resolve_skill_path(name: str) -> Path:
             )
         return p
     return resolve_skill(name)
+
+
+def _is_exec_format(skill_dir: Path) -> bool:
+    """Return True for skills authored for the new LLM run-time.
+
+    An exec-format skill has SKILL.md + zipsa-dist/ phase scripts but
+    deliberately omits manifest.yaml (the legacy marker). Presence of all
+    three signals an ambiguous hybrid — treat it as legacy so DockerExecutor
+    can handle it with the full manifest-aware pipeline.
+    """
+    return (
+        (skill_dir / "SKILL.md").is_file()
+        and (skill_dir / "zipsa-dist").is_dir()
+        and not (skill_dir / "manifest.yaml").exists()
+    )
 
 
 _MAX_CALL_DEPTH = 5
@@ -293,6 +309,25 @@ def run(
     """Execute a skill with the specified runtime."""
     # Reject cyclic invocations and depth-capped chains before any expensive work.
     _check_call_trace(name)
+
+    # Dispatch: exec-format skills (SKILL.md + zipsa-dist/, no manifest.yaml)
+    # route to the LLM run-time immediately, before Skill.load (which requires
+    # manifest.yaml). Referenced by filesystem path (exec-format skills aren't
+    # installed by the manifest-based installer yet).
+    skill_path = Path(name)
+    if skill_path.is_dir() and _is_exec_format(skill_path):
+        # These legacy-executor flags have no meaning on the LLM run-time path
+        # yet; fail loudly rather than silently ignoring them (esp. --dry-run,
+        # which a user runs expecting a preview, not a real run).
+        for flag, val in (("--dry-run", dry_run), ("--shell", shell), ("--env", env)):
+            if val:
+                typer.echo(
+                    f"Error: {flag} is not supported for exec-format skills yet.",
+                    err=True,
+                )
+                raise typer.Exit(2)
+        rc = run_skill_llm(skill_path, user_input or "", image=image)
+        raise typer.Exit(rc)
 
     # Resume eligibility state — resolved inside the try block below.
     resume_from: Optional[int] = None

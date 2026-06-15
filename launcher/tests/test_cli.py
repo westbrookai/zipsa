@@ -1998,6 +1998,76 @@ class TestListRequiresIndicator:
         assert "needs configure" not in result.output
 
 
+class TestRunDispatch:
+    def _exec_skill(self, tmp_path: Path) -> Path:
+        root = tmp_path / "weather"
+        (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")          # no manifest.yaml
+        return root
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_exec_format_skill_uses_llm_runtime(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        mock_run_llm.return_value = 0
+        res = runner.invoke(app, ["run", str(root), "Sydney"])
+        assert res.exit_code == 0, res.output
+        called_root, called_input = mock_run_llm.call_args.args[:2]
+        assert Path(called_root).name == "weather"
+        assert called_input == "Sydney"
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_dry_run_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
+        # --dry-run on an exec-format skill must fail loudly, not silently
+        # do a real run.
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        res = runner.invoke(app, ["run", str(root), "--dry-run"])
+        assert res.exit_code == 2
+        assert "--dry-run" in res.output
+        assert not mock_run_llm.called
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_shell_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        res = runner.invoke(app, ["run", str(root), "--shell"])
+        assert res.exit_code == 2
+        assert "--shell" in res.output
+        assert not mock_run_llm.called
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_env_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        res = runner.invoke(app, ["run", str(root), "--env", "K=V"])
+        assert res.exit_code == 2
+        assert "--env" in res.output
+        assert not mock_run_llm.called
+
+    @patch("zipsa.cli.run_skill_llm")
+    @patch("zipsa.cli.DockerExecutor")
+    def test_legacy_manifest_skill_uses_docker_executor(self, mock_exec, mock_run_llm, tmp_path):
+        # A skill directory with manifest.yaml (but no zipsa-dist/) is legacy.
+        # We pass it as an installed skill name via _resolve_skill_path so the
+        # full DockerExecutor path is exercised (filesystem-path names go through
+        # resolve_skill which only handles installed names).
+        root = tmp_path / "legacy"; root.mkdir()
+        (root / "manifest.yaml").write_text(
+            "apiVersion: zipsa.dev/v1alpha1\nkind: Skill\n"
+            "metadata: {name: legacy, version: 0.1.0}\n"
+            "spec: {purpose: test, instructions: ./SKILL.md, tools: {builtin: []}}\n"
+        )
+        (root / "SKILL.md").write_text("# legacy")
+        with patch("zipsa.cli._resolve_skill_path", return_value=root):
+            mock_exec.return_value.run.return_value = iter([
+                {"type": "zipsa_run_complete", "status": "ok", "exit_code": 0},
+            ])
+            runner.invoke(app, ["run", "legacy"])
+        assert mock_exec.called          # legacy path taken
+        assert not mock_run_llm.called   # NOT the LLM runtime
+
+
 class TestCallTraceCycleDetection:
     """ZIPSA_CALL_TRACE and ZIPSA_CALL_DEPTH env vars are set by a
     parent skill's RunSkillHandler when spawning a child. The child

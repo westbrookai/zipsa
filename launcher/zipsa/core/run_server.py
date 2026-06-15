@@ -1,21 +1,15 @@
-"""CreateServer — focused host MCP server for `zipsa create`.
+"""Host MCP server for the run-time: exposes exec + HITL to the in-container
+LLM that runs a skill. Sibling of CreateServer, minus promote.
 
-The authoring agent runs headless (`claude -p`) inside the runtime
-container and reaches back here over HTTP MCP for everything it needs:
-
-- ask / confirm / choose — converse with the host user (HITL), exactly
-  the mechanism the legacy `zipsa run` path uses (routed to the host
-  terminal via HitlIO).
-- exec — test the draft via the real host `zipsa exec` (per-phase
-  container).
-- promote — name + move the draft into the repo.
-
-Deliberately NOT the full HitlServer surface (no memory / run_skill /
-write_skill_files). Reuses the legacy run path's building blocks
-(free-port picker, allowed-host list, Bearer-token middleware, HITL
-handlers) but stays a separate class so DockerExecutor is untouched.
-Handlers are injected so the server is testable without docker or real
-filesystem moves.
+Design decisions:
+- Registers exactly exec + ask + confirm + choose; no promote, no memory, no
+  skill-builder tools. Keeping the surface minimal prevents the skill LLM from
+  calling tools it should not have access to.
+- tool_names() returns a literal list matching the @mcp.tool registrations;
+  deriving from the FastMCP instance at test time is fragile (internal API),
+  so we document the registration explicitly here instead.
+- CallerContextMiddleware with a per-server token enforces auth; the exec
+  handler is injected so RunServer is testable without Docker or real scripts.
 """
 
 from __future__ import annotations
@@ -35,29 +29,25 @@ from .hitl_mcp import AskHandler, ChooseHandler, ConfirmHandler, HitlIO, HitlUna
 from .hitl_runner import _ALLOWED_HOSTS, _pick_free_port
 
 
-class CreateServer:
-    def __init__(
-        self,
-        hitl_io: HitlIO,
-        exec_handler,
-        promote_handler,
-        caller: "CallerInfo | None" = None,
-    ) -> None:
+class RunServer:
+    def __init__(self, hitl_io: HitlIO, exec_handler, caller: "CallerInfo | None" = None):
         self._io = hitl_io
         self._exec_handler = exec_handler
-        self._promote_handler = promote_handler
-        self._caller = caller or CallerInfo("skill-builder", "create")
-        self.port: int = 0
-        self.token: str = ""
+        self._caller = caller or CallerInfo("run", "run")
+        self.port = 0
+        self.token = ""
+        self._tool_names: list[str] = []
         self._thread: Optional[threading.Thread] = None
         self._uvicorn_server: Optional[uvicorn.Server] = None
+
+    def tool_names(self) -> list[str]:
+        return list(self._tool_names)
 
     def start(self) -> None:
         self.port = _pick_free_port()
         self.token = secrets.token_urlsafe(32)
-
         mcp = FastMCP(
-            "zipsa-create",
+            "zipsa-run",
             host="127.0.0.1",
             port=self.port,
             stateless_http=False,
@@ -68,10 +58,14 @@ class CreateServer:
         )
 
         exec_handler = self._exec_handler
-        promote_handler = self._promote_handler
         ask_h = AskHandler(self._io)
         confirm_h = ConfirmHandler(self._io)
         choose_h = ChooseHandler(self._io)
+
+        @mcp.tool(name="exec")
+        def exec_script(script: str, args: str = "", prev: dict | None = None) -> dict:
+            """Run ONE of this skill's scripts and return its result."""
+            return exec_handler.run(script=script, args=args, prev=prev)
 
         @mcp.tool()
         def ask(prompt: str) -> str:
@@ -97,42 +91,23 @@ class CreateServer:
             except HitlUnattended as e:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
-        @mcp.tool(name="exec")
-        def exec_skill(
-            staging_path: str, args: str = "",
-            mounts: list[str] | None = None,
-        ) -> dict:
-            """Test the draft skill: run it through the real `zipsa exec`
-            (docker mode, a fresh runtime container per phase) and return
-            the result. `staging_path` is the skill dir; `args` is an
-            optional user_query to exercise it with; `mounts` is a list of
-            HOST:CONTAINER strings (e.g.
-            "~/.zipsa/credentials/telegram.json:/mnt/creds/telegram.json")
-            for skills that read a credential/data file."""
-            return exec_handler.run(
-                staging_path=staging_path, args=args, mounts=mounts or [],
-            )
-
-        @mcp.tool(name="promote")
-        def promote_skill(staging_path: str, name: str) -> dict:
-            """Finalize the skill: validate `name` (kebab-case) and move
-            the draft from staging into the repo's skills/<name>/. Call
-            this only once the user is happy and a name is agreed."""
-            return promote_handler.run(staging_path=staging_path, name=name)
-
+        self._tool_names = ["exec", "ask", "confirm", "choose"]
         app = mcp.streamable_http_app()
         app.add_middleware(
             CallerContextMiddleware, token_map={self.token: self._caller},
         )
         config = uvicorn.Config(
-            app, host="0.0.0.0", port=self.port,
-            log_level="error", access_log=False,
+            app,
+            host="0.0.0.0",
+            port=self.port,
+            log_level="error",
+            access_log=False,
         )
         self._uvicorn_server = uvicorn.Server(config)
         self._thread = threading.Thread(
             target=self._uvicorn_server.run,
             daemon=True,
-            name=f"create-mcp-{self.port}",
+            name=f"run-mcp-{self.port}",
         )
         self._thread.start()
 
@@ -141,14 +116,14 @@ class CreateServer:
             try:
                 # `with` closes the socket even when connect() raises, so a
                 # slow-to-bind server doesn't leak one FD per failed probe.
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.5)
-                    s.connect(("127.0.0.1", self.port))
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                    sk.settimeout(0.5)
+                    sk.connect(("127.0.0.1", self.port))
                 return
             except OSError:
                 time.sleep(step)
                 elapsed += step
-        raise RuntimeError(f"CreateServer failed to listen on port {self.port}")
+        raise RuntimeError(f"RunServer failed to listen on port {self.port}")
 
     def stop(self) -> None:
         if self._uvicorn_server is not None:
