@@ -1,8 +1,9 @@
 """Tests for zipsa.paths — centralized path resolution."""
 
 import os
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -227,3 +228,68 @@ class TestResolveSkillMemoryPath:
         from zipsa.paths import resolve_skill_memory_path
         result = resolve_skill_memory_path("daily-progress")
         assert '"v": "newest"' in result.read_text()
+
+
+class TestDefaultForgeSkillsDir:
+    """default_forge_skills_dir() returns a repo-aware path.
+
+    When inside a git repo → <toplevel>/skills.
+    When outside (or git not installed) → ~/.zipsa/skills.
+    """
+
+    def test_returns_toplevel_skills_when_in_git_repo(self, tmp_path, monkeypatch):
+        """subprocess.run returns a valid toplevel → <toplevel>/skills."""
+        from zipsa.paths import default_forge_skills_dir
+
+        mock_result = MagicMock()
+        mock_result.stdout = str(tmp_path) + "\n"
+
+        with patch("zipsa.paths.subprocess.run", return_value=mock_result) as mock_run:
+            result = default_forge_skills_dir()
+
+        mock_run.assert_called_once_with(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result == tmp_path / "skills"
+
+    def test_returns_skills_dir_on_called_process_error(self, tmp_path, monkeypatch):
+        """Not a git repo (CalledProcessError) → skills_dir()."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.paths import default_forge_skills_dir
+
+        with patch(
+            "zipsa.paths.subprocess.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            result = default_forge_skills_dir()
+
+        assert result == tmp_path / "skills"
+
+    def test_returns_skills_dir_when_git_not_installed(self, tmp_path, monkeypatch):
+        """git binary absent (FileNotFoundError) → skills_dir()."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.paths import default_forge_skills_dir
+
+        with patch(
+            "zipsa.paths.subprocess.run",
+            side_effect=FileNotFoundError("git not found"),
+        ):
+            result = default_forge_skills_dir()
+
+        assert result == tmp_path / "skills"
+
+    def test_returns_skills_dir_when_toplevel_empty(self, tmp_path, monkeypatch):
+        """subprocess.run succeeds but stdout is empty → skills_dir()."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        from zipsa.paths import default_forge_skills_dir
+
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+
+        with patch("zipsa.paths.subprocess.run", return_value=mock_result):
+            result = default_forge_skills_dir()
+
+        assert result == tmp_path / "skills"

@@ -30,7 +30,7 @@ from .core.requires import (
 )
 from .core.skill import Skill
 from .installer import install_from_github, install_local, _write_install_json
-from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file
+from .paths import skill_runs_dir, installed_skill_dir, resolve_skill, skills_dir as _skills_dir, zipsa_home, SkillNotInstalledError, skill_data_dir as _skill_data_dir, skill_requires_file, default_forge_skills_dir
 from .run_llm import run_skill_llm
 from .runtimes import list_runtimes
 from .scheduling import get_scheduler
@@ -632,9 +632,12 @@ def create_skill(
         typer.Option("--image", "-i", help="Runtime image for the authoring container"),
     ] = _DEFAULT_IMAGE,
     skills_dir: Annotated[
-        Path,
-        typer.Option("--skills-dir", help="Where the finished skill is promoted (default: ./skills)"),
-    ] = Path("skills"),
+        Optional[Path],
+        typer.Option(
+            "--skills-dir",
+            help="Where the finished skill is promoted (default: <repo>/skills in a git repo, else ~/.zipsa/skills)",
+        ),
+    ] = None,
 ):
     """Author a new zipsa skill (alias of `forge`).
 
@@ -649,9 +652,10 @@ def create_skill(
             typer.echo("Error: no intent given.", err=True)
             raise typer.Exit(1)
 
+    dest = skills_dir.resolve() if skills_dir is not None else default_forge_skills_dir()
     try:
         rc = run_forge(
-            intent, skills_dir=skills_dir.resolve(), image=image,
+            intent, skills_dir=dest, image=image,
         )
     except FileNotFoundError:
         typer.echo(
@@ -674,9 +678,12 @@ def forge_skill(
         typer.Option("--image", "-i", help="Runtime image for the authoring container"),
     ] = _DEFAULT_IMAGE,
     skills_dir: Annotated[
-        Path,
-        typer.Option("--skills-dir", help="Where the finished skill is promoted (default: ./skills)"),
-    ] = Path("skills"),
+        Optional[Path],
+        typer.Option(
+            "--skills-dir",
+            help="Where the finished skill is promoted (default: <repo>/skills in a git repo, else ~/.zipsa/skills)",
+        ),
+    ] = None,
 ):
     """Forge a new zipsa skill, with the user, in the runtime container.
 
@@ -700,9 +707,10 @@ def forge_skill(
             typer.echo("Error: no intent given.", err=True)
             raise typer.Exit(1)
 
+    dest = skills_dir.resolve() if skills_dir is not None else default_forge_skills_dir()
     try:
         rc = run_forge(
-            intent, skills_dir=skills_dir.resolve(), image=image,
+            intent, skills_dir=dest, image=image,
         )
     except FileNotFoundError:
         typer.echo(
