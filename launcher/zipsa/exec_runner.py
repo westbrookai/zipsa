@@ -37,10 +37,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +89,52 @@ class ExecRunnerError(Exception):
     (non-zero exit) are not errors — they come back in
     ExecResult.exit_code.
     """
+
+
+_PEP723_RE = re.compile(
+    r"^# /// script\s*\n((?:#[^\n]*\n)+?)# ///$",
+    re.MULTILINE,
+)
+_DEFAULT_TIMEOUT = 600
+
+
+def _inline_timeout_seconds(phase_path: Path) -> int | None:
+    """Return the [tool.zipsa].timeout-seconds from a .py phase's PEP 723
+    inline metadata block, or None if absent / unreadable / not a .py file.
+
+    Never raises — any parse error silently returns None so the caller
+    falls back to the default timeout.
+    """
+    if phase_path.suffix != ".py":
+        return None
+    try:
+        text = phase_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _PEP723_RE.search(text)
+    if m is None:
+        return None
+    # Strip the leading "# " (or bare "#") from each line and parse as TOML.
+    lines = []
+    for line in m.group(1).splitlines():
+        if line.startswith("# "):
+            lines.append(line[2:])
+        elif line == "#":
+            lines.append("")
+        else:
+            # Bare "#X" without space — strip the '#'
+            lines.append(line[1:])
+    try:
+        data = tomllib.loads("\n".join(lines))
+    except tomllib.TOMLDecodeError:
+        return None
+    try:
+        value = data["tool"]["zipsa"]["timeout-seconds"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(value, int):
+        return None
+    return value
 
 
 def _parse_result(stdout: str) -> dict | None:
@@ -291,7 +339,7 @@ def run_phase(
     docker_image: str | None = None,
     prev: dict | None = None,
     extra_mounts: list[tuple[Path, str]] | None = None,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = None,
 ) -> ExecResult:
     """Execute one phase file and return its outcome.
 
@@ -316,6 +364,10 @@ def run_phase(
     phase_path = phase_path.resolve()
     if not phase_path.is_file():
         raise ExecRunnerError(f"phase file not found: {phase_path}")
+
+    # Timeout resolution: explicit caller value → inline [tool.zipsa] → 600.
+    if timeout_seconds is None:
+        timeout_seconds = _inline_timeout_seconds(phase_path) or _DEFAULT_TIMEOUT
 
     if out_dir is None:
         if docker_image is not None:
@@ -432,7 +484,7 @@ def run_phases(
     skill_root: Path | None = None,
     docker_image: str | None = None,
     extra_mounts: list[tuple[Path, str]] | None = None,
-    timeout_seconds: int = 600,
+    timeout_seconds: int | None = None,
 ) -> list[ExecResult]:
     """Run a skill's phases sequentially, chaining each result into the
     next phase's `prev`.

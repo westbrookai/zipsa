@@ -119,6 +119,20 @@ class TestBuildExecCommand:
         )
         assert cmd == ["zipsa", "exec", "/x"]
 
+    def test_with_timeout(self):
+        cmd = build_exec_command(
+            zipsa=["zipsa"], skill_path=Path("/x"), mounts=[], query=None,
+            timeout=1500,
+        )
+        assert "--timeout" in cmd
+        assert "1500" in cmd
+
+    def test_without_timeout_no_flag(self):
+        cmd = build_exec_command(
+            zipsa=["zipsa"], skill_path=Path("/x"), mounts=[], query=None,
+        )
+        assert "--timeout" not in cmd
+
 
 class TestLaunchdScheduler:
     def _sched(self, tmp_path):

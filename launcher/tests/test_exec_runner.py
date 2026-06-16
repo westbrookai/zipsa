@@ -28,6 +28,7 @@ from zipsa.exec_runner import (
     ExecRunnerError,
     _build_docker_argv,
     _build_llm_prompt,
+    _inline_timeout_seconds,
     run_phase,
     run_phases,
 )
@@ -1236,3 +1237,211 @@ class TestRunRecord:
         assert "1.fetch" in out and "2.send" in out   # phase markers
         err = (run_dir / "stderr.log").read_text()
         assert "warn" in err
+
+
+# ---------------------------------------------------------------------------
+# Inline timeout parsing — _inline_timeout_seconds
+# ---------------------------------------------------------------------------
+
+class TestInlineTimeoutSeconds:
+    """_inline_timeout_seconds extracts [tool.zipsa].timeout-seconds from a
+    .py phase's PEP 723 block, returning None for every non-applicable case."""
+
+    def test_returns_value_when_declared(self, tmp_path):
+        phase = tmp_path / "1.poll.py"
+        phase.write_text(
+            "# /// script\n"
+            "# dependencies = [\"requests\"]\n"
+            "# [tool.zipsa]\n"
+            "# timeout-seconds = 1500\n"
+            "# ///\n"
+            "import sys\n"
+        )
+        assert _inline_timeout_seconds(phase) == 1500
+
+    def test_returns_none_for_no_pep723_block(self, tmp_path):
+        phase = tmp_path / "1.do.py"
+        phase.write_text("import json, sys\nprint('{}')\n")
+        assert _inline_timeout_seconds(phase) is None
+
+    def test_returns_none_for_block_without_tool_zipsa(self, tmp_path):
+        phase = tmp_path / "1.do.py"
+        phase.write_text(
+            "# /// script\n"
+            "# dependencies = [\"requests\"]\n"
+            "# ///\n"
+            "import sys\n"
+        )
+        assert _inline_timeout_seconds(phase) is None
+
+    def test_returns_none_for_malformed_toml(self, tmp_path):
+        phase = tmp_path / "1.do.py"
+        phase.write_text(
+            "# /// script\n"
+            "# [tool.zipsa\n"          # missing closing bracket — malformed
+            "# timeout-seconds = 5\n"
+            "# ///\n"
+        )
+        assert _inline_timeout_seconds(phase) is None
+
+    def test_returns_none_for_non_py_extension(self, tmp_path):
+        phase = tmp_path / "1.do.sh"
+        phase.write_text(
+            "# /// script\n"
+            "# [tool.zipsa]\n"
+            "# timeout-seconds = 1500\n"
+            "# ///\n"
+        )
+        assert _inline_timeout_seconds(phase) is None
+
+    def test_returns_none_for_missing_file(self, tmp_path):
+        phase = tmp_path / "1.nonexistent.py"
+        assert _inline_timeout_seconds(phase) is None
+
+
+# ---------------------------------------------------------------------------
+# Timeout precedence
+# ---------------------------------------------------------------------------
+
+class TestTimeoutPrecedence:
+    """Explicit CLI value > inline [tool.zipsa] > default 600."""
+
+    def test_explicit_timeout_wins_over_inline(self, tmp_path):
+        """When an explicit timeout_seconds is passed to run_phase, it
+        overrides whatever is declared inline."""
+        phase = tmp_path / "1.poll.py"
+        phase.write_text(
+            "# /// script\n"
+            "# [tool.zipsa]\n"
+            "# timeout-seconds = 1500\n"
+            "# ///\n"
+            "import json, sys\n"
+            "sys.stdin.read()\n"
+            "print(json.dumps({}))\n"
+        )
+        # Capture the timeout actually passed to subprocess.run
+        captured: list[int] = []
+        import subprocess as _subprocess
+        real_run = _subprocess.run
+
+        def fake_run(argv, **kwargs):
+            captured.append(kwargs.get("timeout"))
+            r = type("R", (), {})()
+            r.returncode = 0
+            r.stdout = "{}\n"
+            r.stderr = ""
+            return r
+
+        with patch("zipsa.exec_runner.subprocess.run", side_effect=fake_run):
+            run_phase(phase, skill_name="x", timeout_seconds=30)
+
+        assert 30 in captured, f"Expected timeout=30, got {captured}"
+
+    def test_inline_timeout_used_when_no_explicit(self, tmp_path):
+        """Without an explicit caller value, the inline declaration governs."""
+        phase = tmp_path / "1.poll.py"
+        phase.write_text(
+            "# /// script\n"
+            "# [tool.zipsa]\n"
+            "# timeout-seconds = 999\n"
+            "# ///\n"
+            "import json, sys\n"
+            "sys.stdin.read()\n"
+            "print(json.dumps({}))\n"
+        )
+        captured: list[int] = []
+
+        def fake_run(argv, **kwargs):
+            captured.append(kwargs.get("timeout"))
+            r = type("R", (), {})()
+            r.returncode = 0
+            r.stdout = "{}\n"
+            r.stderr = ""
+            return r
+
+        with patch("zipsa.exec_runner.subprocess.run", side_effect=fake_run):
+            run_phase(phase, skill_name="x")
+
+        assert 999 in captured, f"Expected timeout=999 (inline), got {captured}"
+
+    def test_default_600_when_no_inline_no_explicit(self, tmp_path):
+        """A phase with no inline declaration and no explicit arg gets 600."""
+        phase = tmp_path / "1.do.py"
+        phase.write_text(
+            "import json, sys\n"
+            "sys.stdin.read()\n"
+            "print(json.dumps({}))\n"
+        )
+        captured: list[int] = []
+
+        def fake_run(argv, **kwargs):
+            captured.append(kwargs.get("timeout"))
+            r = type("R", (), {})()
+            r.returncode = 0
+            r.stdout = "{}\n"
+            r.stderr = ""
+            return r
+
+        with patch("zipsa.exec_runner.subprocess.run", side_effect=fake_run):
+            run_phase(phase, skill_name="x")
+
+        assert 600 in captured, f"Expected timeout=600 (default), got {captured}"
+
+    def test_run_phases_threads_explicit_timeout(self, tmp_path):
+        """An explicit timeout_seconds on run_phases reaches every run_phase
+        call in the chain (overriding per-phase inline values)."""
+        skill, phases = _skill(tmp_path, {
+            "1.p1.py": (
+                "# /// script\n"
+                "# [tool.zipsa]\n"
+                "# timeout-seconds = 1500\n"
+                "# ///\n"
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'p': 1}))\n"
+            ),
+            "2.p2.py": (
+                "import json, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'p': 2}))\n"
+            ),
+        })
+        captured: list[int] = []
+
+        def fake_run(argv, **kwargs):
+            captured.append(kwargs.get("timeout"))
+            r = type("R", (), {})()
+            r.returncode = 0
+            r.stdout = "{}\n"
+            r.stderr = ""
+            return r
+
+        with patch("zipsa.exec_runner.subprocess.run", side_effect=fake_run):
+            run_phases(phases, skill_name="s", skill_root=skill, timeout_seconds=42)
+
+        assert all(t == 42 for t in captured), (
+            f"All phases should use explicit timeout=42, got {captured}"
+        )
+
+    def test_inline_timeout_triggers_on_slow_phase(self, tmp_path):
+        """A phase with a tiny inline timeout fires TimeoutExpired — proves
+        the inline value actually reaches subprocess.run (not just asserted
+        at the mock level). We let the real subprocess.run run; the phase
+        sleeps longer than its declared timeout."""
+        import subprocess
+        phase = tmp_path / "1.slow.py"
+        phase.write_text(
+            "# /// script\n"
+            "# [tool.zipsa]\n"
+            "# timeout-seconds = 1\n"
+            "# ///\n"
+            "import time, sys\n"
+            "sys.stdin.read()\n"
+            "time.sleep(10)\n"
+            "print('{}')\n"
+        )
+        # TimeoutExpired from subprocess propagates as a CalledProcessError
+        # inside run_phase — but run_phase catches FileNotFoundError only, not
+        # TimeoutExpired. So TimeoutExpired bubbles up to us.
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_phase(phase, skill_name="x")

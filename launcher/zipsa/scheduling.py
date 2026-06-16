@@ -172,6 +172,7 @@ def build_exec_command(
     skill_path: Path,
     mounts: list[str],
     query: "str | None",
+    timeout: "int | None" = None,
 ) -> list[str]:
     """Build the `zipsa exec ...` argv a schedule fires."""
     cmd = [*zipsa, "exec", str(skill_path)]
@@ -179,6 +180,8 @@ def build_exec_command(
         cmd.append(query)
     for m in mounts:
         cmd += ["--mount", m]
+    if timeout is not None:
+        cmd += ["--timeout", str(timeout)]
     return cmd
 
 
