@@ -13,6 +13,15 @@ staging directory — you never pass a staging path:
   use these whenever you need an answer or need the user to do something
   (set up a token, confirm a name). Never just print a request and stop:
   if you stop calling tools, the session ends and the user cannot reply.
+- `mcp__zipsa__report(message=...)` — emit a **non-blocking** progress
+  update (write-only, returns immediately, never waits for a reply).
+  Use it to narrate what you are doing: build start, while writing files,
+  before and after each `exec`/`run` test, and on any error or retry.
+  **Never silently retry the same failure.** `report` what failed; if
+  the same error repeats (~2–3×), stop retrying and `ask` the user to
+  escalate — name the likely cause (e.g. "the script needs a PyPI lib —
+  I'll declare it via PEP 723", or "this looks like a platform gap").
+  Going silent or looping is a failure mode.
 - `mcp__zipsa__exec(script=..., args=..., prev=..., mounts=...)` — run
   ONE of the draft's scripts. Fast debugging of an individual script.
 - `mcp__zipsa__run(args=..., mounts=...)` — test the WHOLE skill through
@@ -112,6 +121,11 @@ Iterate in two modes, narrow then whole:
 - `mcp__zipsa__run` — test the WHOLE skill exactly as the user will
   experience it: the run-time LLM follows `SKILL.md` and calls the
   scripts. Use this once the individual scripts behave.
+
+Call `mcp__zipsa__report(...)` before and after each `exec`/`run` call
+so the user knows progress is happening. On any error, `report` what
+failed before deciding whether to retry. If the same error repeats
+(~2–3×), stop and `ask`/escalate rather than looping silently.
 
 Run at least: a representative query (happy path), the empty-query case,
 and a failure case (bad input → clean exit 1). Read the timings — a code

@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .caller_context import CallerContextMiddleware, CallerInfo
-from .hitl_mcp import AskHandler, ChooseHandler, ConfirmHandler, HitlIO, HitlUnattended
+from .hitl_mcp import AskHandler, ChooseHandler, ConfirmHandler, HitlIO, HitlUnattended, ReportHandler
 from .hitl_runner import _ALLOWED_HOSTS, _pick_free_port
 
 
@@ -61,6 +61,7 @@ class RunServer:
         ask_h = AskHandler(self._io)
         confirm_h = ConfirmHandler(self._io)
         choose_h = ChooseHandler(self._io)
+        report_h = ReportHandler(self._io)
 
         @mcp.tool(name="exec")
         def exec_script(script: str, args: str = "", prev: dict | None = None) -> dict:
@@ -91,7 +92,16 @@ class RunServer:
             except HitlUnattended as e:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
-        self._tool_names = ["exec", "ask", "confirm", "choose"]
+        @mcp.tool(name="report")
+        def report(message: str) -> str:
+            """Emit a NON-BLOCKING progress update to the user (does not wait for a
+            reply). Use it to narrate what you're doing — build start, writing
+            files, before/after each exec/run test, and especially on an
+            error or retry. Prefer this over going silent. For a real question use
+            ask/confirm/choose instead."""
+            return report_h.run(message)
+
+        self._tool_names = ["exec", "ask", "confirm", "choose", "report"]
         app = mcp.streamable_http_app()
         app.add_middleware(
             CallerContextMiddleware, token_map={self.token: self._caller},

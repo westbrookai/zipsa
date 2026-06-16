@@ -1,4 +1,4 @@
-"""HITL tool handlers (ask/confirm/choose).
+"""HITL tool handlers (ask/confirm/choose/report).
 
 The handlers are decoupled from the MCP transport via a small HitlIO
 dataclass, so unit tests can drive them with in-memory streams without
@@ -16,6 +16,8 @@ from typing import TextIO
 
 PROMPT_OPEN = "──── User input needed ────"
 PROMPT_CLOSE = "──── Resuming ────"
+REPORT_OPEN = "──── report ────"   # distinct from PROMPT_OPEN so a relay
+                                   # can tell progress from a question
 
 
 class HitlUnattended(Exception):
@@ -139,6 +141,19 @@ class ChooseHandler:
             self._io.stdout.write(f"{PROMPT_CLOSE}\n")
             self._io.stdout.flush()
         raise ValueError("choose: too many invalid answers")
+
+
+class ReportHandler:
+    def __init__(self, io_: HitlIO) -> None:
+        self._io = io_
+
+    def run(self, message: str) -> str:
+        # Write-only: no stdin read, no measure_wait, no HitlUnattended.
+        # A report is just output; valid attended OR unattended.
+        with self._io.stdout_lock:
+            self._io.stdout.write(f"\n{REPORT_OPEN}\n[report] {message}\n")
+            self._io.stdout.flush()
+        return "ok"
 
 
 from typing import Any
