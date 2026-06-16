@@ -13,6 +13,9 @@ staging directory — you never pass a staging path:
   use these whenever you need an answer or need the user to do something
   (set up a token, confirm a name). Never just print a request and stop:
   if you stop calling tools, the session ends and the user cannot reply.
+  If the tool returns an error or an empty answer, the operator is briefly
+  away — **do not abandon the run.** Call the same tool again with the same
+  question and keep waiting. Only stop when the user explicitly tells you to.
 - `mcp__zipsa__report(message=...)` — emit a **non-blocking** progress
   update (write-only, returns immediately, never waits for a reply).
   Use it to narrate what you are doing: build start, while writing files,
