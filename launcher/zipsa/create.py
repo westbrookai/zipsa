@@ -99,8 +99,9 @@ def build_create_prompt(intent: str, staging_path: Path) -> str:
 def build_forge_prompt(intent: str, staging_path: Path) -> str:
     """The prompt handed to the in-container forge authoring claude.
 
-    Like build_create_prompt, but drives the full forge loop: capture
-    requirements in INTENT.md, draft, exec-debug individual scripts, run
+    Like build_create_prompt, but drives the full forge loop: clarify
+    intent, check feasibility & gather prerequisites, draft (writing
+    INTENT.md once scope is settled), exec-debug individual scripts, run
     the WHOLE draft through the real run-time, iterate, and promote LAST.
 
     Forge tools are PATH-SCOPED — the server injects the staging path, so

@@ -51,9 +51,10 @@ persistent background daemon, hardware access, an action someone must
 take in the physical world) — do NOT quietly build a broken version.
 Use `ask`/`confirm` to: name the limit, propose the closest feasible
 version (or the platform feature it would need), and agree on the scope.
-Workarounds for the common gaps: secrets → a mounted file (§6);
-scheduling → stays out of the skill, run on demand (or via
-`zipsa schedule`).
+Workarounds for the common gaps: secrets → a mounted file (§6). The
+remaining gaps (tools in LLM phases, HITL, branching, composition,
+env injection) have no drop-in workaround — raise them as platform
+feature requests rather than hacking around them.
 
 **Prerequisites.** Enumerate everything the skill needs from outside and
 ask for it now, in order, before drafting — don't discover a missing key
