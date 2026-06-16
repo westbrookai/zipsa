@@ -57,7 +57,7 @@ The extension picks the runner (inside the runtime container):
 
 | ext | runner | notes |
 |---|---|---|
-| `.py` | `python` (3.11) | stdlib only unless you know the image has it |
+| `.py` | `uv run --script` | stdlib + any PyPI deps via PEP 723 (see §3.1) |
 | `.sh` | `bash` | `jq`, `curl`, `rg` available in the image |
 | `.js` | `node` (24) | |
 | `.ts` | `npx tsx` | |
@@ -65,6 +65,30 @@ The extension picks the runner (inside the runtime container):
 | `.md` | `claude -p` | LLM phase, see §5 |
 
 No shebang, no chmod — the dispatch table is the contract.
+
+### 3.1 Python: declaring PyPI dependencies (PEP 723)
+
+Python phases run via `uv run --script`, which honours
+[PEP 723](https://peps.python.org/pep-0723/) inline script metadata.
+To use a PyPI package, add a `# /// script` block at the top of your
+`.py` phase:
+
+```python
+# /// script
+# dependencies = ["gtfs-realtime-bindings", "requests"]
+# ///
+import json, sys
+from google.transit import gtfs_realtime_pb2
+...
+```
+
+- **No block = stdlib only.** Existing skills with no block are
+  unaffected — `uv run --script` treats them like `python`.
+- **First run fetches deps** (needs network — exec containers have
+  network by default). Subsequent runs hit the persistent uv cache
+  mounted at `~/.zipsa/uv-cache`, so the download only happens once.
+- Any PyPI package works. You do not need a runtime image change.
+- `uv` is pre-installed in the runtime image.
 
 ## 4. /out — the artifact channel
 

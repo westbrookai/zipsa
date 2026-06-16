@@ -47,13 +47,21 @@ from pathlib import Path
 
 # ext → argv prefix. The phase file path is appended as the last arg.
 # Keep in sync with phase_discovery.PHASE_EXTENSIONS (minus "md").
+# "py" uses `uv run --script` so PEP 723 inline deps are resolved per-script
+# (no runtime image change required). A script with no PEP 723 block runs
+# stdlib-only — same net effect as bare `python` but uv resolves deps when
+# they're declared.
 RUNNERS: dict[str, list[str]] = {
-    "py": ["python"],
+    "py": ["uv", "run", "--script"],
     "sh": ["bash"],
     "js": ["node"],
     "ts": ["npx", "tsx"],
     "go": ["go", "run"],
 }
+
+# Container path where the uv package cache is mounted for Python phases.
+# Persisted across container runs so uv doesn't re-download deps on every exec.
+_CONTAINER_UV_CACHE_DIR = "/home/agent/.cache/uv"
 
 _CONTAINER_SKILL_DIR = "/skill"
 _CONTAINER_OUT_DIR = "/out"
@@ -247,6 +255,18 @@ def _build_docker_argv(
         "-v", f"{skill_root.resolve()}:{_CONTAINER_SKILL_DIR}:ro",
         "-v", f"{out_dir}:{_CONTAINER_OUT_DIR}",
     ]
+    # Persistent uv cache for Python phases: avoids re-downloading deps on
+    # every exec run. Mounted read-write so uv can populate it. The host dir
+    # is created lazily here (not at import time).
+    if phase_path.suffix == ".py":
+        from .paths import zipsa_home
+
+        uv_cache_host = zipsa_home() / "uv-cache"
+        uv_cache_host.mkdir(parents=True, exist_ok=True)
+        argv += [
+            "-v", f"{uv_cache_host}:{_CONTAINER_UV_CACHE_DIR}",
+            "-e", f"UV_CACHE_DIR={_CONTAINER_UV_CACHE_DIR}",
+        ]
     for host_path, container_path in extra_mounts or []:
         argv += ["-v", f"{host_path}:{container_path}:ro"]
     argv += [

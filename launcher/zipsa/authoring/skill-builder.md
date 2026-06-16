@@ -51,10 +51,24 @@ persistent background daemon, hardware access, an action someone must
 take in the physical world) — do NOT quietly build a broken version.
 Use `ask`/`confirm` to: name the limit, propose the closest feasible
 version (or the platform feature it would need), and agree on the scope.
-Workarounds for the common gaps: secrets → a mounted file (§6). The
-remaining gaps (tools in LLM phases, HITL, branching, composition,
-env injection) have no drop-in workaround — raise them as platform
-feature requests rather than hacking around them.
+Workarounds for the common gaps: secrets → a mounted file (§6).
+
+**Needing a PyPI library is NOT a platform gap.** Python phases run
+via `uv run --script` and honour PEP 723 inline deps — declare the
+library at the top of the script and uv installs it at run time:
+
+```python
+# /// script
+# dependencies = ["requests", "gtfs-realtime-bindings"]
+# ///
+```
+
+No image change, no workaround needed. Only flag a feasibility gap for
+capabilities uv/pip cannot provide — e.g. a persistent background
+daemon, hardware access, or the remaining platform gaps (tools in LLM
+phases, HITL, branching, composition, env injection for code scripts)
+— and raise those as platform feature requests rather than hacking
+around them.
 
 **Prerequisites.** Enumerate everything the skill needs from outside and
 ask for it now, in order, before drafting — don't discover a missing key
