@@ -4,6 +4,7 @@ Set ZIPSA_HOME to override the default ~/.zipsa location (useful in tests).
 """
 
 import os
+import subprocess
 from pathlib import Path
 
 
@@ -120,6 +121,27 @@ class SkillNotInstalledError(Exception):
 
 def skills_dir() -> Path:
     return zipsa_home() / "skills"
+
+
+def default_forge_skills_dir() -> Path:
+    """Default location where `forge`/`create` promote a finished skill.
+
+    In a git repo -> <toplevel>/skills (dev workflow: skills committed to
+    the repo). Outside a repo -> ~/.zipsa/skills (the runtime's skill
+    home, so the skill is runnable by name). cwd-independent: the git
+    lookup uses the repo enclosing cwd, not a literal relative path.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return skills_dir()
+    toplevel = result.stdout.strip()
+    return Path(toplevel) / "skills" if toplevel else skills_dir()
 
 
 def installed_skill_dir(name: str) -> Path:
