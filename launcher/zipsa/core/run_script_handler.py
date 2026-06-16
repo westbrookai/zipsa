@@ -47,7 +47,7 @@ class RunScriptHandler:
             skill_root=self._root,
             docker_image=self._image,
             prev=prev or {},
-            extra_mounts=[(Path(h), c) for h, c in (mounts or [])],
+            extra_mounts=[(Path(h).expanduser().resolve(), c) for h, c in (mounts or [])],
         )
         return {
             "status": "ok" if outcome.exit_code == 0 else "failed",

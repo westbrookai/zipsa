@@ -57,3 +57,27 @@ class TestRunScriptHandler:
         # Host path threads through as a Path (exec_runner does
         # f"{host_path}:..." and build_run_argv expects Path host paths).
         assert captured["extra_mounts"] == [(Path("/host/creds.json"), "/mnt/creds.json")]
+
+    def test_tilde_mount_is_expanded(self, tmp_path, monkeypatch):
+        """A ~-prefixed host path must be expanded to an absolute path, not forwarded literally."""
+        import zipsa.core.run_script_handler as mod
+        root = tmp_path / "s3"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "zipsa-dist" / "1.do.py").write_text(
+            "import json,sys; print(json.dumps({'ok': True}))\n")
+        (root / "SKILL.md").write_text("# s\n")
+        captured = {}
+
+        def fake_run_phase(path, **kw):
+            captured.update(kw)
+            from zipsa.exec_runner import ExecResult
+            return ExecResult(skill_name="s", mode="local", result={"ok": True},
+                              exit_code=0, duration_ms=1, out_dir="/tmp",
+                              stdout="", stderr="")
+        monkeypatch.setattr(mod, "run_phase", fake_run_phase)
+        h = RunScriptHandler(docker_image="img", skill_root=root)
+        h.run(script="1.do", mounts=[("~/.zipsa/credentials/tfnsw.json", "/mnt/creds.json")])
+        host_path, _ = captured["extra_mounts"][0]
+        # Must NOT contain literal ~ — must be expanded to the real home dir.
+        assert "~" not in str(host_path)
+        assert host_path.is_absolute()
+        assert host_path == Path("~/.zipsa/credentials/tfnsw.json").expanduser().resolve()

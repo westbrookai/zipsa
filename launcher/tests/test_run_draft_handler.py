@@ -21,3 +21,16 @@ class TestRunDraftHandler:
         mock_run.return_value = 1
         h = RunDraftHandler(image="img", skill_root=tmp_path)
         assert h.run()["status"] == "failed"
+
+    @patch("zipsa.core.run_draft_handler.run_skill_llm")
+    def test_tilde_mount_is_expanded(self, mock_run, tmp_path):
+        """A ~-prefixed host path must be expanded to absolute before forwarding to run_skill_llm."""
+        mock_run.return_value = 0
+        h = RunDraftHandler(image="img", skill_root=tmp_path)
+        h.run(mounts=[("~/.zipsa/credentials/tfnsw.json", "/mnt/creds.json")])
+        _, kwargs = mock_run.call_args
+        host_path, _ = kwargs["extra_mounts"][0]
+        # Must NOT contain literal ~ — must be resolved to the real home dir.
+        assert "~" not in str(host_path)
+        assert host_path.is_absolute()
+        assert host_path == Path("~/.zipsa/credentials/tfnsw.json").expanduser().resolve()

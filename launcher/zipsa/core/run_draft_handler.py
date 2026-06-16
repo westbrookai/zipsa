@@ -16,6 +16,6 @@ class RunDraftHandler:
             mounts: "list[tuple[str, str]] | None" = None) -> dict:
         rc = run_skill_llm(
             self._root, args, image=self._image,
-            extra_mounts=[(Path(h), c) for h, c in (mounts or [])],
+            extra_mounts=[(Path(h).expanduser().resolve(), c) for h, c in (mounts or [])],
         )
         return {"status": "ok" if rc == 0 else "failed", "exit_code": rc}
