@@ -378,8 +378,12 @@ class TestBuildDockerArgv:
         assert f"{skill.resolve()}:/skill:ro" in argv
         assert f"{out}:/out" in argv
         assert "zipsa-runtime:test" in argv
-        # Runner command + container-side phase path at the end
-        assert argv[-2:] == ["python", "/skill/zipsa-dist/1.report.py"]
+        # Runner command + container-side phase path at the end.
+        # Python phases use `uv run --script` so the tail is
+        # ["uv", "run", "--script", "/skill/zipsa-dist/1.report.py"].
+        assert argv[-4:] == [
+            "uv", "run", "--script", "/skill/zipsa-dist/1.report.py",
+        ]
         # Container name carries the skill name for debuggability
         name_idx = argv.index("--name")
         assert argv[name_idx + 1].startswith("zipsa-exec-hello-world-")
@@ -852,7 +856,12 @@ class TestExtraMounts:
                 image="img",
             )
 
-        assert "-e" not in argv
+        # TZ must not appear even though UV_CACHE_DIR may be set via -e for .py
+        env_pairs = [
+            argv[i + 1] for i, a in enumerate(argv)
+            if a == "-e" and i + 1 < len(argv)
+        ]
+        assert not any(p.startswith("TZ=") for p in env_pairs)
 
     @patch("zipsa.exec_runner.subprocess.run")
     def test_run_phase_passes_mounts(self, mock_run, tmp_path):
@@ -1077,6 +1086,112 @@ class TestRunnersTable:
     def test_md_not_in_runners(self):
         """`.md` is an LLM phase — handled (refused) separately."""
         assert "md" not in RUNNERS
+
+    def test_py_runner_is_uv_run_script(self):
+        """Python phases run via `uv run --script` so PEP 723 inline
+        dependencies are resolved automatically — without needing a
+        runtime image change."""
+        assert RUNNERS["py"] == ["uv", "run", "--script"]
+
+
+class TestUvCacheMount:
+    """_build_docker_argv wires a persistent uv cache for .py phases."""
+
+    def test_py_phase_docker_argv_includes_uv_cache_mount(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+
+        argv = _build_docker_argv(
+            phase,
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            image="img",
+        )
+
+        # A host path ending in uv-cache must be mounted
+        cache_mounts = [
+            entry for entry in argv
+            if "uv-cache" in entry and ":" in entry
+        ]
+        assert cache_mounts, (
+            "Expected a uv-cache mount in docker argv, but found none. "
+            f"Full argv: {argv}"
+        )
+
+    def test_py_phase_docker_argv_includes_uv_cache_dir_env(self, tmp_path):
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.py"
+        phase.touch()
+
+        argv = _build_docker_argv(
+            phase,
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            image="img",
+        )
+
+        # UV_CACHE_DIR env must be set pointing at the container mount
+        env_pairs = [
+            argv[i + 1] for i, a in enumerate(argv)
+            if a == "-e" and i + 1 < len(argv)
+        ]
+        uv_cache_pairs = [p for p in env_pairs if p.startswith("UV_CACHE_DIR=")]
+        assert uv_cache_pairs, (
+            "Expected -e UV_CACHE_DIR=... in docker argv, but not found. "
+            f"Env pairs present: {env_pairs}"
+        )
+
+    def test_sh_phase_docker_argv_no_uv_cache(self, tmp_path):
+        """Shell phases do not need a uv cache — keep argv minimal."""
+        skill = tmp_path / "s"
+        dist = skill / "zipsa-dist"
+        dist.mkdir(parents=True)
+        phase = dist / "1.do.sh"
+        phase.touch()
+
+        argv = _build_docker_argv(
+            phase,
+            skill_root=skill,
+            out_dir=tmp_path / "o",
+            image="img",
+        )
+
+        cache_mounts = [entry for entry in argv if "uv-cache" in entry]
+        assert not cache_mounts, (
+            f"Expected no uv-cache mount for .sh phase, but got: {cache_mounts}"
+        )
+
+
+class TestUvRunScriptBackwardCompat:
+    """stdlib-only .py phases still run end-to-end via `uv run --script`."""
+
+    def test_stdlib_only_phase_runs_via_uv_run_script(self, tmp_path):
+        """A phase with no PEP 723 block — just stdlib — must still
+        produce a result dict when run locally through the new runner.
+        This exercises the real `uv run --script` on the host.
+        """
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            (
+                "import json, sys\n"
+                "ctx = json.loads(sys.stdin.read())['ctx']\n"
+                "print(json.dumps({'runner': 'uv', 'name': ctx['skill_name']}))\n"
+            ),
+        )
+
+        result = run_phase(phase, skill_name="compat-test")
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 via uv run --script, got {result.exit_code}. "
+            f"stderr: {result.stderr}"
+        )
+        assert result.result == {"runner": "uv", "name": "compat-test"}
 
 
 def _fake_result(*, stdout="", stderr="", exit_code=0):
