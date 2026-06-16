@@ -1,4 +1,4 @@
-"""Tests for HITL tool handlers (ask/confirm/choose) — IO-injected so no
+"""Tests for HITL tool handlers (ask/confirm/choose/report) — IO-injected so no
 sockets or real stdin/stdout involved."""
 
 import io
@@ -7,6 +7,7 @@ import pytest
 
 from zipsa.core.hitl_mcp import (
     HitlIO, AskHandler, ConfirmHandler, ChooseHandler, HitlUnattended,
+    ReportHandler, REPORT_OPEN,
 )
 
 
@@ -373,3 +374,49 @@ class TestAskOnce:
         h = AskOnceHandler(ask, recall, remember)
         with pytest.raises(ValueError, match="scope"):
             h.run(key="k", prompt="?", scope="bogus")
+
+
+class _RaisesOnRead:
+    """Fake stdin that fails if readline() is ever called."""
+    def readline(self):
+        raise AssertionError("ReportHandler must not read stdin")
+
+
+class TestReport:
+    def _make_io(self, *, is_interactive: bool = True) -> HitlIO:
+        return HitlIO(
+            stdin=_RaisesOnRead(),
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=is_interactive,
+        )
+
+    def test_returns_ok(self):
+        io_ = self._make_io()
+        handler = ReportHandler(io_)
+        assert handler.run("hello") == "ok"
+
+    def test_writes_message_to_stdout(self):
+        io_ = self._make_io()
+        handler = ReportHandler(io_)
+        handler.run("build started")
+        out = io_.stdout.getvalue()
+        assert "[report] build started" in out
+
+    def test_writes_report_open_marker(self):
+        io_ = self._make_io()
+        handler = ReportHandler(io_)
+        handler.run("any message")
+        assert REPORT_OPEN in io_.stdout.getvalue()
+
+    def test_does_not_read_stdin(self):
+        # stdin is _RaisesOnRead — if readline() is called, the test fails
+        io_ = self._make_io()
+        handler = ReportHandler(io_)
+        handler.run("should not read stdin")  # must not raise
+
+    def test_works_unattended(self):
+        # report must NOT raise HitlUnattended even when is_interactive=False
+        io_ = self._make_io(is_interactive=False)
+        handler = ReportHandler(io_)
+        assert handler.run("progress update") == "ok"

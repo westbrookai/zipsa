@@ -121,6 +121,25 @@ Constraints:
 - Claude auth is injected automatically for `.md` phases (host
   `~/.zipsa/.env` → `CLAUDE_CODE_OAUTH_TOKEN`).
 
+### 5.1 Run-time LLM progress: `mcp__zipsa__report`
+
+The **run-time LLM** (the model that follows `SKILL.md` and calls
+scripts via `exec`) has access to a `report` MCP tool for non-blocking
+progress updates:
+
+```
+mcp__zipsa__report(message="Starting fetch phase...")
+```
+
+Unlike `ask`/`confirm`/`choose` (which block waiting for a human
+reply), `report` is fire-and-forget — it writes the message and returns
+immediately. Use it in `SKILL.md` instructions for long-running or
+polling skills to keep the user informed (e.g. "call `report` with
+the current status before each polling attempt"). This is distinct from
+the `.md` phase constraint above — `.md` phase files have no tools;
+`report` is called by the run-time LLM before/after it dispatches those
+phases.
+
 A good `.md` phase says: what the input means, what to produce, what
 keys go in the result. See `weather/zipsa-dist/2.report.md`.
 

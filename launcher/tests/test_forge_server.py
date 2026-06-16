@@ -18,7 +18,7 @@ class TestForgeServer:
             assert s.port > 0 and s.token
             socket.create_connection(("127.0.0.1", s.port), timeout=2).close()
             tools = set(s.tool_names())
-            assert {"exec", "run", "promote", "ask", "confirm", "choose"} == tools
+            assert {"exec", "run", "promote", "ask", "confirm", "choose", "report"} == tools
         finally:
             s.stop()
 

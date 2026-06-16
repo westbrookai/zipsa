@@ -27,7 +27,7 @@ class TestRunServer:
         try:
             tools = s.tool_names()
             assert "exec" in tools
-            assert {"ask", "confirm", "choose"} <= set(tools)
+            assert {"ask", "confirm", "choose", "report"} <= set(tools)
             assert "promote" not in tools
         finally:
             s.stop()
