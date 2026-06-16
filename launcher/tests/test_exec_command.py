@@ -344,6 +344,62 @@ class TestExecMultiPhase:
         assert len(payload["phases"]) == 1
 
 
+class TestExecTimeoutFlag:
+    """zipsa exec --timeout threads the value to run_phases."""
+
+    @patch("zipsa.exec_runner.run_phases")
+    def test_timeout_flag_threads_to_run_phases(self, mock_run_phases, tmp_path):
+        """--timeout N must reach run_phases as timeout_seconds=N."""
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+
+        # run_phases must return at least one ExecResult-like object
+        from zipsa.exec_runner import ExecResult
+        mock_run_phases.return_value = [
+            ExecResult(
+                skill_name="hello",
+                mode="local",
+                result={"ok": True},
+                exit_code=0,
+                duration_ms=1,
+                out_dir=str(tmp_path),
+                stdout='{"ok": true}\n',
+                stderr="",
+            )
+        ]
+
+        result = runner.invoke(app, ["exec", str(skill), "--local", "--timeout", "5"])
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock_run_phases.call_args.kwargs
+        assert call_kwargs.get("timeout_seconds") == 5
+
+    @patch("zipsa.exec_runner.run_phases")
+    def test_no_timeout_flag_passes_none(self, mock_run_phases, tmp_path):
+        """Without --timeout, run_phases receives timeout_seconds=None so
+        per-phase inline values and the 600 s default take effect."""
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+
+        from zipsa.exec_runner import ExecResult
+        mock_run_phases.return_value = [
+            ExecResult(
+                skill_name="hello",
+                mode="local",
+                result={"ok": True},
+                exit_code=0,
+                duration_ms=1,
+                out_dir=str(tmp_path),
+                stdout='{"ok": true}\n',
+                stderr="",
+            )
+        ]
+
+        result = runner.invoke(app, ["exec", str(skill), "--local"])
+
+        assert result.exit_code == 0, result.output
+        call_kwargs = mock_run_phases.call_args.kwargs
+        assert call_kwargs.get("timeout_seconds") is None
+
+
 class TestExecRunLogging:
     """`zipsa exec` persists a run record under ZIPSA_HOME so scheduled
     (and ad-hoc) runs are observable — exec used to discard everything."""

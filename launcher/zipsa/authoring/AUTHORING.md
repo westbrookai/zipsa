@@ -90,6 +90,38 @@ from google.transit import gtfs_realtime_pb2
 - Any PyPI package works. You do not need a runtime image change.
 - `uv` is pre-installed in the runtime image.
 
+### 3.2 Per-phase timeout (`[tool.zipsa]`)
+
+A Python phase can declare its own execution timeout inside the same
+`# /// script` block using the `[tool.zipsa]` TOML table:
+
+```python
+# /// script
+# dependencies = ["requests"]
+# [tool.zipsa]
+# timeout-seconds = 1500
+# ///
+```
+
+`uv run --script` silently ignores unknown `[tool.*]` tables, so the
+script stays valid. `zipsa exec` reads this value and applies it as
+the subprocess timeout for that phase.
+
+**Precedence (per phase):**
+1. `zipsa exec --timeout <N>` (CLI override, applies to all phases)
+2. Inline `[tool.zipsa] timeout-seconds` (per-phase, `.py` only)
+3. Default: **600 seconds** (10 minutes)
+
+Non-`.py` phases (`.sh`, `.js`, `.ts`, `.go`) have no inline timeout
+mechanism — use `zipsa exec --timeout N` to override them, or they
+run with the 600 s default.
+
+For scheduled skills, bake the timeout into the schedule entry:
+
+```bash
+zipsa schedule add ./my-skill --cron "40 7 * * 1-5" --timeout 1500
+```
+
 ## 4. /out — the artifact channel
 
 All phases of a run share one writable directory, mounted at `/out`

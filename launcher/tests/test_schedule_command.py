@@ -70,6 +70,47 @@ class TestScheduleAdd:
         assert "cron" in result.output.lower() or "day-of-month" in result.output
 
 
+    @patch("zipsa.cli.get_scheduler")
+    def test_add_with_timeout_bakes_into_command(self, mock_get, tmp_path, monkeypatch):
+        """--timeout N must appear as --timeout N in the baked exec command."""
+        monkeypatch.chdir(tmp_path)
+        skill = tmp_path / "skills" / "umbrella"
+        skill.mkdir(parents=True)
+        sched = MagicMock()
+        sched.add.return_value = "umbrella"
+        mock_get.return_value = sched
+
+        result = runner.invoke(app, [
+            "schedule", "add", "skills/umbrella",
+            "--cron", "40 7 * * 1-5",
+            "--timeout", "1500",
+        ])
+
+        assert result.exit_code == 0, result.output
+        cmd = sched.add.call_args.kwargs["command"]
+        assert "--timeout" in cmd
+        timeout_idx = cmd.index("--timeout")
+        assert cmd[timeout_idx + 1] == "1500"
+
+    @patch("zipsa.cli.get_scheduler")
+    def test_add_without_timeout_no_timeout_flag_in_command(self, mock_get, tmp_path, monkeypatch):
+        """Without --timeout, the baked command must NOT contain --timeout."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "skills" / "s").mkdir(parents=True)
+        sched = MagicMock()
+        sched.add.return_value = "s"
+        mock_get.return_value = sched
+
+        result = runner.invoke(app, [
+            "schedule", "add", "skills/s",
+            "--cron", "0 8 * * *",
+        ])
+
+        assert result.exit_code == 0, result.output
+        cmd = sched.add.call_args.kwargs["command"]
+        assert "--timeout" not in cmd
+
+
 class TestScheduleList:
     @patch("zipsa.cli.get_scheduler")
     def test_list(self, mock_get):

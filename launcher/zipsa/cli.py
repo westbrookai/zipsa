@@ -527,6 +527,7 @@ def schedule_add(
     user_query: Annotated[Optional[str], typer.Argument(help="Optional query for the skill")] = None,
     mount: Annotated[Optional[list[str]], typer.Option("--mount", help="HOST[:CONTAINER] mount, repeatable (e.g. credential file)")] = None,
     image: Annotated[str, typer.Option("--image", "-i", help="Runtime image")] = _DEFAULT_IMAGE,
+    timeout: Annotated[Optional[int], typer.Option("--timeout", help="Per-phase timeout in seconds baked into the scheduled command.")] = None,
 ):
     """Register a host cron job that runs `zipsa exec <path> ...`.
 
@@ -548,6 +549,7 @@ def schedule_add(
         skill_path=skill_path,
         mounts=[m for m in (mount or [])],
         query=user_query,
+        timeout=timeout,
     )
     # exec needs a non-default image only if overridden; bake it in when set.
     if image != _DEFAULT_IMAGE:
@@ -722,6 +724,10 @@ def exec_skill(
         Optional[list[str]],
         typer.Option("--mount", help="Host path mounted read-only in the container (repeatable). HOST mounts at the same absolute path; HOST:CONTAINER overrides the container path. No-op with --local."),
     ] = None,
+    timeout: Annotated[
+        Optional[int],
+        typer.Option("--timeout", help="Per-phase timeout in seconds (overrides inline [tool.zipsa] timeout-seconds and the 600 s default)."),
+    ] = None,
 ):
     """Run a skill's phases deterministically (Phase 1).
 
@@ -770,6 +776,7 @@ def exec_skill(
             skill_root=skill_root,
             docker_image=None if local else image,
             extra_mounts=[_parse_mount_spec(m) for m in mount or []],
+            timeout_seconds=timeout,
         )
     except ExecRunnerError as e:
         typer.echo(f"Error: {e}", err=True)

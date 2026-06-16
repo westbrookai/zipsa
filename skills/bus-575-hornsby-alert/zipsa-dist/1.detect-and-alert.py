@@ -1,5 +1,7 @@
 # /// script
 # dependencies = ["gtfs-realtime-bindings", "requests"]
+# [tool.zipsa]
+# timeout-seconds = 1500
 # ///
 """Poll TfNSW GTFS-RT trip updates for Route 575 departure from Hornsby, then send Telegram."""
 
