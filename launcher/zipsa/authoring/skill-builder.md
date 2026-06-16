@@ -45,7 +45,7 @@ on demand) and **what** it needs from the outside.
 
 **Feasibility.** If part of the intent needs a capability that isn't
 there — AUTHORING §9 platform gaps (in-skill HITL, env injection for
-code scripts, branching, composition, in-skill scheduling), or anything
+code scripts, branching, composition, tools in LLM phases), or anything
 fundamentally outside "LLM + a script that makes API calls" (a
 persistent background daemon, hardware access, an action someone must
 take in the physical world) — do NOT quietly build a broken version.

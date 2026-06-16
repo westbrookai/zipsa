@@ -35,6 +35,8 @@ class TestBuildCreatePrompt:
         assert "Phase contract" in prompt                  # AUTHORING.md
         assert "mcp__zipsa__exec" in prompt
         assert "mcp__zipsa__promote" in prompt
+        assert "feasibility" in prompt.lower()
+        assert "prerequisite" in prompt.lower()
 
     def test_no_repo_paths_referenced(self, tmp_path):
         """The prompt must not tell the agent to read repo files — those
