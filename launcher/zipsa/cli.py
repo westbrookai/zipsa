@@ -306,6 +306,19 @@ def run(
             ),
         ),
     ] = False,
+    mount: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--mount",
+            help=(
+                "Host path mounted read-only in the script exec container "
+                "(repeatable). HOST mounts at the same absolute path; "
+                "HOST:CONTAINER overrides the container path. "
+                "Use for credential files: "
+                "--mount ~/.zipsa/credentials/my.json:/mnt/creds/my.json"
+            ),
+        ),
+    ] = None,
 ):
     """Execute a skill with the specified runtime."""
     # Reject cyclic invocations and depth-capped chains before any expensive work.
@@ -327,7 +340,10 @@ def run(
                     err=True,
                 )
                 raise typer.Exit(2)
-        rc = run_skill_llm(skill_path, user_input or "", image=image)
+        rc = run_skill_llm(
+            skill_path, user_input or "", image=image,
+            extra_mounts=[_parse_mount_spec(m) for m in (mount or [])],
+        )
         raise typer.Exit(rc)
 
     # Resume eligibility state — resolved inside the try block below.

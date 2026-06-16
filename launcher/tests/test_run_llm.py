@@ -97,3 +97,53 @@ class TestRunSkillLlm:
         with pytest.raises(RuntimeError):
             run_skill_llm(root, "", image="img")
         srv.stop.assert_called_once()
+
+    @patch("zipsa.run_llm.subprocess.run")
+    @patch("zipsa.run_llm.RunServer")
+    @patch("zipsa.run_llm.RunScriptHandler")
+    def test_extra_mounts_go_to_script_handler_not_claude_container(
+        self, mock_handler_cls, mock_server_cls, mock_run, tmp_path, monkeypatch
+    ):
+        """extra_mounts must reach RunScriptHandler.default_mounts, NOT the claude argv."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        root = tmp_path / "cred-skill"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# cred-skill\n")
+        srv = MagicMock(); srv.port = 51113; srv.token = "tok2"
+        mock_server_cls.return_value = srv
+        mock_run.return_value.returncode = 0
+
+        extra = [(Path("/a/creds.json"), "/mnt/creds.json")]
+
+        from zipsa.run_llm import run_skill_llm
+        run_skill_llm(root, "", image="img", extra_mounts=extra)
+
+        # RunScriptHandler was constructed with the mounts as default_mounts
+        _, handler_kwargs = mock_handler_cls.call_args
+        assert handler_kwargs.get("default_mounts") == extra
+
+        # The claude-container argv must NOT contain the cred path
+        argv = mock_run.call_args.args[0]
+        assert "/a/creds.json" not in " ".join(str(a) for a in argv), (
+            "Skill creds must not be mounted into the claude container"
+        )
+
+    @patch("zipsa.run_llm.subprocess.run")
+    @patch("zipsa.run_llm.RunServer")
+    @patch("zipsa.run_llm.RunScriptHandler")
+    def test_no_extra_mounts_handler_gets_empty_default(
+        self, mock_handler_cls, mock_server_cls, mock_run, tmp_path, monkeypatch
+    ):
+        """When no extra_mounts, RunScriptHandler is constructed with default_mounts=None."""
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        root = tmp_path / "plain"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# plain\n")
+        srv = MagicMock(); srv.port = 51114; srv.token = "tok3"
+        mock_server_cls.return_value = srv
+        mock_run.return_value.returncode = 0
+
+        from zipsa.run_llm import run_skill_llm
+        run_skill_llm(root, "", image="img")
+
+        _, handler_kwargs = mock_handler_cls.call_args
+        # default_mounts should be None (falsy) when no extra_mounts supplied
+        assert not handler_kwargs.get("default_mounts")

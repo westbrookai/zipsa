@@ -89,7 +89,14 @@ def run_skill_llm(
         stdin=sys.stdin, stdout=sys.stdout,
         stdout_lock=threading.Lock(), is_interactive=_is_interactive(sys.stdin),
     )
-    server = RunServer(hitl_io, RunScriptHandler(docker_image=image, skill_root=skill_root))
+    # extra_mounts (skill creds, etc.) go to the SCRIPT's exec sub-container via
+    # RunScriptHandler.default_mounts — NOT into the run-time (claude) container.
+    # The claude container only needs Claude auth (env_file); mounting skill creds
+    # there would be incorrect and a security concern.
+    handler = RunScriptHandler(
+        docker_image=image, skill_root=skill_root, default_mounts=extra_mounts,
+    )
+    server = RunServer(hitl_io, handler)
     server.start()
     mcp_config_host: Path | None = None
     try:
@@ -104,7 +111,8 @@ def run_skill_llm(
             image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
             prompt=build_run_prompt(skill_root, user_input),
             env_file=env_file if env_file.exists() else None,
-            extra_mounts=extra_mounts,
+            # Skill creds are NOT passed here — the claude container gets only
+            # Claude auth. Mounts reach the script via RunScriptHandler above.
         )
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
         return proc.returncode
