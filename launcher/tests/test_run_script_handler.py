@@ -81,3 +81,90 @@ class TestRunScriptHandler:
         assert "~" not in str(host_path)
         assert host_path.is_absolute()
         assert host_path == Path("~/.zipsa/credentials/tfnsw.json").expanduser().resolve()
+
+    def test_default_mounts_applied_to_run_phase(self, tmp_path, monkeypatch):
+        """default_mounts from constructor are included in run_phase extra_mounts."""
+        import zipsa.core.run_script_handler as mod
+        root = tmp_path / "s4"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "zipsa-dist" / "1.do.py").write_text(
+            "import json,sys; print(json.dumps({'ok': True}))\n")
+        (root / "SKILL.md").write_text("# s\n")
+        captured = {}
+
+        def fake_run_phase(path, **kw):
+            captured.update(kw)
+            from zipsa.exec_runner import ExecResult
+            return ExecResult(skill_name="s", mode="local", result={"ok": True},
+                              exit_code=0, duration_ms=1, out_dir="/tmp",
+                              stdout="", stderr="")
+        monkeypatch.setattr(mod, "run_phase", fake_run_phase)
+
+        default_host = Path("/resolved/creds.json")
+        h = RunScriptHandler(
+            docker_image="img", skill_root=root,
+            default_mounts=[(default_host, "/mnt/creds.json")],
+        )
+        h.run(script="1.do")
+        assert len(captured["extra_mounts"]) == 1
+        assert captured["extra_mounts"][0] == (default_host, "/mnt/creds.json")
+
+    def test_default_mounts_merged_with_per_call_mounts(self, tmp_path, monkeypatch):
+        """default_mounts come first; per-call mounts are appended after."""
+        import zipsa.core.run_script_handler as mod
+        root = tmp_path / "s5"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "zipsa-dist" / "1.do.py").write_text(
+            "import json,sys; print(json.dumps({'ok': True}))\n")
+        (root / "SKILL.md").write_text("# s\n")
+        captured = {}
+
+        def fake_run_phase(path, **kw):
+            captured.update(kw)
+            from zipsa.exec_runner import ExecResult
+            return ExecResult(skill_name="s", mode="local", result={"ok": True},
+                              exit_code=0, duration_ms=1, out_dir="/tmp",
+                              stdout="", stderr="")
+        monkeypatch.setattr(mod, "run_phase", fake_run_phase)
+
+        default_host = Path("/resolved/default.json")
+        h = RunScriptHandler(
+            docker_image="img", skill_root=root,
+            default_mounts=[(default_host, "/mnt/default.json")],
+        )
+        h.run(script="1.do", mounts=[("/host/extra.json", "/mnt/extra.json")])
+        mounts = captured["extra_mounts"]
+        assert len(mounts) == 2
+        # default mount comes first
+        assert mounts[0] == (default_host, "/mnt/default.json")
+        # per-call mount is second, host path resolved
+        extra_host, extra_container = mounts[1]
+        assert extra_container == "/mnt/extra.json"
+        assert extra_host.is_absolute()
+        assert "~" not in str(extra_host)
+
+    def test_default_mounts_str_host_is_expanded(self, tmp_path, monkeypatch):
+        """default_mounts with str host entry (not pre-resolved Path) are expanded."""
+        import zipsa.core.run_script_handler as mod
+        root = tmp_path / "s6"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "zipsa-dist" / "1.do.py").write_text(
+            "import json,sys; print(json.dumps({'ok': True}))\n")
+        (root / "SKILL.md").write_text("# s\n")
+        captured = {}
+
+        def fake_run_phase(path, **kw):
+            captured.update(kw)
+            from zipsa.exec_runner import ExecResult
+            return ExecResult(skill_name="s", mode="local", result={"ok": True},
+                              exit_code=0, duration_ms=1, out_dir="/tmp",
+                              stdout="", stderr="")
+        monkeypatch.setattr(mod, "run_phase", fake_run_phase)
+
+        h = RunScriptHandler(
+            docker_image="img", skill_root=root,
+            # Pass a str (not Path) as the host side — must still be expanded
+            default_mounts=[("~/.zipsa/credentials/svc.json", "/mnt/svc.json")],  # type: ignore[list-item]
+        )
+        h.run(script="1.do")
+        host_path, container = captured["extra_mounts"][0]
+        assert "~" not in str(host_path)
+        assert host_path.is_absolute()
+        assert container == "/mnt/svc.json"

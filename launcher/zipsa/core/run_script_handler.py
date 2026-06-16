@@ -13,9 +13,15 @@ from ..exec_runner import run_phase
 
 
 class RunScriptHandler:
-    def __init__(self, docker_image: "str | None", skill_root: Path) -> None:
+    def __init__(
+        self,
+        docker_image: "str | None",
+        skill_root: Path,
+        default_mounts: "list[tuple[Path, str]] | None" = None,
+    ) -> None:
         self._image = docker_image
         self._root = skill_root.resolve()
+        self._default_mounts: "list[tuple[Path, str]]" = list(default_mounts or [])
 
     @staticmethod
     def _fail(code: str, message: str) -> dict:
@@ -40,6 +46,17 @@ class RunScriptHandler:
         path = self._resolve(script)
         if path is None:
             return self._fail("script_not_found", f"no such script: {script}")
+        # Merge default_mounts (operator-supplied at handler construction, e.g. from
+        # `zipsa run --mount`) with per-call mounts.  Both get the #139 treatment:
+        # host side → Path.expanduser().resolve() so Docker never sees a literal ~.
+        # default_mounts may arrive as already-resolved Paths or as str; handle both.
+        merged: "list[tuple[Path, str]]" = [
+            (Path(h).expanduser().resolve() if isinstance(h, str) else h, c)
+            for h, c in self._default_mounts
+        ] + [
+            (Path(h).expanduser().resolve(), c)
+            for h, c in (mounts or [])
+        ]
         outcome = run_phase(
             path,
             skill_name=self._root.name,
@@ -47,7 +64,7 @@ class RunScriptHandler:
             skill_root=self._root,
             docker_image=self._image,
             prev=prev or {},
-            extra_mounts=[(Path(h).expanduser().resolve(), c) for h, c in (mounts or [])],
+            extra_mounts=merged,
         )
         return {
             "status": "ok" if outcome.exit_code == 0 else "failed",

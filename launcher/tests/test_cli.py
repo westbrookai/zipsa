@@ -2067,6 +2067,61 @@ class TestRunDispatch:
         assert mock_exec.called          # legacy path taken
         assert not mock_run_llm.called   # NOT the LLM runtime
 
+    @patch("zipsa.cli.run_skill_llm")
+    def test_mount_flag_threads_to_run_skill_llm(self, mock_run_llm, tmp_path, monkeypatch):
+        """--mount on `zipsa run` passes expanded mounts as extra_mounts to run_skill_llm."""
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        mock_run_llm.return_value = 0
+
+        cred_file = tmp_path / "creds.json"
+        cred_file.write_text('{}')
+
+        res = runner.invoke(app, [
+            "run", str(root),
+            "--mount", f"{cred_file}:/mnt/creds.json",
+        ])
+        assert res.exit_code == 0, res.output
+        assert mock_run_llm.called
+        _, kwargs = mock_run_llm.call_args
+        extra = kwargs.get("extra_mounts", [])
+        assert len(extra) == 1
+        host, container = extra[0]
+        # Host must be an absolute Path with no literal ~
+        assert isinstance(host, Path)
+        assert host.is_absolute()
+        assert "~" not in str(host)
+        assert container == "/mnt/creds.json"
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_mount_tilde_is_expanded(self, mock_run_llm, tmp_path, monkeypatch):
+        """--mount with ~ in the host path must be expanded before passing to run_skill_llm."""
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        mock_run_llm.return_value = 0
+
+        res = runner.invoke(app, [
+            "run", str(root),
+            "--mount", "~/.zipsa/credentials/x.json:/mnt/x.json",
+        ])
+        assert res.exit_code == 0, res.output
+        _, kwargs = mock_run_llm.call_args
+        extra = kwargs.get("extra_mounts", [])
+        host, _ = extra[0]
+        assert "~" not in str(host), "tilde must be expanded"
+        assert host.is_absolute()
+
+    @patch("zipsa.cli.run_skill_llm")
+    def test_no_mount_flag_passes_empty_extra_mounts(self, mock_run_llm, tmp_path, monkeypatch):
+        """When --mount is omitted, extra_mounts passed to run_skill_llm is empty."""
+        monkeypatch.chdir(tmp_path)
+        root = self._exec_skill(tmp_path)
+        mock_run_llm.return_value = 0
+        res = runner.invoke(app, ["run", str(root)])
+        assert res.exit_code == 0, res.output
+        _, kwargs = mock_run_llm.call_args
+        assert not kwargs.get("extra_mounts")
+
 
 class TestCallTraceCycleDetection:
     """ZIPSA_CALL_TRACE and ZIPSA_CALL_DEPTH env vars are set by a

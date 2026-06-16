@@ -198,6 +198,22 @@ Document the mount your skill needs in its `SKILL.md` run example —
 the caller (or `zipsa create`'s test step) supplies it. Never bake a
 secret into the skill files.
 
+### 6.1 Mounts with `zipsa run`
+
+For skills that run via the LLM run-time (`zipsa run`), pass the same
+`--mount` flag — mounts are forwarded to each script's exec
+sub-container automatically:
+
+```bash
+zipsa run ./my-skill \
+  --mount ~/.zipsa/credentials/telegram.json:/mnt/creds/telegram.json \
+  --mount ~/.zipsa/credentials/tfnsw.json:/mnt/creds/tfnsw.json
+```
+
+This mirrors `zipsa exec --mount …`. The orchestrating LLM (claude)
+container does **not** receive the mounts — only the script containers
+do (keeping creds out of the LLM's environment by design).
+
 ## 7. Running
 
 ```bash
