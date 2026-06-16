@@ -218,8 +218,13 @@ def _build_docker_argv(
 ) -> list[str]:
     """Build the minimal `docker run` command for one phase.
 
-    Pure function — unit-testable without Docker. `-i` pipes the stdin
-    payload through; no `-t` (stdout must stay clean for parsing).
+    `-i` pipes the stdin payload through; no `-t` (stdout must stay
+    clean for parsing).
+
+    For `.py` phases this function also ensures the host uv-cache dir
+    exists (`mkdir -p`, idempotent) so that dependency installs are
+    cached across `--rm` runs rather than re-downloaded each time.
+    That mkdir is the only filesystem side effect.
 
     `command` overrides the default <runner> <phase-file> invocation
     (used by LLM phases, whose prompt arrives via stdin instead of a
