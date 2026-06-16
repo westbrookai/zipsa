@@ -33,27 +33,57 @@ what exactly should happen, what's the input (`user_query`, empty-query
 behavior), what's the output, where's the boundary (what it does NOT
 do). Then restate the refined intent and confirm.
 
-Once confirmed, write `INTENT.md` into the staging directory **before**
-drafting `SKILL.md` or any scripts. Capture the agreed requirements: the
-*why* and the acceptance criteria (what "done" looks like). INTENT.md is
-a first-class artifact that travels with the skill.
+Don't freeze `INTENT.md` yet — feasibility (Step 2) may reduce the
+scope. You capture INTENT.md once scope + prerequisites are settled (end
+of Step 2 / Step 4). It stays a first-class artifact: the *why* and the
+acceptance criteria (what "done" looks like) that travel with the skill.
 
-### 2. Decide the script split
+### 2. Check feasibility & gather prerequisites
+Before drafting anything, decide **whether** the intent is buildable as
+a zipsa skill (an LLM following `SKILL.md` + deterministic scripts, run
+on demand) and **what** it needs from the outside.
+
+**Feasibility.** If part of the intent needs a capability that isn't
+there — AUTHORING §9 platform gaps (in-skill HITL, env injection for
+code scripts, branching, composition, tools in LLM phases), or anything
+fundamentally outside "LLM + a script that makes API calls" (a
+persistent background daemon, hardware access, an action someone must
+take in the physical world) — do NOT quietly build a broken version.
+Use `ask`/`confirm` to: name the limit, propose the closest feasible
+version (or the platform feature it would need), and agree on the scope.
+Workarounds for the common gaps: secrets → a mounted file (§6). The
+remaining gaps (tools in LLM phases, HITL, branching, composition,
+env injection) have no drop-in workaround — raise them as platform
+feature requests rather than hacking around them.
+
+**Prerequisites.** Enumerate everything the skill needs from outside and
+ask for it now, in order, before drafting — don't discover a missing key
+at test time:
+- external **API keys** — name the service and the registration URL
+  (e.g. opendata.transport.nsw.gov.au) and ask the user to obtain one;
+- **credential files** — state the exact JSON shape and the mount path
+  the scripts will read (e.g. `~/.zipsa/credentials/<x>.json` →
+  `/mnt/creds/<x>.json`), per §6;
+- **accounts / per-user config values** — anything that varies per user
+  (locations, ids, thresholds, schedules).
+
+Record the agreed scope and the prerequisites so they land in `INTENT.md`
+and in `SKILL.md`'s run example (the `--mount` it needs).
+
+### 3. Decide the script split
 Deterministic work → code scripts; reasoning → instructions in
 `SKILL.md`. Most skills are one of: a single `.py`; `1.fetch.py` +
 natural-language output; or a longer pipeline. Pick the language per
 script (AUTHORING §3). Reasoning earns a place in the prose only when the
 step genuinely needs inference.
 
-Check AUTHORING §9 (platform gaps): if the intent needs something not
-yet supported (env injection for code scripts, branching, in-skill
-scheduling, composition), tell the user and adapt — secrets use a
-mounted file (§6), scheduling stays out of the skill (on-demand).
+(Feasibility and platform gaps were already settled in Step 2 — the
+split just reflects the agreed scope.)
 
-### 3. Write the files
+### 4. Write the files
 Into the staging directory given in your prompt:
-- `INTENT.md` — the agreed requirements (from step 1): the *why* and the
-  acceptance criteria.
+- `INTENT.md` — the agreed requirements (scope from Steps 1–2): the *why*,
+  the acceptance criteria, and the prerequisites the skill depends on.
 - `SKILL.md` — 2–4 sentences of intent prose + a run example (incl. any
   `--mount` the skill needs). The run-time LLM follows this to drive the
   skill, so it must say what to do and which scripts to call.
@@ -61,7 +91,7 @@ Into the staging directory given in your prompt:
   Follow the stdin/stdout contract (AUTHORING §2). Code scripts validate
   inputs and fail loudly (stderr + exit 1).
 
-### 4. Test for real
+### 5. Test for real
 Iterate in two modes, narrow then whole:
 - `mcp__zipsa__exec` — debug ONE script at a time. Fast: drive a single
   script with a query and inspect its output before wiring the next one.
@@ -79,7 +109,7 @@ If a step can't be fully tested without something the user must provide
 (a real API token, a live message), set it up via `ask`/`confirm` first,
 then verify — don't claim success you didn't observe.
 
-### 5. Finalize
+### 6. Finalize
 The name is decided **last**, once the user is happy. Propose a
 kebab-case name based on what you built, confirm it, then call
 `mcp__zipsa__promote(name=...)`. Done means:

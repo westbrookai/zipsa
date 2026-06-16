@@ -99,8 +99,9 @@ def build_create_prompt(intent: str, staging_path: Path) -> str:
 def build_forge_prompt(intent: str, staging_path: Path) -> str:
     """The prompt handed to the in-container forge authoring claude.
 
-    Like build_create_prompt, but drives the full forge loop: capture
-    requirements in INTENT.md, draft, exec-debug individual scripts, run
+    Like build_create_prompt, but drives the full forge loop: clarify
+    intent, check feasibility & gather prerequisites, draft (writing
+    INTENT.md once scope is settled), exec-debug individual scripts, run
     the WHOLE draft through the real run-time, iterate, and promote LAST.
 
     Forge tools are PATH-SCOPED — the server injects the staging path, so
@@ -109,22 +110,12 @@ def build_forge_prompt(intent: str, staging_path: Path) -> str:
     """
     return (
         "You are authoring (forging) a new zipsa skill, with the user, via\n"
-        "the zipsa MCP tools. Follow the WORKFLOW and honor the CONTRACT below.\n\n"
+        "the zipsa MCP tools.\n\n"
         f"User's rough intent: {intent}\n"
-        f"Staging directory (write the skill files here): {staging_path}\n\n"
-        "===== FORGE LOOP =====\n"
-        "1. Agree the requirements with the user, then write INTENT.md in the\n"
-        "   staging dir capturing the why and the acceptance criteria.\n"
-        "2. Draft SKILL.md + the scripts.\n"
-        "3. Debug individual scripts fast with\n"
-        '   mcp__zipsa__exec(script="...", args="...").\n'
-        "4. Test the WHOLE skill through the real run-time (an LLM following\n"
-        '   SKILL.md, calling scripts) with mcp__zipsa__run(args="...").\n'
-        "5. Iterate on 2-4 until BOTH the user AND you are satisfied.\n"
-        "6. Finalize LAST with mcp__zipsa__promote(name=\"...\"). The name is\n"
-        "   decided last, after the user is happy.\n"
+        f"Staging directory (write the skill files here): {staging_path}\n"
         "Note: exec/run/promote are path-scoped — do NOT pass a staging_path\n"
         "argument; the host already knows the draft location.\n\n"
+        "Follow the WORKFLOW below step by step, and honor the CONTRACT after it.\n\n"
         "===== WORKFLOW =====\n"
         f"{_bundled('skill-builder.md')}\n"
         "===== CONTRACT (AUTHORING guide) =====\n"
@@ -136,7 +127,7 @@ def build_forge_prompt(intent: str, staging_path: Path) -> str:
 # choose block on the human; exec runs a full per-phase container test.
 # Claude Code's default (~60s first-byte) is far too short — verified that
 # a generous per-server timeout lets a multi-minute tool call survive.
-_MCP_TOOL_TIMEOUT_MS = 600_000
+_MCP_TOOL_TIMEOUT_MS = 1_800_000
 
 
 def build_mcp_config(port: int, token: str) -> dict:

@@ -21,6 +21,8 @@ class TestBuildForgePrompt:
         for needle in ("INTENT.md", "mcp__zipsa__exec", "mcp__zipsa__run",
                        "mcp__zipsa__promote", "a weather alert"):
             assert needle in p
+        assert "feasibility" in p.lower()
+        assert "prerequisite" in p.lower()
 
 
 class TestRunForge:

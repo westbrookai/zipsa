@@ -283,3 +283,32 @@ ones — are invisible to `view`; the user has to `cat` the JSON by hand.
 
 **Test plan.** Fixture exec run dir; assert `view` prints the result
 + phase summary and surfaces stderr on a failed run.
+
+---
+
+## Forge HITL robustness — agent gives up on slow `ask` (2026-06-16)
+
+**Symptom.** During a live `zipsa forge` E2E (build a Sydney
+bus-departure → Telegram alert), the authoring agent asked one
+clarifying question and blocked on it. The host relay took ~15 min to
+answer, but the container agent's `mcp__zipsa__ask` MCP call has a
+10-min timeout (`_MCP_TOOL_TIMEOUT_MS = 600_000`). The call timed out,
+the agent re-asked, then gave up — printing the full list of things it
+needed and exiting. The skill was never built.
+
+**Mitigated, not fixed.** The new feasibility & prerequisites step in
+`skill-builder.md` (spec `2026-06-16-forge-feasibility-prerequisites`)
+batches external dependencies into one early ask → fewer, shorter HITL
+waits → far less timeout exposure. But the underlying fragility (agent
+*exits* when a single `ask` is slow) remains.
+
+**Fix options for later.**
+
+- Raise `_MCP_TOOL_TIMEOUT_MS` for the forge/authoring path so a
+  genuinely slow human answer doesn't trip the timeout.
+- Make the agent tolerate a timed-out `ask` by retrying/polling instead
+  of bailing (a timeout is "still waiting", not "give up").
+
+**Why deferred.** The prerequisites step removes the common trigger;
+the deeper relay/timeout work is a separate change with its own test
+surface. Pick up if a slow-HITL forge run still strands the agent.
