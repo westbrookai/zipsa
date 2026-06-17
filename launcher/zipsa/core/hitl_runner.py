@@ -83,12 +83,20 @@ from .memory_store import MemoryStore  # noqa: F401  (for type hints)
 from .caller_context import CallerInfo, CallerContextMiddleware  # noqa: F401
 
 
-def _pick_free_port() -> int:
+def _bind_free_socket(host: str = "0.0.0.0") -> socket.socket:
+    """Bind an ephemeral port and return the still-open listening socket.
+
+    Hand this socket to uvicorn (`Server.run(sockets=[sock])`) so the
+    port is never released between pick and bind — closes the TOCTOU
+    window that made concurrent server starts flaky. Binds 0.0.0.0 on
+    purpose: the container reaches the host via host.docker.internal,
+    not loopback.
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((host, 0))
+    s.listen()
+    return s
 
 
 class HitlServer:
@@ -125,6 +133,7 @@ class HitlServer:
         self.token: str = ""
         self._thread: Optional[threading.Thread] = None
         self._uvicorn_server: Optional[uvicorn.Server] = None
+        self._socket: Optional[socket.socket] = None
         self._token_map: dict[str, CallerInfo] = {}
         self._skill_stores_by_caller: dict[str, MemoryStore] = {}
         # Pre-populate primary's store so existing tests / single-skill
@@ -143,7 +152,8 @@ class HitlServer:
         self._token_map[token] = caller
 
     def start(self) -> None:
-        self.port = _pick_free_port()
+        self._socket = _bind_free_socket()
+        self.port = self._socket.getsockname()[1]
         self.token = secrets.token_urlsafe(32)
 
         # Register the primary caller (if set) so that requests bearing
@@ -495,8 +505,9 @@ class HitlServer:
             access_log=False,
         )
         self._uvicorn_server = uvicorn.Server(config)
+        _sock = self._socket
         self._thread = threading.Thread(
-            target=self._uvicorn_server.run,
+            target=lambda: self._uvicorn_server.run(sockets=[_sock]),
             daemon=True,
             name=f"hitl-mcp-{self.port}",
         )
@@ -523,5 +534,11 @@ class HitlServer:
             self._uvicorn_server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
         self._uvicorn_server = None
         self._thread = None
+        self._socket = None
