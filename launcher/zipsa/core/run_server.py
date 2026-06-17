@@ -26,7 +26,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .caller_context import CallerContextMiddleware, CallerInfo
 from .hitl_mcp import AskHandler, ChooseHandler, ConfirmHandler, HitlIO, HitlUnattended, ReportHandler
-from .hitl_runner import _ALLOWED_HOSTS, _pick_free_port
+from .hitl_runner import _ALLOWED_HOSTS, _bind_free_socket
 
 
 class RunServer:
@@ -39,12 +39,14 @@ class RunServer:
         self._tool_names: list[str] = []
         self._thread: Optional[threading.Thread] = None
         self._uvicorn_server: Optional[uvicorn.Server] = None
+        self._socket: Optional[socket.socket] = None
 
     def tool_names(self) -> list[str]:
         return list(self._tool_names)
 
     def start(self) -> None:
-        self.port = _pick_free_port()
+        self._socket = _bind_free_socket()
+        self.port = self._socket.getsockname()[1]
         self.token = secrets.token_urlsafe(32)
         mcp = FastMCP(
             "zipsa-run",
@@ -114,8 +116,9 @@ class RunServer:
             access_log=False,
         )
         self._uvicorn_server = uvicorn.Server(config)
+        _sock = self._socket
         self._thread = threading.Thread(
-            target=self._uvicorn_server.run,
+            target=lambda: self._uvicorn_server.run(sockets=[_sock]),
             daemon=True,
             name=f"run-mcp-{self.port}",
         )
@@ -140,5 +143,11 @@ class RunServer:
             self._uvicorn_server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
         self._uvicorn_server = None
         self._thread = None
+        self._socket = None

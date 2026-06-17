@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from zipsa.core.hitl_runner import HitlServer
+from zipsa.core.hitl_runner import HitlServer, _bind_free_socket
 from zipsa.core.hitl_mcp import HitlIO
 import io as _io
 
@@ -728,3 +728,110 @@ class TestAskOnceDefault:
             assert "HITL_UNATTENDED" in r.text
         finally:
             server.stop()
+
+
+class TestBindFreeSocket:
+    """Unit tests for _bind_free_socket helper."""
+
+    def test_returns_open_listening_socket(self):
+        """Helper returns an open socket bound to a nonzero port."""
+        s = _bind_free_socket()
+        try:
+            port = s.getsockname()[1]
+            assert port > 0
+        finally:
+            s.close()
+
+    def test_getsockname_port_matches(self):
+        """The returned socket's port is consistent across two getsockname calls."""
+        s = _bind_free_socket()
+        try:
+            port1 = s.getsockname()[1]
+            port2 = s.getsockname()[1]
+            assert port1 == port2
+            assert port1 > 0
+        finally:
+            s.close()
+
+    def test_two_calls_return_different_ports(self):
+        """Two calls must return sockets on different ports (no TOCTOU window)."""
+        s1 = _bind_free_socket()
+        s2 = _bind_free_socket()
+        try:
+            port1 = s1.getsockname()[1]
+            port2 = s2.getsockname()[1]
+            assert port1 != port2
+        finally:
+            s1.close()
+            s2.close()
+
+    def test_socket_is_listening(self):
+        """The returned socket must accept connections (i.e. is listening)."""
+        s = _bind_free_socket()
+        try:
+            port = s.getsockname()[1]
+            # If listen() was called, connect should succeed
+            with socket.create_connection(("127.0.0.1", port), timeout=2.0):
+                pass
+        finally:
+            s.close()
+
+
+class TestConcurrentServerStartNoBind(TestHitlServerLifecycle):
+    """Regression: starting many servers in quick succession must not have
+    port conflicts (the TOCTOU scenario that made tests flaky)."""
+
+    pass  # inherits nothing useful; the real test is below
+
+
+class TestConcurrentStartNoConflict:
+    """Regression test for the TOCTOU fix: 10 servers started concurrently
+    must all get distinct ports and all become reachable."""
+
+    def _make_io(self):
+        return HitlIO(
+            stdin=_io.StringIO(""),
+            stdout=_io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=False,
+        )
+
+    def test_concurrent_hitl_servers_all_distinct_ports(self):
+        """Start 10 HitlServers from threads simultaneously; every server
+        must bind a unique port and be reachable."""
+        from zipsa.core.run_server import RunServer
+        from unittest.mock import MagicMock
+
+        n = 10
+        servers = [RunServer(self._make_io(), MagicMock()) for _ in range(n)]
+        errors = []
+
+        def start_server(srv):
+            try:
+                srv.start()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=start_server, args=(s,)) for s in servers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        try:
+            assert not errors, f"Server start errors: {errors}"
+            ports = [s.port for s in servers]
+            # All ports must be positive
+            assert all(p > 0 for p in ports), f"Some ports are zero: {ports}"
+            # All ports must be distinct
+            assert len(set(ports)) == n, f"Port collisions detected: {ports}"
+            # All servers must be reachable
+            for srv in servers:
+                with socket.create_connection(("127.0.0.1", srv.port), timeout=2.0):
+                    pass
+        finally:
+            for srv in servers:
+                try:
+                    srv.stop()
+                except Exception:
+                    pass
