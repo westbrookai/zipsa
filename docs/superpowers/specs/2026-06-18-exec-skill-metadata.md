@@ -88,11 +88,24 @@ It is a **package manifest** — the deployable-unit metadata zipsa needs to
 *identify (name+version), provenance (author/tags), provision (requires),
 and bound (limits)* the skill. It is NOT a behavior spec (that is SKILL.md)
 nor a requirements doc (the `requires` section is just host-provisioning
-config). The trichotomy: **SKILL.md** = intent + instructions (≈ the spec
-layer, mechanism-agnostic); **scripts/** = implementation;
+config). The four parts of a skill: **zipsa/INTENT.md** = why (original
+intent / forge provenance); **SKILL.md** = how (instructions/constitution,
+mechanism-agnostic); **scripts/** = what (implementation);
 **zipsa/package.yaml** = packaging/lifecycle. It is to a zipsa skill what
 `package.json` / `pyproject.toml` / `Cargo.toml` / `Chart.yaml` is to a
 package — hence the name `package.yaml`.
+
+## INTENT.md — the why (kept)
+`zipsa/INTENT.md` records the original user intent + why the skill exists.
+**Kept, not dropped.** Distinct from `description`: `description`
+(frontmatter) is a short discovery blurb (what + when) the orchestrating
+agent reads to decide whether to invoke; INTENT.md is the longer-form
+requirements/why that (a) is forge's input and the bar for its
+iterate-to-satisfied loop, (b) gives humans provenance, (c) is optional
+extra context for the run-time LLM. It lives in `zipsa/` (forge-owned
+provenance, not part of the portable Agent Skill payload — preserves the
+litmus); the run path may inject it, plain Claude ignores it (running needs
+SKILL.md, not the why).
 
 ## Skill directory layout (option Y — CONFIRMED)
 
@@ -103,7 +116,8 @@ skills/<name>/
 │   ├── 1.fetch.py    # filename = order + id + slug (phase ordering convention)
 │   └── 2.report.md
 └── zipsa/            # zipsa-only sidecar; plain Claude ignores it
-    └── package.yaml  # the package manifest
+    ├── package.yaml  # the package manifest (identity/version/requires/limits)
+    └── INTENT.md     # forge provenance — the "why" / original intent
 ```
 - Replaces the current single `zipsa-dist/` dir: portable scripts move to
   the standard **`scripts/`**, zipsa-only metadata goes to **`zipsa/`**.
@@ -157,6 +171,9 @@ commands that consume it are #157–#161.
   wahroonga-umbrella-alert, bus-575-hornsby-alert). Stage it so exec keeps
   working throughout; consider a transition window where the runner
   accepts both `scripts/` and legacy `zipsa-dist/`.
+- **INTENT.md moves** skill-root → `zipsa/INTENT.md`: update
+  `build_run_prompt` (currently reads `skill_root/INTENT.md`) and forge's
+  promote (which writes it) to the new path.
 
 ## Out of scope (parked — see #156 comment / #155)
 - The data-passing / orchestration substrate: node unification, the typed
