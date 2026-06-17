@@ -49,7 +49,7 @@ model: claude-haiku-4-5-20251001       # optional (CC-honored)
   fields; putting them here means plain Claude Code honors them
   runtime-free (a north-star win) and zipsa reads them too.
 
-### Layer 2 — `zipsa/zipsa.yaml` (zipsa-only sidecar; plain Claude ignores)
+### Layer 2 — `zipsa/package.yaml` (zipsa-only sidecar; plain Claude ignores)
 What the standard does not cover — zipsa execution/lifecycle:
 
 ```yaml
@@ -69,7 +69,7 @@ requires:                  # optional — host dirs (prompt + save + mount, fold
 ```
 - **`version` is the only required field.** It is NOT a standard
   frontmatter field, so it lives here; identity = `frontmatter.name` +
-  `zipsa.yaml.version`.
+  `package.yaml version`.
 - **`requires` folds the mount in.** A directory requirement carries its
   own container mapping (`container` or `container_prefix`, `mode`,
   optional `preserve_host_path`) — there is no separate `mounts:`
@@ -83,7 +83,18 @@ requires:                  # optional — host dirs (prompt + save + mount, fold
   (→ frontmatter `allowed-tools`), `model` (→ frontmatter). `mcp` and
   `children` are **deferred** (see Out of scope).
 
-## Skill directory layout (RECOMMENDED — option Y)
+## What `zipsa/package.yaml` is
+It is a **package manifest** — the deployable-unit metadata zipsa needs to
+*identify (name+version), provenance (author/tags), provision (requires),
+and bound (limits)* the skill. It is NOT a behavior spec (that is SKILL.md)
+nor a requirements doc (the `requires` section is just host-provisioning
+config). The trichotomy: **SKILL.md** = intent + instructions (≈ the spec
+layer, mechanism-agnostic); **scripts/** = implementation;
+**zipsa/package.yaml** = packaging/lifecycle. It is to a zipsa skill what
+`package.json` / `pyproject.toml` / `Cargo.toml` / `Chart.yaml` is to a
+package — hence the name `package.yaml`.
+
+## Skill directory layout (option Y — CONFIRMED)
 
 ```
 skills/<name>/
@@ -92,7 +103,7 @@ skills/<name>/
 │   ├── 1.fetch.py    # filename = order + id + slug (phase ordering convention)
 │   └── 2.report.md
 └── zipsa/            # zipsa-only sidecar; plain Claude ignores it
-    └── zipsa.yaml
+    └── package.yaml  # the package manifest
 ```
 - Replaces the current single `zipsa-dist/` dir: portable scripts move to
   the standard **`scripts/`**, zipsa-only metadata goes to **`zipsa/`**.
@@ -102,17 +113,14 @@ skills/<name>/
   (mechanism-agnostic) describes the order in prose; the zipsa exec engine
   infers it from the numbering.
 
-### Open decision — scripts location (Y vs X)
-Y (above) is recommended. The alternative **X** keeps everything in one
-`zipsa/` dir (scripts + zipsa.yaml) — more cohesive, but non-standard and
-makes the skill look zipsa-coupled, weakening the north star. Pick before
-implementation; the rest of the spec is unaffected by the choice except
-the scripts path the loader/exec-runner globs.
-
-### Sub-decision — sidecar filename
-`zipsa/zipsa.yaml` is mildly redundant. Alternatives: `zipsa/skill.yaml`
-or root `zipsa.yaml`. Default to `zipsa/zipsa.yaml` (keeps it out of the
-skill root per the cohesion preference); finalize during implementation.
+### Resolved
+- **scripts location = Y** (confirmed): scripts in the standard `scripts/`,
+  zipsa-only metadata in `zipsa/`. (Rejected X = everything in one `zipsa/`
+  dir — cohesive but non-standard, makes the skill look zipsa-coupled,
+  weakens the north star.)
+- **sidecar = `zipsa/package.yaml`** (confirmed): named by role — the
+  `zipsa/` dir is the "zipsa zone" marker, `package.yaml` says what the
+  file is (the package manifest).
 
 ## Mechanism-agnostic SKILL.md (principle, enforced here)
 For two-mode portability, **SKILL.md must never name `mcp__zipsa__*`
@@ -127,11 +135,11 @@ A loader — the exec-world analog of `Skill.load` — that:
 1. Resolves a skill directory (no `manifest.yaml` required; reuse
    `_is_exec_format`, which already treats manifest.yaml presence as the
    legacy marker).
-2. Parses SKILL.md frontmatter (YAML) + `zipsa/zipsa.yaml` (YAML).
+2. Parses SKILL.md frontmatter (YAML) + `zipsa/package.yaml` (YAML).
 3. Validates into a Pydantic model (e.g. `ExecSkill`) with: `name`
    (frontmatter), `description`, `allowed_tools`/`disallowed_tools`,
    `model` (frontmatter); `version` (required), `author`, `tags`,
-   `limits`, `requires` (zipsa.yaml). Missing `version` or `name` →
+   `limits`, `requires` (package.yaml). Missing `version` or `name` →
    clear error.
 4. Exposes identity (`name`, `version`) for install/run-by-name and the
    `requires`/limits for configure/run.
@@ -143,7 +151,7 @@ commands that consume it are #157–#161.
 - Legacy manifest skills keep using `Skill.load`; exec skills use the new
   loader. Dispatch by `_is_exec_format` (manifest.yaml present → legacy).
 - **Directory rename is a migration:** `zipsa-dist/` → `scripts/` +
-  `zipsa/zipsa.yaml`. Touches `exec_runner` (phase glob path),
+  `zipsa/package.yaml`. Touches `exec_runner` (phase glob path),
   `AUTHORING.md`, the skill-builder workflow, and every existing exec
   skill (hello-world, weather, dad-joke, agenthud-report,
   wahroonga-umbrella-alert, bus-575-hornsby-alert). Stage it so exec keeps
@@ -161,7 +169,7 @@ commands that consume it are #157–#161.
   #159 validate, #160 discover, #161 configure/connect).
 
 ## Tests
-- Loader parses a skill with SKILL.md frontmatter + `zipsa/zipsa.yaml`
+- Loader parses a skill with SKILL.md frontmatter + `zipsa/package.yaml`
   into the model; identity = name+version.
 - Missing `version` (or missing `name`) → clear, specific error.
 - `requires` with a `list[directory]` + `container_prefix` validates;
@@ -173,7 +181,7 @@ commands that consume it are #157–#161.
   removed still has SKILL.md + scripts/ and is structurally a valid Agent
   Skill (name+description present, scripts resolvable).
 
-## Open decisions (recap)
-1. scripts location: **Y** (scripts/ + zipsa/) vs X (all in zipsa/). Y recommended.
-2. sidecar filename: `zipsa/zipsa.yaml` vs `zipsa/skill.yaml` vs root `zipsa.yaml`.
-3. `allowed-tools` semantics: Claude Code's `allowed-tools` GRANTS auto-approval (not a restrict-allowlist like legacy `tools.builtin`). If zipsa wants hard tool RESTRICTION, map to `disallowed-tools` or zipsa-side enforcement — settle in #159 (validate) / migration.
+## Decisions recap
+1. scripts location: **Y** — `scripts/` + `zipsa/`. ✅ confirmed.
+2. sidecar filename: **`zipsa/package.yaml`** (package manifest). ✅ confirmed.
+3. `allowed-tools` semantics: Claude Code's `allowed-tools` GRANTS auto-approval (not a restrict-allowlist like legacy `tools.builtin`). Hard tool RESTRICTION (if wanted) → `disallowed-tools` or zipsa-side enforcement. **Deferred to #159 (validate).**
