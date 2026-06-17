@@ -14,11 +14,13 @@ Gotchas:
 - The run record is best-effort: an OSError writing it never changes the
   returned exit code (always the container claude's).
 - claude streams UTF-8 (incl. multi-byte Korean); the tee decodes the
-  live stream with errors="replace" so a chunk boundary mid-sequence
-  can't raise, and keeps raw bytes for the log (decoded once, intact).
+  live stream INCREMENTALLY (boundary-safe — a multi-byte char split
+  across two pipe reads is emitted whole, no spurious U+FFFD), and writes
+  the raw bytes byte-exact to the on-disk log (never decoded).
 """
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import platform
@@ -94,23 +96,34 @@ def build_run_argv(
 def _tee_stream(src: "IO[bytes]", live: "IO[str]", sink: list[bytes]) -> None:
     """Pump bytes from `src` to both the live text stream and a byte buffer.
 
-    Reads raw bytes (claude streams UTF-8, incl. multi-byte Korean) and
-    decodes them for the live stream with errors="replace" so a chunk
-    boundary splitting a multi-byte sequence never raises. The captured
-    bytes are kept intact and decoded once at the end (no boundary
-    corruption in the on-disk log). Best-effort: a write to the live
-    stream that fails is swallowed — logging must never sink the run.
+    Reads raw bytes (claude streams UTF-8, incl. multi-byte Korean). The
+    LIVE stream is decoded INCREMENTALLY (codecs incremental decoder,
+    errors="replace"): a multi-byte sequence split across two OS pipe reads
+    is held over the boundary and emitted whole, so no U+FFFD appears just
+    because a read landed mid-character. The captured bytes are kept intact
+    and written byte-exact to the on-disk log (no decode at all on that
+    path). Best-effort: a write to the live stream that fails is swallowed —
+    logging must never sink the run.
     """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     while True:
         chunk = src.read(4096)
         if not chunk:
             break
         sink.append(chunk)
         try:
-            live.write(chunk.decode("utf-8", errors="replace"))
+            live.write(decoder.decode(chunk))
             live.flush()
         except (OSError, ValueError):
             pass
+    # Flush any trailing partial sequence (replaced if incomplete at EOF).
+    try:
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            live.write(tail)
+            live.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def _write_run_record(

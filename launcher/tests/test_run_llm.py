@@ -235,23 +235,55 @@ class TestRunSkillLlmLogging:
     @patch("zipsa.run_llm.subprocess.Popen")
     @patch("zipsa.run_llm.RunServer")
     def test_utf8_multibyte_not_corrupted(self, mock_server_cls, mock_popen, tmp_path, monkeypatch):
-        """Korean (multi-byte UTF-8) output split across read chunks must
-        round-trip intact through the tee."""
+        """Korean (multi-byte UTF-8) output whose bytes are returned by the
+        OS pipe in fragments that split a character mid-sequence must still
+        reach the LIVE terminal intact (no U+FFFD) and be byte-exact on disk.
+
+        A plain io.BytesIO returns everything in one .read(4096), so it never
+        crosses a boundary; here .read(n) yields ONE byte at a time, which
+        forces every 3-byte Korean char to span multiple reads. This would
+        produce U+FFFD with a per-chunk independent decode, so the test
+        genuinely guards the incremental decoder.
+        """
         home = tmp_path / "home"
         monkeypatch.setenv("ZIPSA_HOME", str(home))
         root = self._skill(tmp_path)
         srv = MagicMock(); srv.port = 51213; srv.token = "tok"
         mock_server_cls.return_value = srv
         text = "버스가 곧 도착합니다\n"
-        mock_popen.return_value = _fake_proc(stdout=text.encode("utf-8"), returncode=0)
+        raw = text.encode("utf-8")
+
+        class _ByteAtATime:
+            """A pipe-like stream whose read(n) returns at most ONE byte."""
+            def __init__(self, data: bytes):
+                self._data = data
+                self._pos = 0
+
+            def read(self, _n: int = -1) -> bytes:
+                if self._pos >= len(self._data):
+                    return b""
+                b = self._data[self._pos:self._pos + 1]
+                self._pos += 1
+                return b
+
+        proc = MagicMock()
+        proc.stdout = _ByteAtATime(raw)
+        proc.stderr = io.BytesIO(b"")
+        proc.wait.return_value = 0
+        proc.returncode = 0
+        mock_popen.return_value = proc
 
         out_buf = io.StringIO()
         from zipsa.run_llm import run_skill_llm
         run_skill_llm(root, "x", image="img", stdout=out_buf)
 
-        assert "버스가 곧 도착합니다" in out_buf.getvalue()
+        # (a) LIVE stream has the correct text with NO replacement chars.
+        live = out_buf.getvalue()
+        assert text.strip() in live
+        assert "�" not in live
+        # (b) on-disk log is byte-exact equal to the original encoded bytes.
         rd = next((home / "weather" / "runs").iterdir())
-        assert "버스가 곧 도착합니다" in (rd / "stdout.log").read_text()
+        assert (rd / "stdout.log").read_bytes() == raw
 
     @patch("zipsa.run_llm.subprocess.Popen")
     @patch("zipsa.run_llm.RunServer")
