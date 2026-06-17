@@ -2,6 +2,20 @@
 
 Mirror of create.py for the run path — headless claude in a container,
 SKILL.md as the instruction, a host MCP server exposing exec + HITL.
+
+Design decisions:
+- Output is teed (not just inherited): claude's stdout/stderr are PIPEd
+  and pumped by reader threads to BOTH the live terminal and a per-run
+  record under ~/.zipsa/<skill>/runs/<ts>/ (result.json mode="run" +
+  stdout.log/stderr.log), so an unwatched/scheduled run leaves a trace.
+  Shares exec's on-disk shape via exec_runner.new_run_dir.
+
+Gotchas:
+- The run record is best-effort: an OSError writing it never changes the
+  returned exit code (always the container claude's).
+- claude streams UTF-8 (incl. multi-byte Korean); the tee decodes the
+  live stream with errors="replace" so a chunk boundary mid-sequence
+  can't raise, and keeps raw bytes for the log (decoded once, intact).
 """
 from __future__ import annotations
 
@@ -12,8 +26,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
+from typing import IO
 
+from . import exec_runner
 from . import paths as zipsa_paths
 # reuse create's container mcp-config shape + interactivity check
 from .create import _is_interactive, build_mcp_config
@@ -74,16 +91,89 @@ def build_run_argv(
     return argv
 
 
+def _tee_stream(src: "IO[bytes]", live: "IO[str]", sink: list[bytes]) -> None:
+    """Pump bytes from `src` to both the live text stream and a byte buffer.
+
+    Reads raw bytes (claude streams UTF-8, incl. multi-byte Korean) and
+    decodes them for the live stream with errors="replace" so a chunk
+    boundary splitting a multi-byte sequence never raises. The captured
+    bytes are kept intact and decoded once at the end (no boundary
+    corruption in the on-disk log). Best-effort: a write to the live
+    stream that fails is swallowed — logging must never sink the run.
+    """
+    while True:
+        chunk = src.read(4096)
+        if not chunk:
+            break
+        sink.append(chunk)
+        try:
+            live.write(chunk.decode("utf-8", errors="replace"))
+            live.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def _write_run_record(
+    run_dir: Path, *,
+    skill_name: str, exit_code: int, duration_ms: int,
+    user_input: str, stdout_bytes: bytes, stderr_bytes: bytes,
+) -> None:
+    """Persist the run-time transcript as a unified `result.json` (mode="run")
+    plus stdout.log/stderr.log — same on-disk shape as exec (D2/D3).
+
+    Best-effort: any OSError is swallowed so a logging failure never changes
+    the run's exit code (mirrors exec_runner.write_run_record).
+    `final_message` is best-effort (D4): omitted unless trivially available —
+    stdout.log already holds the full transcript.
+    """
+    try:
+        record = {
+            "skill_name": skill_name,
+            "mode": "run",
+            "exit_code": exit_code,
+            "duration_ms": duration_ms,
+            "run_dir": str(run_dir),
+            "user_input": user_input,
+        }
+        (run_dir / "result.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2)
+        )
+        (run_dir / "stdout.log").write_bytes(stdout_bytes)
+        (run_dir / "stderr.log").write_bytes(stderr_bytes)
+    except OSError:
+        pass
+
+
 def run_skill_llm(
     skill_root: Path, user_input: str, *,
     image: str, env_file: Path | None = None,
     extra_mounts: "list[tuple[Path, str]] | None" = None,
+    stdout: "IO[str] | None" = None,
+    stderr: "IO[str] | None" = None,
 ) -> int:
     """Execute a skill as an LLM following SKILL.md, calling scripts via
-    the host RunServer's exec tool. Returns the container claude's exit code."""
+    the host RunServer's exec tool. Returns the container claude's exit code.
+
+    Output is teed: every chunk reaches the live terminal (`stdout`/
+    `stderr`, default sys.stdout/sys.stderr) AND a per-run record under
+    ~/.zipsa/<skill>/runs/<ts>/ (result.json + stdout.log + stderr.log),
+    so an unwatched/scheduled run still leaves a trace. The record write
+    is best-effort — an OSError there does not change the returned exit
+    code (the container claude's).
+    """
+    if stdout is None:
+        stdout = sys.stdout
+    if stderr is None:
+        stderr = sys.stderr
     if env_file is None:
         env_file = zipsa_paths.global_env_file()
     skill_root = skill_root.resolve()
+
+    run_dir = exec_runner.new_run_dir(skill_root.name)
+    try:
+        (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     hitl_io = HitlIO(
         stdin=sys.stdin, stdout=sys.stdout,
@@ -114,8 +204,38 @@ def run_skill_llm(
             # Skill creds are NOT passed here — the claude container gets only
             # Claude auth. Mounts reach the script via RunScriptHandler above.
         )
-        proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
-        return proc.returncode
+        started = time.monotonic()
+        # stdin stays DEVNULL — the relay FIFO feeds the MCP HITL tools, not
+        # claude's stdin. stdout/stderr are PIPEd so we can tee them.
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        out_chunks: list[bytes] = []
+        err_chunks: list[bytes] = []
+        t_out = threading.Thread(
+            target=_tee_stream, args=(proc.stdout, stdout, out_chunks), daemon=True,
+        )
+        t_err = threading.Thread(
+            target=_tee_stream, args=(proc.stderr, stderr, err_chunks), daemon=True,
+        )
+        t_out.start()
+        t_err.start()
+        exit_code = proc.wait()
+        t_out.join()
+        t_err.join()
+        duration_ms = int((time.monotonic() - started) * 1000)
+
+        _write_run_record(
+            run_dir,
+            skill_name=skill_root.name,
+            exit_code=exit_code,
+            duration_ms=duration_ms,
+            user_input=user_input,
+            stdout_bytes=b"".join(out_chunks),
+            stderr_bytes=b"".join(err_chunks),
+        )
+        return exit_code
     finally:
         server.stop()
         # The mcp-config carries the bearer token — don't leave it lying
