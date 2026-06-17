@@ -83,6 +83,10 @@ class ExecSkillHandler:
         return {
             "status": "ok" if last.exit_code == 0 else "failed",
             "skill_name": path.name,
+            # This per-call MCP dict's "mode" is the ExecResult backend
+            # (docker/local), distinct from the run-record "mode" discriminator
+            # (exec/run) in cli.py — intentionally NOT renamed to preserve the
+            # in-container MCP/agent contract.
             "mode": last.mode,
             "result": last.result,
             "exit_code": last.exit_code,

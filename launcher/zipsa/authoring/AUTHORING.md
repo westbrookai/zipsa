@@ -239,7 +239,8 @@ Output:
 ```json
 {
   "skill_name": "my-skill",
-  "mode": "docker",
+  "mode": "exec",                 // run-record kind (exec vs run)
+  "backend": "docker",            // phase backend (docker | local)
   "result": { ... },              // last phase's result
   "exit_code": 0,
   "duration_ms": 7617,

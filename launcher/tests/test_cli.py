@@ -991,6 +991,182 @@ class TestViewCommand:
         assert "output.jsonl" in result.stderr
 
 
+class TestViewExecRunLayout:
+    """view reads the exec/run layout (~/.zipsa/<name>/runs/<ts>/result.json),
+    no manifest / Skill.load required (D5)."""
+
+    def _exec_run(self, home, name, ts, *, exit_code=0, result=None, phases=None):
+        rd = home / name / "runs" / ts
+        rd.mkdir(parents=True)
+        record = {
+            "skill_name": name,
+            "mode": "exec",
+            "backend": "local",
+            "exit_code": exit_code,
+            "duration_ms": 1234,
+            "run_dir": str(rd),
+            "result": result if result is not None else {"answer": "42"},
+            "out_dir": str(rd / "artifacts"),
+            "phases": phases if phases is not None else [
+                {"id": "1", "slug": "fetch", "exit_code": 0, "duration_ms": 700},
+                {"id": "2", "slug": "report", "exit_code": exit_code, "duration_ms": 534},
+            ],
+        }
+        (rd / "result.json").write_text(json.dumps(record))
+        (rd / "stdout.log").write_text("phase output here\n")
+        (rd / "stderr.log").write_text("warn: something\n")
+        return rd
+
+    def _run_run(self, home, name, ts, *, exit_code=0, final_message=None):
+        rd = home / name / "runs" / ts
+        rd.mkdir(parents=True)
+        record = {
+            "skill_name": name,
+            "mode": "run",
+            "exit_code": exit_code,
+            "duration_ms": 5000,
+            "run_dir": str(rd),
+            "user_input": "Sydney",
+        }
+        if final_message is not None:
+            record["final_message"] = final_message
+        (rd / "result.json").write_text(json.dumps(record))
+        (rd / "stdout.log").write_text("transcript line one\nbus arrives soon\n")
+        (rd / "stderr.log").write_text("")
+        return rd
+
+    def test_view_exec_run_renders_phase_table_no_manifest(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._exec_run(home, "weather", "2026-06-17_120000_00000")
+
+        result = runner.invoke(app, ["view", "weather"])
+
+        assert result.exit_code == 0, result.output
+        assert "fetch" in result.output and "report" in result.output
+        assert "42" in result.output  # the result surfaced
+
+    def test_view_run_renders_transcript(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._run_run(home, "bus", "2026-06-17_120000_00000",
+                      final_message="The bus arrives in 3 minutes.")
+
+        result = runner.invoke(app, ["view", "bus"])
+
+        assert result.exit_code == 0, result.output
+        assert "The bus arrives in 3 minutes." in result.output
+
+    def test_view_run_without_final_message_shows_transcript(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._run_run(home, "bus", "2026-06-17_120000_00000")  # no final_message
+
+        result = runner.invoke(app, ["view", "bus"])
+
+        assert result.exit_code == 0, result.output
+        assert "transcript line one" in result.output
+
+    def test_view_latest_and_prefix_on_new_layout(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._exec_run(home, "weather", "2026-06-17_100000_00000",
+                       result={"answer": "older"})
+        self._exec_run(home, "weather", "2026-06-17_120000_00000",
+                       result={"answer": "newer"})
+
+        latest = runner.invoke(app, ["view", "weather"])
+        assert latest.exit_code == 0
+        assert "newer" in latest.output
+
+        by_prefix = runner.invoke(app, ["view", "weather", "2026-06-17_1000"])
+        assert by_prefix.exit_code == 0
+        assert "older" in by_prefix.output
+
+    def test_view_shows_stderr_on_nonzero_exit(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._exec_run(home, "weather", "2026-06-17_120000_00000", exit_code=1)
+
+        result = runner.invoke(app, ["view", "weather"])
+        assert result.exit_code == 0, result.output
+        assert "warn: something" in result.output
+
+    def test_view_json_mode_dumps_result_json_exec(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._exec_run(home, "weather", "2026-06-17_120000_00000")
+
+        result = runner.invoke(app, ["view", "weather", "--output-mode", "json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["mode"] == "exec"
+        assert payload["result"]["answer"] == "42"
+
+    def test_view_json_mode_dumps_result_json_run(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._run_run(home, "bus", "2026-06-17_120000_00000", final_message="hi")
+
+        result = runner.invoke(app, ["view", "bus", "--output-mode", "json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["mode"] == "run"
+        assert payload["final_message"] == "hi"
+
+    def test_view_answer_mode_exec_prints_result(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._exec_run(home, "weather", "2026-06-17_120000_00000")
+
+        result = runner.invoke(app, ["view", "weather", "--output-mode", "answer"])
+        assert result.exit_code == 0, result.output
+        assert "42" in result.output
+
+    def test_view_answer_mode_run_prints_final_message(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._run_run(home, "bus", "2026-06-17_120000_00000", final_message="umbrella time")
+
+        result = runner.invoke(app, ["view", "bus", "--output-mode", "answer"])
+        assert result.exit_code == 0, result.output
+        assert "umbrella time" in result.output
+
+
+class TestRunsCommand:
+    """`zipsa runs <skill>` lists a skill's runs newest-first (D6)."""
+
+    def _run_run(self, home, name, ts, *, mode="run", exit_code=0):
+        rd = home / name / "runs" / ts
+        rd.mkdir(parents=True)
+        (rd / "result.json").write_text(json.dumps({
+            "skill_name": name, "mode": mode, "exit_code": exit_code,
+            "duration_ms": 4200, "run_dir": str(rd),
+        }))
+        return rd
+
+    def test_lists_newest_first_with_status(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        self._run_run(home, "bus", "2026-06-17_100000_00000", exit_code=0)
+        self._run_run(home, "bus", "2026-06-17_120000_00000", exit_code=1)
+
+        result = runner.invoke(app, ["runs", "bus"])
+        assert result.exit_code == 0, result.output
+        out = result.output
+        # newest (120000) appears before oldest (100000)
+        assert out.index("2026-06-17_120000") < out.index("2026-06-17_100000")
+        # status reflects exit codes
+        assert "1" in out and "0" in out
+
+    def test_no_runs_errors(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        result = runner.invoke(app, ["runs", "ghost"])
+        assert result.exit_code == 1
+        assert "No runs" in result.output or "No runs" in result.stderr
+
+
 class TestConnectCommand:
     """Test connect command.
 

@@ -45,7 +45,8 @@ class TestExecLocalHappyPaths:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload["skill_name"] == "hello-py"
-        assert payload["mode"] == "local"
+        assert payload["mode"] == "exec"      # run-record discriminator
+        assert payload["backend"] == "local"  # phase execution backend
         assert payload["result"]["lang"] == "python"
         assert payload["result"]["name"] == "hello-py"
         assert payload["exit_code"] == 0
@@ -111,7 +112,8 @@ class TestExecDockerDefault:
         argv = mock_run.call_args.args[0]
         assert argv[0] == "docker"
         payload = json.loads(result.output)
-        assert payload["mode"] == "docker"
+        assert payload["mode"] == "exec"      # run-record discriminator
+        assert payload["backend"] == "docker"  # phase execution backend
         assert payload["result"] == {"ok": True}
 
     @patch("zipsa.exec_runner.subprocess.run")

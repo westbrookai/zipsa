@@ -250,6 +250,76 @@ def _find_run_dir(runs_dir: Path, run_id: Optional[str] = None) -> Path:
     return matches[0]
 
 
+def _render_run_record(run_dir: Path, output_mode: OutputMode) -> None:
+    """Render an exec/run-format run record (result.json + stdout/stderr.log).
+
+    `mode=="exec"` shows the per-phase table + result; `mode=="run"` shows
+    final_message (or the captured transcript when absent). `--output-mode`:
+    json dumps result.json verbatim; answer prints result/final_message;
+    pretty is the formatted view.
+    """
+    try:
+        record = json.loads((run_dir / "result.json").read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        typer.echo(f"Error: cannot read run record: {e}", err=True)
+        raise typer.Exit(1)
+
+    mode = record.get("mode", "exec")
+
+    if output_mode == OutputMode.json:
+        typer.echo(json.dumps(record, ensure_ascii=False, indent=2))
+        return
+
+    if output_mode == OutputMode.answer:
+        if mode == "run":
+            typer.echo(record.get("final_message") or "")
+        else:
+            typer.echo(json.dumps(record.get("result"), ensure_ascii=False))
+        return
+
+    # pretty
+    exit_code = record.get("exit_code", 0)
+    status = "Success" if exit_code == 0 else f"Failed (exit {exit_code})"
+    duration_ms = record.get("duration_ms", 0)
+    typer.echo(f"Run: {run_dir.name}")
+    typer.echo(f"Status: {status}  |  Duration: {duration_ms / 1000:.1f}s")
+
+    if mode == "exec":
+        phases = record.get("phases") or []
+        if phases:
+            typer.echo("\nPhases:")
+            for p in phases:
+                pid = p.get("id", "?")
+                slug = p.get("slug", "")
+                pe = p.get("exit_code", 0)
+                pd = p.get("duration_ms", 0)
+                mark = "ok" if pe == 0 else f"FAIL({pe})"
+                typer.echo(f"  {pid}.{slug:<20} {mark:<10} {pd / 1000:.1f}s")
+        result_obj = record.get("result")
+        if result_obj is not None:
+            typer.echo("\nResult:")
+            typer.echo(json.dumps(result_obj, ensure_ascii=False, indent=2))
+    else:  # run
+        final = record.get("final_message")
+        if final:
+            typer.echo("\nFinal message:")
+            typer.echo(final)
+        else:
+            transcript = run_dir / "stdout.log"
+            if transcript.exists():
+                typer.echo("\nTranscript:")
+                typer.echo(transcript.read_text())
+
+    # Surface stderr on failure, regardless of mode.
+    if exit_code != 0:
+        stderr_log = run_dir / "stderr.log"
+        if stderr_log.exists():
+            err_text = stderr_log.read_text()
+            if err_text.strip():
+                typer.echo("\nStderr:")
+                typer.echo(err_text)
+
+
 @app.command()
 def run(
     name: Annotated[
@@ -809,7 +879,10 @@ def exec_skill(
     last = results[-1]
     summary = {
         "skill_name": last.skill_name,
-        "mode": last.mode,
+        # "mode" is the run-record discriminator (exec vs run) read by `view`
+        # to pick a renderer. The phase backend (docker/local) is "backend".
+        "mode": "exec",
+        "backend": last.mode,
         "result": last.result,
         "exit_code": last.exit_code,
         "duration_ms": sum(r.duration_ms for r in results),
@@ -871,6 +944,21 @@ def view(
     ] = OutputMode.pretty,
 ):
     """Replay the output of a past skill run."""
+    # exec/run layout first (~/.zipsa/<name>/runs/<ts>/result.json) — no
+    # manifest, no Skill.load. Falls through to the legacy output.jsonl path
+    # only when this layout is absent (D5).
+    new_runs_dir = zipsa_home() / name / "runs"
+    if new_runs_dir.is_dir() and any(
+        d.is_dir() and _RUN_DIR_RE.match(d.name) for d in new_runs_dir.iterdir()
+    ):
+        try:
+            run_dir = _find_run_dir(new_runs_dir, run_id)
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
+        _render_run_record(run_dir, output_mode)
+        return
+
     try:
         skill = Skill.load(resolve_skill(name))
         runs_dir = skill_runs_dir(skill.name, skill.manifest.metadata.version)
@@ -904,6 +992,54 @@ def view(
                         typer.echo(f"Warning: skipped malformed line in {output_jsonl}", err=True)
 
     render(events(), output_mode)
+
+
+@app.command()
+def runs(
+    name: Annotated[
+        str,
+        typer.Argument(help="Skill name (exec/run-format)"),
+    ],
+):
+    """List a skill's recent runs (newest first) with status and duration.
+
+    Reads the exec/run layout (~/.zipsa/<name>/runs/<ts>/result.json), so
+    `zipsa view <name> <run-id-prefix>` can replay any of them without
+    guessing the timestamp.
+    """
+    runs_dir = zipsa_home() / name / "runs"
+    if not runs_dir.is_dir():
+        typer.echo(f"No runs found for '{name}'", err=True)
+        raise typer.Exit(1)
+
+    dirs = sorted(
+        (d for d in runs_dir.iterdir() if d.is_dir() and _RUN_DIR_RE.match(d.name)),
+        reverse=True,  # newest first (lexicographic ts is chronological)
+    )
+    if not dirs:
+        typer.echo(f"No runs found for '{name}'", err=True)
+        raise typer.Exit(1)
+
+    for d in dirs:
+        exit_code: Optional[int] = None
+        duration_ms = 0
+        mode = "?"
+        try:
+            rec = json.loads((d / "result.json").read_text())
+            exit_code = rec.get("exit_code")
+            duration_ms = rec.get("duration_ms", 0) or 0
+            mode = rec.get("mode", "?")
+        except (OSError, json.JSONDecodeError):
+            pass
+        if exit_code is None:
+            status = "unknown"
+        elif exit_code == 0:
+            status = "ok"
+        else:
+            status = f"FAIL({exit_code})"
+        typer.echo(
+            f"{d.name}  {mode:<5} {status:<10} {duration_ms / 1000:.1f}s"
+        )
 
 
 @app.command()
