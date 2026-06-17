@@ -777,13 +777,6 @@ class TestBindFreeSocket:
             s.close()
 
 
-class TestConcurrentServerStartNoBind(TestHitlServerLifecycle):
-    """Regression: starting many servers in quick succession must not have
-    port conflicts (the TOCTOU scenario that made tests flaky)."""
-
-    pass  # inherits nothing useful; the real test is below
-
-
 class TestConcurrentStartNoConflict:
     """Regression test for the TOCTOU fix: 10 servers started concurrently
     must all get distinct ports and all become reachable."""
@@ -797,7 +790,7 @@ class TestConcurrentStartNoConflict:
         )
 
     def test_concurrent_hitl_servers_all_distinct_ports(self):
-        """Start 10 HitlServers from threads simultaneously; every server
+        """Start 10 RunServers from threads simultaneously; every server
         must bind a unique port and be reachable."""
         from zipsa.core.run_server import RunServer
         from unittest.mock import MagicMock
