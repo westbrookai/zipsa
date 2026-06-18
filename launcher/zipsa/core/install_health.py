@@ -54,6 +54,19 @@ def check_install(path: Path) -> InstallHealth:
     if not path.exists():
         return InstallHealth(ok=False, reason="Install entry does not exist")
 
+    # Exec-format skills (SKILL.md + scripts/ + zipsa/package.yaml, no
+    # manifest.yaml) are a valid new layout. Check for that first so we
+    # never falsely report them as "manifest.yaml not found".
+    from .exec_skill import is_exec_format, load_exec_skill, ExecSkillError
+    if is_exec_format(path):
+        try:
+            load_exec_skill(path)
+        except ExecSkillError as e:
+            head = str(e).splitlines()[0] if str(e) else type(e).__name__
+            head = head[:160]
+            return InstallHealth(ok=False, reason=head)
+        return InstallHealth(ok=True)
+
     # Skill-builder writes the new layout under zipsa-dist/; legacy
     # skills still have a root-level manifest.yaml. Either is fine.
     dist_manifest = path / "zipsa-dist" / "manifest.yaml"
