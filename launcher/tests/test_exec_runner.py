@@ -1465,3 +1465,83 @@ class TestTimeoutPrecedence:
         # TimeoutExpired. So TimeoutExpired bubbles up to us.
         with pytest.raises(subprocess.TimeoutExpired):
             run_phase(phase, skill_name="x")
+
+
+class TestDryRun:
+    """`dry_run=True` must build and print the command(s) without ever
+    invoking subprocess.run — the defining contract is that NOTHING is
+    spawned."""
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_run_phase_docker_dry_run_prints_argv_and_spawns_nothing(
+        self, mock_run, tmp_path, capsys
+    ):
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            "import sys; sys.stdin.read(); print('{}')\n",
+        )
+        result = run_phase(
+            phase,
+            skill_name="hello",
+            skill_root=tmp_path,
+            docker_image="zipsa:test",
+            dry_run=True,
+        )
+        mock_run.assert_not_called()
+        assert result.exit_code == 0
+        out = capsys.readouterr().out
+        assert "docker run" in out
+        assert "1.do.py" in out
+        assert "zipsa:test" in out
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_run_phase_local_dry_run_prints_host_runner(
+        self, mock_run, tmp_path, capsys
+    ):
+        phase = _write(
+            tmp_path,
+            "1.do.py",
+            "import sys; sys.stdin.read(); print('{}')\n",
+        )
+        result = run_phase(
+            phase,
+            skill_name="hello",
+            docker_image=None,
+            dry_run=True,
+        )
+        mock_run.assert_not_called()
+        assert result.exit_code == 0
+        out = capsys.readouterr().out
+        assert "docker run" not in out
+        # local mode prints the host runner invocation (uv run --script ...)
+        assert "uv" in out
+        assert "1.do.py" in out
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_run_phases_dry_run_prints_every_phase_in_order(
+        self, mock_run, tmp_path, capsys
+    ):
+        skill, phases = _skill(
+            tmp_path,
+            {
+                "1.first.py": "import sys; sys.stdin.read(); print('{}')\n",
+                "2.second.py": "import sys; sys.stdin.read(); print('{}')\n",
+            },
+        )
+        results = run_phases(
+            phases,
+            skill_name="hello",
+            skill_root=skill,
+            docker_image="zipsa:test",
+            out_dir=tmp_path / "out",
+            dry_run=True,
+        )
+        mock_run.assert_not_called()
+        assert all(r.exit_code == 0 for r in results)
+        assert len(results) == len(phases)
+        out = capsys.readouterr().out
+        # both phase scripts appear, in order
+        assert "1.first.py" in out
+        assert "2.second.py" in out
+        assert out.index("1.first.py") < out.index("2.second.py")

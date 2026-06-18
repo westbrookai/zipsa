@@ -178,6 +178,62 @@ class TestRunSkillLlm:
         assert not handler_kwargs.get("default_mounts")
 
 
+class TestRunSkillLlmDryRun:
+    """`run_skill_llm(dry_run=True)` prints the orchestrator container
+    command + mcp-config path and returns 0 WITHOUT spawning the
+    container — and WITHOUT binding a RunServer port (#173). The defining
+    assertions: subprocess.Popen is never called and server.start is never
+    called (no port left bound)."""
+
+    @patch("zipsa.run_llm.subprocess.Popen")
+    @patch("zipsa.run_llm.RunServer")
+    def test_dry_run_prints_argv_and_spawns_nothing(
+        self, mock_server_cls, mock_popen, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        root = tmp_path / "weather"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")
+        srv = MagicMock(); srv.port = 51115; srv.token = "tok"
+        mock_server_cls.return_value = srv
+
+        from zipsa.run_llm import run_skill_llm
+        rc = run_skill_llm(root, "Sydney", image="img", dry_run=True)
+
+        assert rc == 0
+        mock_popen.assert_not_called()
+        # No RunServer port bound under dry run.
+        srv.start.assert_not_called()
+        out = capsys.readouterr().out
+        assert "docker run" in out
+        assert "claude" in out
+        # the mcp-config path is shown so the user can inspect it
+        assert "--mcp-config" in out or ".mcp.json" in out
+
+    @patch("zipsa.run_llm.subprocess.Popen")
+    @patch("zipsa.run_llm.RunServer")
+    def test_dry_run_writes_no_run_record(
+        self, mock_server_cls, mock_popen, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        root = tmp_path / "weather"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")
+        srv = MagicMock(); srv.port = 51116; srv.token = "tok"
+        mock_server_cls.return_value = srv
+
+        from zipsa.run_llm import run_skill_llm
+        rc = run_skill_llm(root, "", image="img", dry_run=True)
+
+        assert rc == 0
+        mock_popen.assert_not_called()
+        srv.start.assert_not_called()
+        # No result.json transcript written for a dry run.
+        runs = home / "weather" / "runs"
+        if runs.exists():
+            for rd in runs.iterdir():
+                assert not (rd / "result.json").exists()
+
+
 class TestRunSkillLlmLogging:
     """`zipsa run` (LLM path) persists a run record under ZIPSA_HOME so
     unwatched/scheduled runs leave a trace — matching exec's layout."""

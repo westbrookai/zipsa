@@ -444,3 +444,59 @@ class TestExecRunLogging:
         saved = json.loads((rd / "result.json").read_text())
         assert saved["exit_code"] == 1
         assert "kaboom" in (rd / "stderr.log").read_text()
+
+
+class TestExecDryRun:
+    """`zipsa exec --dry-run` prints the per-phase command(s) and exits 0
+    without spawning anything (parity with the legacy DockerExecutor's
+    --dry-run; #173). The defining assertion is that subprocess.run is
+    never called."""
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_docker_dry_run_prints_commands_runs_nothing(self, mock_run, tmp_path):
+        skill = _make_skill(
+            tmp_path,
+            "hello",
+            {
+                "1.first.py": PY_PHASE,
+                "2.second.py": PY_PHASE,
+            },
+        )
+
+        result = runner.invoke(app, ["exec", str(skill), "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        out = result.output
+        assert "docker run" in out
+        # every phase script, in order
+        assert "1.first.py" in out
+        assert "2.second.py" in out
+        assert out.index("1.first.py") < out.index("2.second.py")
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_local_dry_run_prints_host_runner(self, mock_run, tmp_path):
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, ["exec", str(skill), "--local", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        out = result.output
+        assert "docker run" not in out
+        assert "uv" in out  # host runner for .py phases
+        assert "1.report.py" in out
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_dry_run_writes_no_run_record(self, mock_run, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        skill = _make_skill(tmp_path, "quiet", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, ["exec", str(skill), "--local", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        # No run record persisted under ZIPSA_HOME for a dry run.
+        runs = home / "quiet" / "runs"
+        assert not runs.exists() or not any(runs.iterdir())

@@ -162,12 +162,27 @@ def _write_run_record(
         pass
 
 
+def _print_run_dry_run(argv: list[str], mcp_config_host: Path) -> None:
+    """Print the orchestrator (claude) container command + mcp-config path,
+    mirroring the legacy `_print_dry_run` shape: the full command on one
+    line, then one arg per line so it stays scannable. The mcp-config path
+    is echoed so the user can inspect the generated config."""
+    print("=== DRY RUN (run, exec-format) ===")
+    print(f"MCP config: {mcp_config_host}")
+    print()
+    print("Orchestrator command:")
+    print(" ".join(str(a) for a in argv))
+    for i, arg in enumerate(argv):
+        print(f"  [{i:2d}] {arg}")
+
+
 def run_skill_llm(
     skill_root: Path, user_input: str, *,
     image: str, env_file: Path | None = None,
     extra_mounts: "list[tuple[Path, str]] | None" = None,
     stdout: "IO[str] | None" = None,
     stderr: "IO[str] | None" = None,
+    dry_run: bool = False,
 ) -> int:
     """Execute a skill as an LLM following SKILL.md, calling scripts via
     the host RunServer's exec tool. Returns the container claude's exit code.
@@ -178,6 +193,12 @@ def run_skill_llm(
     so an unwatched/scheduled run still leaves a trace. The record write
     is best-effort — an OSError there does not change the returned exit
     code (the container claude's).
+
+    With `dry_run=True` the orchestrator container command + mcp-config
+    path are printed and the function returns 0 WITHOUT starting the
+    RunServer (no bound port), spawning the container, or writing a run
+    record. The mcp-config is built with a placeholder port/token since no
+    server is running — it only documents the config shape.
     """
     if stdout is None:
         stdout = sys.stdout
@@ -186,6 +207,25 @@ def run_skill_llm(
     if env_file is None:
         env_file = zipsa_paths.global_env_file()
     skill_root = skill_root.resolve()
+
+    if dry_run:
+        # Spawn nothing and bind no port: don't start the RunServer. The
+        # mcp-config still needs a port/token to render — use placeholders
+        # (the real values are only known once the server binds). The config
+        # is written so the printed path points at an inspectable file.
+        cfg_dir = zipsa_paths.zipsa_home() / "run"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        fd, cfg_path = tempfile.mkstemp(prefix="dry-run-", suffix=".mcp.json", dir=cfg_dir)
+        os.close(fd)
+        mcp_config_host = Path(cfg_path)
+        mcp_config_host.write_text(json.dumps(build_mcp_config(0, "<token>")))
+        argv = build_run_argv(
+            image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
+            prompt=build_run_prompt(skill_root, user_input),
+            env_file=env_file if env_file.exists() else None,
+        )
+        _print_run_dry_run(argv, mcp_config_host)
+        return 0
 
     run_dir = exec_runner.new_run_dir(skill_root.name)
     try:
