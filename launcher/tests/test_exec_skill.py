@@ -362,6 +362,58 @@ class TestRequires:
         assert skill.requires == {}
 
 
+class TestMcp:
+    """`mcp` declares servers needing OAuth pre-auth (for `zipsa connect`)."""
+
+    def test_mcp_oauth_server_parses(self, tmp_path):
+        root = _make_skill(
+            tmp_path / "noter",
+            frontmatter="name: noter\ndescription: x\n",
+            package_yaml=(
+                "version: 0.1.0\n"
+                "mcp:\n"
+                "  - name: notion\n"
+                "    type: http\n"
+                "    url: https://mcp.notion.com/mcp\n"
+                "    auth:\n"
+                "      type: oauth2\n"
+            ),
+        )
+        skill = load_exec_skill(root)
+        assert len(skill.mcp) == 1
+        server = skill.mcp[0]
+        assert server.name == "notion"
+        assert server.type == "http"
+        assert server.url == "https://mcp.notion.com/mcp"
+        assert server.auth is not None
+        assert server.auth.type == "oauth2"
+
+    def test_mcp_type_defaults_http(self, tmp_path):
+        root = _make_skill(
+            tmp_path / "noter",
+            frontmatter="name: noter\ndescription: x\n",
+            package_yaml=(
+                "version: 0.1.0\n"
+                "mcp:\n"
+                "  - name: notion\n"
+                "    url: https://mcp.notion.com/mcp\n"
+                "    auth:\n"
+                "      type: oauth2\n"
+            ),
+        )
+        skill = load_exec_skill(root)
+        assert skill.mcp[0].type == "http"
+
+    def test_no_mcp_defaults_empty(self, tmp_path):
+        root = _make_skill(
+            tmp_path / "weather",
+            frontmatter="name: weather\ndescription: x\n",
+            package_yaml="version: 0.1.0\n",
+        )
+        skill = load_exec_skill(root)
+        assert skill.mcp == []
+
+
 class TestLitmus:
     """Structural litmus: `rm -rf zipsa/` leaves a valid Agent Skill."""
 
