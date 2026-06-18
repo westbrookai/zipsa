@@ -402,6 +402,26 @@ class TestBuildDockerArgv:
 
         assert argv[-3:] == ["npx", "tsx", "/skill/zipsa-dist/2.fetch.ts"]
 
+    def test_scripts_layout_container_path(self, tmp_path):
+        # New layout: phases live in scripts/ (not zipsa-dist/). The
+        # in-container path must mirror the phase's actual dir rather than
+        # hardcoding zipsa-dist/ — regression for the migration transition
+        # window (a scripts/ skill was failing with "/skill/zipsa-dist/...
+        # No such file").
+        skill = tmp_path / "s"
+        scripts = skill / "scripts"
+        scripts.mkdir(parents=True)
+        phase = scripts / "1.fetch.py"
+        phase.touch()
+
+        argv = _build_docker_argv(
+            phase, skill_root=skill, out_dir=tmp_path / "o", image="img",
+        )
+
+        assert argv[-4:] == [
+            "uv", "run", "--script", "/skill/scripts/1.fetch.py",
+        ]
+
 
 class TestDockerMode:
     """run_phase with docker_image set — subprocess mocked."""

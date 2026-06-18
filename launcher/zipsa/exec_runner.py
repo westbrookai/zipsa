@@ -289,9 +289,13 @@ def _build_docker_argv(
     the container ("yesterday") means the user's yesterday, not UTC's.
     """
     if command is None:
+        # Use the phase's actual parent dir (scripts/ in the new layout,
+        # zipsa-dist/ in the legacy one) rather than hardcoding — the skill
+        # is mounted whole at _CONTAINER_SKILL_DIR, so the in-container path
+        # must mirror the host's <skill>/<dir>/<file> structure.
         command = [
             *_runner_for(phase_path),
-            f"{_CONTAINER_SKILL_DIR}/zipsa-dist/{phase_path.name}",
+            f"{_CONTAINER_SKILL_DIR}/{phase_path.parent.name}/{phase_path.name}",
         ]
     argv = [
         "docker", "run",
