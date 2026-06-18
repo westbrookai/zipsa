@@ -55,41 +55,68 @@ class TestAsk:
 
 
 class TestConfirm:
+    # D2-A: confirm returns str ("yes"/"no"/raw freeform), never bool, never raises.
     @pytest.mark.parametrize("text,expected", [
-        ("y\n", True),
-        ("yes\n", True),
-        ("Y\n", True),
-        ("n\n", False),
-        ("no\n", False),
-        ("N\n", False),
+        ("y\n", "yes"),
+        ("yes\n", "yes"),
+        ("yeah\n", "yes"),
+        ("yep\n", "yes"),
+        ("ok\n", "yes"),
+        ("sure\n", "yes"),
+        ("true\n", "yes"),
+        ("Y\n", "yes"),
+        ("YES\n", "yes"),
+        ("n\n", "no"),
+        ("no\n", "no"),
+        ("nope\n", "no"),
+        ("nah\n", "no"),
+        ("false\n", "no"),
+        ("N\n", "no"),
+        ("NO\n", "no"),
     ])
-    def test_y_n_yes_no_case_insensitive(self, text, expected):
+    def test_synonyms_map_to_yes_no(self, text, expected):
         io_ = make_io(text)
         handler = ConfirmHandler(io_)
-        assert handler.run(message="Proceed?") is expected
+        assert handler.run(message="Proceed?") == expected
 
     def test_default_true_on_blank(self):
         io_ = make_io("\n")
         handler = ConfirmHandler(io_)
-        assert handler.run(message="OK?", default=True) is True
+        assert handler.run(message="OK?", default=True) == "yes"
 
     def test_default_false_on_blank(self):
         io_ = make_io("\n")
         handler = ConfirmHandler(io_)
-        assert handler.run(message="OK?", default=False) is False
+        assert handler.run(message="OK?", default=False) == "no"
 
     def test_no_default_on_blank_reprompts(self):
         # Blank then "y" — should re-prompt once and accept "y"
         io_ = make_io("\ny\n")
         handler = ConfirmHandler(io_)
-        assert handler.run(message="OK?") is True
+        assert handler.run(message="OK?") == "yes"
 
-    def test_bad_input_reprompts_then_gives_up(self):
-        # 3 bad attempts → ValueError
-        io_ = make_io("maybe\nperhaps\nidk\n")
+    def test_no_default_two_blanks_returns_empty_never_raises(self):
+        # Empty, then still empty: re-prompt once, then return "" (never raise).
+        io_ = make_io("\n\n")
         handler = ConfirmHandler(io_)
-        with pytest.raises(ValueError):
-            handler.run(message="OK?")
+        assert handler.run(message="OK?") == ""
+
+    def test_freeform_returned_verbatim(self):
+        # The smoking gun: a freeform correction must reach the agent verbatim.
+        io_ = make_io("actually json not markdown\n")
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="Markdown OK?") == "actually json not markdown"
+
+    def test_non_english_freeform_returned_verbatim(self):
+        io_ = make_io("그래\n")
+        handler = ConfirmHandler(io_)
+        assert handler.run(message="진행할까요?") == "그래"
+
+    def test_never_raises_on_unrecognized(self):
+        io_ = make_io("maybe\n")
+        handler = ConfirmHandler(io_)
+        # Must NOT raise ValueError; returns the raw text.
+        assert handler.run(message="OK?") == "maybe"
 
     def test_unattended_raises(self):
         io_ = HitlIO(
@@ -120,10 +147,11 @@ class TestChoose:
         handler = ChooseHandler(io_)
         assert handler.run(prompt="Pick", options=self.OPTIONS) == "beta"
 
-    def test_out_of_range_reprompts(self):
-        io_ = make_io("99\n1\n")
+    def test_out_of_range_returns_verbatim(self):
+        # An out-of-range number is not a valid option → return it verbatim.
+        io_ = make_io("99\n")
         handler = ChooseHandler(io_)
-        assert handler.run(prompt="Pick", options=self.OPTIONS) == "alpha"
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "99"
 
     def test_options_listed_in_prompt(self):
         io_ = make_io("1\n")
@@ -134,11 +162,24 @@ class TestChoose:
         assert "2) beta" in out
         assert "3) gamma" in out
 
-    def test_max_retries(self):
-        io_ = make_io("foo\nbar\nbaz\n")
+    def test_freeform_returned_verbatim(self):
+        # D2-A: non-option freeform must be returned, not looped or raised.
+        io_ = make_io("report but output is JSON, not markdown\n")
         handler = ChooseHandler(io_)
-        with pytest.raises(ValueError):
-            handler.run(prompt="Pick", options=self.OPTIONS)
+        result = handler.run(prompt="Pick", options=self.OPTIONS)
+        assert result == "report but output is JSON, not markdown"
+
+    def test_empty_then_option_reprompts(self):
+        # Empty line re-prompts once, then accepts the real answer.
+        io_ = make_io("\n1\n")
+        handler = ChooseHandler(io_)
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "alpha"
+
+    def test_never_raises_on_freeform(self):
+        io_ = make_io("none of these\n")
+        handler = ChooseHandler(io_)
+        # Must NOT raise.
+        assert handler.run(prompt="Pick", options=self.OPTIONS) == "none of these"
 
     def test_empty_options_rejected(self):
         io_ = make_io("\n")
@@ -155,6 +196,105 @@ class TestChoose:
         )
         with pytest.raises(HitlUnattended):
             ChooseHandler(io_).run(prompt="Pick", options=["a", "b"])
+
+
+class TestReadAnswerAndDrain:
+    """HitlIO.read_answer (D1 gather) + drain — the centralized input path."""
+
+    def test_read_answer_stringio_returns_single_line(self):
+        # StringIO has no real fileno() → fallback to single readline().
+        io_ = make_io("line1\nline2\nline3\n")
+        assert io_.read_answer() == "line1"
+
+    def test_read_answer_pipe_gathers_multiline_burst(self):
+        import os
+        r, w = os.pipe()
+        os.write(w, b"l1\nl2\nl3\n")
+        os.close(w)
+        rf = os.fdopen(r, "r")
+        io_ = HitlIO(
+            stdin=rf,
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        try:
+            assert io_.read_answer() == "l1\nl2\nl3"
+        finally:
+            rf.close()
+
+    def test_drain_is_noop_on_stringio(self):
+        io_ = make_io("leftover1\nleftover2\n")
+        # Not selectable → no-op, must not raise and must not consume.
+        io_.drain()
+        assert io_.stdin.readline().strip() == "leftover1"
+
+    def test_drain_discards_pending_pipe_lines(self):
+        import os
+        r, w = os.pipe()
+        os.write(w, b"stale1\nstale2\n")
+        rf = os.fdopen(r, "r")
+        io_ = HitlIO(
+            stdin=rf,
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        try:
+            io_.drain()
+            # After drain, write a fresh line and confirm it is what we read.
+            os.write(w, b"fresh\n")
+            os.close(w)
+            assert io_.read_answer() == "fresh"
+        finally:
+            rf.close()
+
+    def test_blocking_flag_restored_after_gather(self):
+        # The gather temporarily flips stdin to non-blocking; the finally
+        # in _gather_pending must restore it. A leaked non-blocking stdin is
+        # the worst latent failure mode — guard it explicitly against future
+        # refactors that might drop the restore.
+        import os
+        r, w = os.pipe()
+        os.write(w, b"l1\nl2\n")
+        os.close(w)
+        rf = os.fdopen(r, "r")
+        io_ = HitlIO(
+            stdin=rf,
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        try:
+            assert os.get_blocking(r) is True  # default: blocking
+            io_.read_answer()
+            assert os.get_blocking(r) is True  # restored after read_answer
+            io_.drain()
+            assert os.get_blocking(r) is True  # restored after drain
+        finally:
+            rf.close()
+
+
+class TestAskMultiline:
+    """D1: ask returns a whole pasted block via the centralized read_answer."""
+
+    def test_pipe_paste_returned_as_one_answer(self):
+        import os
+        r, w = os.pipe()
+        os.write(w, b"first\nsecond\nthird\n")
+        os.close(w)
+        rf = os.fdopen(r, "r")
+        io_ = HitlIO(
+            stdin=rf,
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        try:
+            handler = AskHandler(io_)
+            assert handler.run(prompt="Paste?") == "first\nsecond\nthird"
+        finally:
+            rf.close()
 
 
 from zipsa.core.memory_store import MemoryStore
