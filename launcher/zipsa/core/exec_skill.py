@@ -7,7 +7,7 @@ The exec-world analog of `Skill.load`. An exec-format skill carries no
     (`name`, `description`, optional `allowed-tools`/`disallowed-tools`,
     `model`). Plain Claude Code honors these runtime-free.
   - zipsa/package.yaml — zipsa-only sidecar (`version` REQUIRED, optional
-    `author`, `tags`, `limits`, `requires`). Plain Claude ignores it.
+    `author`, `tags`, `limits`, `requires`, `mcp`). Plain Claude ignores it.
 
 Identity = frontmatter `name` + package.yaml `version`.
 
@@ -174,6 +174,38 @@ class Requirement(BaseModel):
         return self
 
 
+class ExecMcpAuth(BaseModel):
+    """Auth config for an exec skill's MCP server (OAuth pre-auth subset)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str  # "oauth2" | "none"
+
+    @field_validator("type")
+    @classmethod
+    def _known_auth(cls, v: str) -> str:
+        if v not in ("oauth2", "none"):
+            raise ValueError(f"auth.type must be 'oauth2' or 'none', got {v!r}")
+        return v
+
+
+class ExecMcpServer(BaseModel):
+    """One MCP server an exec skill declares for OAuth pre-authorization.
+
+    Minimal by design (YAGNI): only the fields `zipsa connect` needs to
+    match a server and authorize it — `name`, `type` (http), `url`, and
+    `auth`. Mirrors the legacy manifest's HTTP-server attribute names so
+    `connect` treats exec and legacy servers uniformly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: str = "http"
+    url: Optional[str] = None
+    auth: Optional[ExecMcpAuth] = None
+
+
 class ExecSkill(BaseModel):
     """Parsed metadata for an exec-format skill (frontmatter + package.yaml).
 
@@ -195,6 +227,7 @@ class ExecSkill(BaseModel):
     tags: Optional[list[str]] = None
     limits: Optional[ExecLimits] = None
     requires: dict[str, Requirement] = Field(default_factory=dict)
+    mcp: list[ExecMcpServer] = Field(default_factory=list)
 
 
 def is_exec_format(skill_dir: Path) -> bool:
@@ -276,6 +309,7 @@ def load_exec_skill(skill_dir: Path) -> ExecSkill:
         "tags": package.get("tags"),
         "limits": package.get("limits"),
         "requires": package.get("requires") or {},
+        "mcp": package.get("mcp") or [],
     }
 
     try:

@@ -1217,6 +1217,57 @@ class TestConnectCommand:
         assert result.exit_code != 0
         assert "github" in result.output
 
+    def _make_exec_skill_with_mcp(self, skills_dir, mcp_block, name="noter"):
+        d = skills_dir / name
+        (d / "scripts").mkdir(parents=True)
+        (d / "zipsa").mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: x. Use when testing.\n---\n\n# {name}\n"
+        )
+        (d / "zipsa" / "package.yaml").write_text("version: 0.1.0\n" + mcp_block)
+        (d / "scripts" / "1.fetch.py").write_text("print('{}')\n")
+        return d
+
+    @patch("zipsa.cli.OAuthManager")
+    @patch("zipsa.cli._skills_dir")
+    def test_connect_finds_exec_skill_oauth_server(self, mock_skills_dir, mock_oauth_cls, tmp_path):
+        """connect authorizes an OAuth2 server declared by an exec skill."""
+        mock_skills_dir.return_value = tmp_path
+        self._make_exec_skill_with_mcp(
+            tmp_path,
+            "mcp:\n"
+            "  - name: notion\n"
+            "    type: http\n"
+            "    url: https://mcp.notion.com/mcp\n"
+            "    auth:\n"
+            "      type: oauth2\n",
+        )
+        mock_manager = Mock()
+        mock_oauth_cls.return_value = mock_manager
+
+        result = runner.invoke(app, ["connect", "notion"])
+
+        assert result.exit_code == 0, result.output
+        mock_manager.ensure_credentials.assert_called_once_with(
+            "notion", "https://mcp.notion.com/mcp"
+        )
+
+    @patch("zipsa.cli._skills_dir")
+    def test_connect_exec_non_oauth_not_matched(self, mock_skills_dir, tmp_path):
+        """A non-oauth exec server is not matched."""
+        mock_skills_dir.return_value = tmp_path
+        self._make_exec_skill_with_mcp(
+            tmp_path,
+            "mcp:\n"
+            "  - name: notion\n"
+            "    type: http\n"
+            "    url: https://mcp.notion.com/mcp\n"
+            "    auth:\n"
+            "      type: none\n",
+        )
+        result = runner.invoke(app, ["connect", "notion"])
+        assert result.exit_code != 0
+
 
 class TestInstallCommand:
     """Test install command."""

@@ -31,6 +31,49 @@ def _install_demo_skill(tmp_path: Path, requires_block: str) -> Path:
     return src
 
 
+def _install_exec_skill(tmp_path: Path, package_yaml: str, name: str = "exec-demo") -> Path:
+    """Create an exec-format fixture skill linked into ZIPSA_HOME/skills."""
+    src = tmp_path / "src" / name
+    (src / "scripts").mkdir(parents=True)
+    (src / "zipsa").mkdir(parents=True)
+    (src / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Demo exec. Use when testing.\n---\n\n# {name}\n"
+    )
+    (src / "zipsa" / "package.yaml").write_text(package_yaml)
+    (src / "scripts" / "1.fetch.py").write_text("print('{}')\n")
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / name).symlink_to(src)
+    return src
+
+
+class TestConfigureExecSkill:
+    def test_exec_requires_prompts_and_saves(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        roots = tmp_path / "Code"
+        roots.mkdir()
+        _install_exec_skill(
+            tmp_path,
+            "version: 0.3.0\n"
+            "requires:\n"
+            "  project_roots:\n"
+            "    type: list[directory]\n"
+            "    prompt: 'where?'\n"
+            "    container_prefix: /projects/\n",
+        )
+        result = runner.invoke(app, ["configure", "exec-demo"], input=f"{roots}\n\n")
+        assert result.exit_code == 0, result.output
+        saved = yaml.safe_load((tmp_path / "exec-demo@0.3.0" / "requires.yaml").read_text())
+        assert saved == {"project_roots": [str(roots.resolve())]}
+
+    def test_exec_no_requires_no_op(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))
+        _install_exec_skill(tmp_path, "version: 0.3.0\n")
+        result = runner.invoke(app, ["configure", "exec-demo"])
+        assert result.exit_code == 0
+        assert "no required configuration" in result.output.lower()
+
+
 class TestConfigureCommand:
     def test_first_run_saves_values(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ZIPSA_HOME", str(tmp_path))

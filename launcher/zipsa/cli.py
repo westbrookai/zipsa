@@ -1425,24 +1425,40 @@ def discover(
 def configure(
     name: Annotated[str, typer.Argument(help="Installed skill name")],
 ):
-    """Set host-side values that the skill needs to run (spec.requires)."""
+    """Set host-side values that the skill needs to run (requires)."""
     try:
-        skill = Skill.load(_resolve_skill_path(name))
+        skill_dir = _resolve_skill_path(name)
     except SkillNotInstalledError:
         typer.echo(f"Error: skill '{name}' is not installed. Try: zipsa install <source>", err=True)
         raise typer.Exit(1)
-    except Exception as e:
-        typer.echo(f"Error loading {name!r}: {e}", err=True)
-        raise typer.Exit(1)
 
-    spec = skill.manifest.spec.requires
+    # Dispatch on layout. Exec skills declare `requires` in zipsa/package.yaml;
+    # legacy skills in manifest.yaml spec.requires. Both feed the same
+    # prompt + requires.yaml save path.
+    if _is_exec_format(skill_dir):
+        try:
+            exec_skill = load_exec_skill(skill_dir)
+        except ExecSkillError as e:
+            typer.echo(f"Error loading {name!r}: {e}", err=True)
+            raise typer.Exit(1)
+        spec = exec_skill.requires
+        version = exec_skill.version
+    else:
+        try:
+            skill = Skill.load(skill_dir)
+        except Exception as e:
+            typer.echo(f"Error loading {name!r}: {e}", err=True)
+            raise typer.Exit(1)
+        spec = skill.manifest.spec.requires
+        version = skill.manifest.metadata.version
+
     if not spec:
         typer.echo(f"{name} has no required configuration.")
         raise typer.Exit(0)
 
-    typer.echo(f"\n[zipsa] {name}@{skill.manifest.metadata.version}\n")
+    typer.echo(f"\n[zipsa] {name}@{version}\n")
 
-    req_file = skill_requires_file(name, skill.manifest.metadata.version)
+    req_file = skill_requires_file(name, version)
     saved = load_requires(req_file) if req_file.exists() else {}
 
     # Use sys.stdin/stdout lazily at call site so CliRunner can patch them.
@@ -1635,8 +1651,14 @@ def connect(
     if skills_root.exists():
         for skill_dir in sorted(skills_root.iterdir()):
             try:
-                skill = Skill.load(skill_dir)
-                for s in skill.manifest.spec.mcp:
+                # Exec skills declare `mcp` in zipsa/package.yaml; legacy skills
+                # in manifest.yaml spec.mcp. Both expose name/type/url/auth here,
+                # so the match + authorize logic is identical.
+                if _is_exec_format(skill_dir):
+                    servers = load_exec_skill(skill_dir).mcp
+                else:
+                    servers = Skill.load(skill_dir).manifest.spec.mcp
+                for s in servers:
                     if (
                         s.name == server_name
                         and s.type == "http"
