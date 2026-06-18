@@ -45,7 +45,12 @@ _CONTAINER_MCP_CONFIG = "/tmp/zipsa-run-mcp.json"
 
 def build_run_prompt(skill_root: Path, user_input: str) -> str:
     skill_md = (skill_root / "SKILL.md").read_text()
-    intent_path = skill_root / "INTENT.md"
+    # Transition window (#156): INTENT.md moves to zipsa/INTENT.md (forge
+    # provenance, outside the portable Agent Skill payload). Prefer the new
+    # path; fall back to the legacy skill-root location for un-migrated skills.
+    intent_path = skill_root / "zipsa" / "INTENT.md"
+    if not intent_path.exists():
+        intent_path = skill_root / "INTENT.md"
     intent = (
         f"## Intent (why)\n{intent_path.read_text()}\n\n"
         if intent_path.exists() else ""
