@@ -1420,28 +1420,39 @@ def discover(
             typer.echo(f"Error: '{skills_dir}' is not a directory", err=True)
             raise typer.Exit(1)
 
-        # Find all skill directories
+        # Find all skill directories. Two layouts coexist: legacy manifest
+        # skills (manifest.yaml → Skill.load) and exec-format skills
+        # (SKILL.md + scripts/, no manifest → load_exec_skill). Invalid
+        # skills of either kind are skipped, not fatal.
         skills = []
         for item in skills_path.iterdir():
             if not item.is_dir():
                 continue
 
-            # Check if manifest.yaml exists
-            manifest_path = item / "manifest.yaml"
-            if not manifest_path.exists():
-                continue
-
-            try:
-                skill = Skill.load(item)
-                skills.append({
-                    "name": skill.name,
-                    "version": skill.manifest.metadata.version,
-                    "purpose": skill.manifest.spec.purpose,
-                    "path": item,
-                })
-            except Exception:
-                # Skip invalid skills
-                continue
+            if (item / "manifest.yaml").exists():
+                try:
+                    skill = Skill.load(item)
+                    skills.append({
+                        "name": skill.name,
+                        "version": skill.manifest.metadata.version,
+                        "purpose": skill.manifest.spec.purpose,
+                        "format": "legacy",
+                        "path": item,
+                    })
+                except Exception:
+                    continue
+            elif _is_exec_format(item):
+                try:
+                    exec_skill = load_exec_skill(item)
+                    skills.append({
+                        "name": exec_skill.name,
+                        "version": exec_skill.version,
+                        "purpose": exec_skill.description or "(no description)",
+                        "format": "exec",
+                        "path": item,
+                    })
+                except ExecSkillError:
+                    continue
 
         if not skills:
             typer.echo("No skills found")
@@ -1449,8 +1460,8 @@ def discover(
 
         # Print skills table
         typer.echo(f"Found {len(skills)} skill(s):\n")
-        for skill in skills:
-            typer.echo(f"  {skill['name']} (v{skill['version']})")
+        for skill in sorted(skills, key=lambda s: s["name"]):
+            typer.echo(f"  {skill['name']} (v{skill['version']}) [{skill['format']}]")
             typer.echo(f"    {skill['purpose']}")
             typer.echo(f"    Path: {skill['path']}")
             typer.echo()
