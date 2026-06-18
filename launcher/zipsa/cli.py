@@ -795,7 +795,7 @@ def forge_skill(
 def exec_skill(
     path: Annotated[
         Path,
-        typer.Argument(help="Path to a skill directory (containing zipsa-dist/)"),
+        typer.Argument(help="Path to a skill directory (containing scripts/)"),
     ],
     user_query: Annotated[
         Optional[str],
@@ -824,7 +824,7 @@ def exec_skill(
 ):
     """Run a skill's phases deterministically (Phase 1).
 
-    Phase files in zipsa-dist/ run sequentially inside the zipsa
+    Phase files in scripts/ run sequentially inside the zipsa
     runtime container by default (skill mounted read-only, shared
     artifacts via /out, each phase's result chained into the next
     phase's `prev`). No LLM, no manifest. Result prints as JSON.
