@@ -13,7 +13,7 @@ from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
-from .core.exec_skill import ExecSkillError, load_exec_skill
+from .core.exec_skill import ExecSkillError, load_exec_skill, is_exec_format as _is_exec_format
 from .create import run_forge
 from .core.executor import DockerExecutor
 from .core.install_health import check_install
@@ -69,31 +69,6 @@ def _resolve_skill_path(name: str) -> Path:
             )
         return p
     return resolve_skill(name)
-
-
-def _is_exec_format(skill_dir: Path) -> bool:
-    """Return True for skills authored for the new LLM run-time.
-
-    An exec-format skill has:
-      - SKILL.md (required)
-      - EITHER scripts/ (new layout) or zipsa-dist/ (legacy exec layout)
-      - NO manifest.yaml at the skill root (the legacy root-manifest marker)
-      - NO zipsa-dist/manifest.yaml (the new-structure legacy marker used by
-        skill-builder; its presence means DockerExecutor owns the skill)
-
-    The last check distinguishes exec skills that happen to have a zipsa-dist/
-    folder from "new-structure" legacy skills whose manifest lives inside
-    zipsa-dist/ rather than at the root.
-    """
-    return (
-        (skill_dir / "SKILL.md").is_file()
-        and (
-            (skill_dir / "scripts").is_dir()
-            or (skill_dir / "zipsa-dist").is_dir()
-        )
-        and not (skill_dir / "manifest.yaml").exists()
-        and not (skill_dir / "zipsa-dist" / "manifest.yaml").exists()
-    )
 
 
 _MAX_CALL_DEPTH = 5

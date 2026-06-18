@@ -359,3 +359,32 @@ class TestSkillNameShortcut:
 
         assert result.exit_code == 0
         mock_run.assert_called_once()
+
+    def test_rewrite_argv_rewrites_installed_exec_skill(self, tmp_path, monkeypatch):
+        """_rewrite_argv_for_skill_shortcut rewrites argv for an installed exec skill.
+
+        Exercises the shortcut→run wiring directly — proves that when an exec
+        skill name appears at argv[1], the rewrite inserts 'run' before it and
+        produces a canonical notice.
+        """
+        from zipsa.cli import _rewrite_argv_for_skill_shortcut
+
+        src = _make_exec_skill_scripts(tmp_path / "exec-wired", name="exec-wired")
+        skills_home = tmp_path / ".zipsa"
+        monkeypatch.setenv("ZIPSA_HOME", str(skills_home))
+
+        install_result = runner.invoke(app, ["install", "--link", str(src)])
+        assert install_result.exit_code == 0, install_result.output
+
+        from zipsa.paths import installed_skill_dir
+        skill_installed = lambda name: installed_skill_dir(name).exists()
+
+        new_argv, notice = _rewrite_argv_for_skill_shortcut(
+            ["zipsa", "exec-wired", "some-arg"],
+            skill_installed=skill_installed,
+        )
+
+        assert new_argv == ["zipsa", "run", "exec-wired", "some-arg"]
+        assert notice is not None
+        assert "exec-wired" in notice
+        assert "zipsa run exec-wired" in notice
