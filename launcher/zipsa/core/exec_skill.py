@@ -197,6 +197,32 @@ class ExecSkill(BaseModel):
     requires: dict[str, Requirement] = Field(default_factory=dict)
 
 
+def is_exec_format(skill_dir: Path) -> bool:
+    """Return True when `skill_dir` looks like an exec-format skill.
+
+    An exec-format skill has:
+      - SKILL.md (required)
+      - EITHER scripts/ (new layout) OR zipsa-dist/ (legacy exec layout)
+      - NO manifest.yaml at the skill root (the legacy root-manifest marker)
+      - NO zipsa-dist/manifest.yaml (the new-structure legacy marker — its
+        presence means DockerExecutor owns the skill even with no root manifest)
+
+    The last check distinguishes exec skills that happen to have a zipsa-dist/
+    folder from "new-structure" legacy skills whose manifest lives inside
+    zipsa-dist/ rather than at the root.
+    """
+    skill_dir = Path(skill_dir)
+    return (
+        (skill_dir / "SKILL.md").is_file()
+        and (
+            (skill_dir / "scripts").is_dir()
+            or (skill_dir / "zipsa-dist").is_dir()
+        )
+        and not (skill_dir / "manifest.yaml").exists()
+        and not (skill_dir / "zipsa-dist" / "manifest.yaml").exists()
+    )
+
+
 def load_exec_skill(skill_dir: Path) -> ExecSkill:
     """Load an exec-format skill's metadata from `skill_dir`.
 

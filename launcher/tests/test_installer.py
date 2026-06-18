@@ -417,3 +417,85 @@ class TestInstallLocal:
         with patch.dict(os.environ, {"ZIPSA_HOME": str(dest_home)}):
             with pytest.raises(FileNotFoundError, match="manifest"):
                 install_local(str(src), link=False)
+
+
+def _make_exec_tarball(subpath: str, skill_name: str = "my-exec", version: str = "0.3.0") -> bytes:
+    """Build an in-memory tarball for an exec-format skill (no manifest.yaml)."""
+    buf = io.BytesIO()
+    root = "westbrookai-exec-abc1234"
+    prefix = f"{root}/{subpath}/" if subpath else f"{root}/"
+
+    skill_md = f"---\nname: {skill_name}\ndescription: A test exec skill\n---\n\n# Body\n".encode()
+    package_yaml = f"version: {version}\n".encode()
+    script = b"# step 1\n"
+
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, content in [
+            (f"{prefix}SKILL.md", skill_md),
+            (f"{prefix}zipsa/package.yaml", package_yaml),
+            (f"{prefix}scripts/1.run.py", script),
+        ]:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+class TestInstallFromGithubExecFormat:
+    """B1 — install_from_github handles exec-format GitHub repos (spec D1)."""
+
+    def _mock_response(self, data: bytes):
+        resp = MagicMock()
+        resp.read.return_value = data
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def _mock_commit(self, sha: str = "exec1234def5678"):
+        resp = MagicMock()
+        resp.read.return_value = json.dumps({"sha": sha}).encode()
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_install_exec_format_from_github_succeeds(self, tmp_path):
+        """install_from_github of an exec-format tarball installs using package.yaml version."""
+        tarball = _make_exec_tarball("skills/my-exec", skill_name="my-exec", version="0.3.0")
+        sha = "exec1234def5678abcdef"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit(sha),
+                    self._mock_response(tarball),
+                ]
+                name = install_from_github("westbrookai/exec-repo/skills/my-exec")
+
+        assert name == "my-exec"
+        skill_dir = tmp_path / "skills" / "my-exec"
+        assert skill_dir.exists()
+        assert (skill_dir / "SKILL.md").exists()
+        assert not (skill_dir / "manifest.yaml").exists()
+
+        install_json = skill_dir / "_install.json"
+        assert install_json.exists()
+        meta = json.loads(install_json.read_text())
+        assert meta["version"] == "0.3.0"
+        assert meta["commit_sha"] == sha
+        assert meta["type"] == "github"
+
+    def test_install_exec_format_no_manifest_does_not_raise(self, tmp_path):
+        """Exec-format tarballs without manifest.yaml must NOT raise FileNotFoundError."""
+        tarball = _make_exec_tarball("", skill_name="bare-exec", version="1.0.0")
+        sha = "exec9999"
+
+        with patch.dict(os.environ, {"ZIPSA_HOME": str(tmp_path)}):
+            with patch("urllib.request.urlopen") as mock_open:
+                mock_open.side_effect = [
+                    self._mock_commit(sha),
+                    self._mock_response(tarball),
+                ]
+                # Must not raise FileNotFoundError — exec format has no manifest.yaml.
+                name = install_from_github("westbrookai/exec-repo")
+
+        assert name == "bare-exec"

@@ -184,18 +184,27 @@ def install_from_github(source_str: str, force: bool = False) -> str:
         tmp_path = Path(tmp)
         _download_tarball(source, tmp_path)
 
-        try:
-            skill = Skill.load(tmp_path)
-        except FileNotFoundError:
-            subpath_hint = source.subpath or "(repo root)"
-            raise FileNotFoundError(
-                f"No manifest.yaml found at {source.user}/{source.repo}/{subpath_hint}"
-            )
-        except ValidationError as e:
-            raise ValueError(f"Install failed: invalid manifest — {e}")
+        from .core.exec_skill import ExecSkillError, is_exec_format, load_exec_skill
+        if is_exec_format(tmp_path):
+            try:
+                exec_skill = load_exec_skill(tmp_path)
+            except ExecSkillError as e:
+                raise ValueError(f"Install failed: {e}")
+            name = exec_skill.name
+            version = exec_skill.version
+        else:
+            try:
+                skill = Skill.load(tmp_path)
+            except FileNotFoundError:
+                subpath_hint = source.subpath or "(repo root)"
+                raise FileNotFoundError(
+                    f"No manifest.yaml found at {source.user}/{source.repo}/{subpath_hint}"
+                )
+            except ValidationError as e:
+                raise ValueError(f"Install failed: invalid manifest — {e}")
+            name = skill.name
+            version = skill.manifest.metadata.version
 
-        name = skill.name
-        version = skill.manifest.metadata.version
         dest = skills_dir() / name
 
         # If an existing entry is broken, replace it transparently (no
@@ -233,15 +242,24 @@ def install_local(local_path: str, link: bool = False, force: bool = False) -> s
     if not src.exists():
         raise FileNotFoundError(f"Path not found: {src}")
 
-    try:
-        skill = Skill.load(src)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"No manifest.yaml found at: {src}")
-    except ValidationError as e:
-        raise ValueError(f"Install failed: invalid manifest — {e}")
-
-    name = skill.name
-    version = skill.manifest.metadata.version
+    from .core.exec_skill import ExecSkillError, is_exec_format, load_exec_skill
+    if is_exec_format(src):
+        # Exec-format skill — get identity from SKILL.md + zipsa/package.yaml.
+        try:
+            exec_skill = load_exec_skill(src)
+        except ExecSkillError as e:
+            raise ValueError(f"Install failed: {e}")
+        name = exec_skill.name
+        version = exec_skill.version
+    else:
+        try:
+            skill = Skill.load(src)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"No manifest.yaml found at: {src}")
+        except ValidationError as e:
+            raise ValueError(f"Install failed: invalid manifest — {e}")
+        name = skill.name
+        version = skill.manifest.metadata.version
 
     # Built-in name collision check: if the user tries to install a
     # skill with the same name as a built-in (skill-builder, etc.),

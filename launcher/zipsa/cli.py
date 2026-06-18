@@ -13,6 +13,7 @@ from importlib.metadata import version as pkg_version
 from pydantic import ValidationError
 
 from .auth.oauth import OAuthManager
+from .core.exec_skill import ExecSkillError, load_exec_skill, is_exec_format as _is_exec_format
 from .create import run_forge
 from .core.executor import DockerExecutor
 from .core.install_health import check_install
@@ -68,21 +69,6 @@ def _resolve_skill_path(name: str) -> Path:
             )
         return p
     return resolve_skill(name)
-
-
-def _is_exec_format(skill_dir: Path) -> bool:
-    """Return True for skills authored for the new LLM run-time.
-
-    An exec-format skill has SKILL.md + zipsa-dist/ phase scripts but
-    deliberately omits manifest.yaml (the legacy marker). Presence of all
-    three signals an ambiguous hybrid — treat it as legacy so DockerExecutor
-    can handle it with the full manifest-aware pipeline.
-    """
-    return (
-        (skill_dir / "SKILL.md").is_file()
-        and (skill_dir / "zipsa-dist").is_dir()
-        and not (skill_dir / "manifest.yaml").exists()
-    )
 
 
 _MAX_CALL_DEPTH = 5
@@ -394,15 +380,8 @@ def run(
     # Reject cyclic invocations and depth-capped chains before any expensive work.
     _check_call_trace(name)
 
-    # Dispatch: exec-format skills (SKILL.md + zipsa-dist/, no manifest.yaml)
-    # route to the LLM run-time immediately, before Skill.load (which requires
-    # manifest.yaml). Referenced by filesystem path (exec-format skills aren't
-    # installed by the manifest-based installer yet).
-    skill_path = Path(name)
-    if skill_path.is_dir() and _is_exec_format(skill_path):
-        # These legacy-executor flags have no meaning on the LLM run-time path
-        # yet; fail loudly rather than silently ignoring them (esp. --dry-run,
-        # which a user runs expecting a preview, not a real run).
+    def _run_exec_format(skill_dir: Path) -> None:
+        """Shared helper: reject unsupported flags then delegate to run_skill_llm."""
         for flag, val in (("--dry-run", dry_run), ("--shell", shell), ("--env", env)):
             if val:
                 typer.echo(
@@ -411,10 +390,30 @@ def run(
                 )
                 raise typer.Exit(2)
         rc = run_skill_llm(
-            skill_path, user_input or "", image=image,
+            skill_dir, user_input or "", image=image,
             extra_mounts=[_parse_mount_spec(m) for m in (mount or [])],
         )
         raise typer.Exit(rc)
+
+    # Resolution order:
+    # 1. Explicit filesystem path — if argument looks like a dir, dispatch
+    #    exec or legacy accordingly (unchanged from before).
+    skill_path = Path(name)
+    if skill_path.is_dir() and _is_exec_format(skill_path):
+        _run_exec_format(skill_path)
+
+    # 2. Installed/builtin name — resolve to the installed dir; if exec-format,
+    #    dispatch to run_skill_llm. Else fall through to legacy Skill.load path.
+    #    (SkillNotInstalledError is caught in the outer try/except below.)
+    if not skill_path.is_dir():
+        try:
+            resolved_dir = resolve_skill(name)
+            if _is_exec_format(resolved_dir):
+                _run_exec_format(resolved_dir)
+            # else: resolved_dir is a legacy skill; fall through to Skill.load
+        except SkillNotInstalledError:
+            # Let the legacy try/except below surface a clean error.
+            pass
 
     # Resume eligibility state — resolved inside the try block below.
     resume_from: Optional[int] = None
@@ -1459,16 +1458,30 @@ def install(
             is_link = bool(link)
             suffix = " (linked)" if is_link else ""
 
-            # Peek at the manifest to get the skill name so we can check
-            # whether an existing entry at that name is broken.  If the
-            # source path doesn't exist yet (e.g. in unit tests that mock
-            # install_local) this will raise FileNotFoundError and we fall
+            # Peek at skill identity so we can check whether an existing entry
+            # at that name is broken (and replace it transparently).
+            # Dispatch: exec-format skills (SKILL.md + scripts/ or zipsa-dist/,
+            # no manifest.yaml) use load_exec_skill; legacy skills use Skill.load.
+            # If the source path doesn't exist yet (e.g. in unit tests that mock
+            # install_local) this peek raises FileNotFoundError and we fall
             # through to the normal install_local delegation below.
             try:
                 src_path = Path(local_source).resolve()
-                peeked_skill = Skill.load(src_path)
-                skill_name = peeked_skill.name
-                skill_version = peeked_skill.manifest.metadata.version
+                if _is_exec_format(src_path):
+                    # Exec-format branch: get identity via load_exec_skill.
+                    # ExecSkillError surfaces missing name/version cleanly.
+                    try:
+                        exec_skill = load_exec_skill(src_path)
+                    except ExecSkillError as e:
+                        typer.echo(f"Error: {e}", err=True)
+                        raise typer.Exit(1)
+                    skill_name = exec_skill.name
+                    skill_version = exec_skill.version
+                else:
+                    peeked_skill = Skill.load(src_path)
+                    skill_name = peeked_skill.name
+                    skill_version = peeked_skill.manifest.metadata.version
+
                 dest = zipsa_home() / "skills" / skill_name
 
                 if dest.exists() or dest.is_symlink():
