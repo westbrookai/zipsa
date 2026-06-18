@@ -133,9 +133,13 @@ class HitlIO:
     def drain(self) -> None:
         """Discard any immediately-available pending input (best-effort).
 
+        Belt-and-suspenders, NOT the primary leak guard: read_answer()
+        already gathers the whole burst into the answer, so drain only
+        catches lines that arrive in the tiny window after that gather.
         Used by confirm/choose after they capture their answer so a stray
         multi-line paste can't leak into the next prompt. No-op when stdin
-        has no real fd.
+        has no real fd. (Keep the gather in read_answer — do not rely on
+        drain alone.)
         """
         fd = self._fd()
         if fd is not None:

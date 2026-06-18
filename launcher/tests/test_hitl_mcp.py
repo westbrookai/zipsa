@@ -249,6 +249,31 @@ class TestReadAnswerAndDrain:
         finally:
             rf.close()
 
+    def test_blocking_flag_restored_after_gather(self):
+        # The gather temporarily flips stdin to non-blocking; the finally
+        # in _gather_pending must restore it. A leaked non-blocking stdin is
+        # the worst latent failure mode — guard it explicitly against future
+        # refactors that might drop the restore.
+        import os
+        r, w = os.pipe()
+        os.write(w, b"l1\nl2\n")
+        os.close(w)
+        rf = os.fdopen(r, "r")
+        io_ = HitlIO(
+            stdin=rf,
+            stdout=io.StringIO(),
+            stdout_lock=threading.Lock(),
+            is_interactive=True,
+        )
+        try:
+            assert os.get_blocking(r) is True  # default: blocking
+            io_.read_answer()
+            assert os.get_blocking(r) is True  # restored after read_answer
+            io_.drain()
+            assert os.get_blocking(r) is True  # restored after drain
+        finally:
+            rf.close()
+
 
 class TestAskMultiline:
     """D1: ask returns a whole pasted block via the centralized read_answer."""
