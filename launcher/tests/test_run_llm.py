@@ -40,6 +40,23 @@ class TestBuildRunPrompt:
         assert "umbrella" in p
         assert "Intent" in p
 
+    def test_prefers_zipsa_intent_over_legacy(self, tmp_path):
+        """New layout: zipsa/INTENT.md wins over a legacy skill-root one."""
+        root = _skill(tmp_path)
+        (root / "zipsa").mkdir()
+        (root / "zipsa" / "INTENT.md").write_text("New-layout intent.\n")
+        (root / "INTENT.md").write_text("Legacy intent.\n")
+        p = build_run_prompt(root, user_input="")
+        assert "New-layout intent." in p
+        assert "Legacy intent." not in p
+
+    def test_falls_back_to_legacy_intent(self, tmp_path):
+        """No zipsa/INTENT.md → still reads the legacy skill-root one."""
+        root = _skill(tmp_path)
+        (root / "INTENT.md").write_text("Legacy only.\n")
+        p = build_run_prompt(root, user_input="")
+        assert "Legacy only." in p
+
 
 class TestBuildRunArgv:
     def test_mounts_skill_ro_and_wires_mcp(self, tmp_path):

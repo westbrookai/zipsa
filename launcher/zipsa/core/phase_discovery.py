@@ -57,18 +57,36 @@ class PhaseDiscoveryError(Exception):
     """Raised when a skill cannot be loaded as a sequence of phases.
 
     Reasons:
-    - missing `zipsa-dist/` directory
-    - `zipsa-dist/` exists but contains no phase files
+    - missing both `scripts/` and `zipsa-dist/` directories
+    - the phase directory exists but contains no phase files
     - two files share the same phase id
     """
+
+
+def _phase_dir(skill_root: Path) -> Path | None:
+    """Return the directory holding phase scripts, or None if absent.
+
+    Transition window (#156): the new layout uses `scripts/` (the
+    standard Agent Skills bundled-scripts location); the legacy layout
+    used `zipsa-dist/`. Prefer `scripts/` when present so a migrated
+    skill runs, but keep `zipsa-dist/` working for un-migrated ones.
+    """
+    scripts = skill_root / "scripts"
+    if scripts.is_dir():
+        return scripts
+    legacy = skill_root / "zipsa-dist"
+    if legacy.is_dir():
+        return legacy
+    return None
 
 
 def discover_phases(skill_root: Path) -> list[Phase]:
     """Return the skill's phases in execution order.
 
-    `skill_root` is the directory that contains `SKILL.md` and
-    `zipsa-dist/`. Only files inside `zipsa-dist/` whose names match the
-    phase-filename pattern become phases; everything else is ignored.
+    `skill_root` is the directory that contains `SKILL.md` and a phase
+    directory — `scripts/` (new layout) or legacy `zipsa-dist/`. Only
+    files whose names match the phase-filename pattern become phases;
+    everything else is ignored.
 
     The returned list is sorted by phase id (numeric tuple, not
     lexicographic).
@@ -77,10 +95,10 @@ def discover_phases(skill_root: Path) -> list[Phase]:
     should start with `.py` so deterministic preflight runs before any
     LLM cost.
     """
-    dist = skill_root / "zipsa-dist"
-    if not dist.is_dir():
+    dist = _phase_dir(skill_root)
+    if dist is None:
         raise PhaseDiscoveryError(
-            f"{skill_root}: missing zipsa-dist/ directory"
+            f"{skill_root}: missing scripts/ (or legacy zipsa-dist/) directory"
         )
 
     phases: list[Phase] = []
@@ -112,7 +130,7 @@ def discover_phases(skill_root: Path) -> list[Phase]:
 
     if not phases:
         raise PhaseDiscoveryError(
-            f"{skill_root}: no phases found in zipsa-dist/"
+            f"{skill_root}: no phases found in {dist.name}/"
         )
 
     phases.sort(key=lambda p: p.id_tuple)

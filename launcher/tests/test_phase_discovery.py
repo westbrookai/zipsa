@@ -265,3 +265,42 @@ class TestPhaseDiscoveryFirstPhaseWarning:
             "first phase" in r.getMessage().lower() and "md" in r.getMessage().lower()
             for r in caplog.records
         )
+
+
+class TestTransitionWindow:
+    """Discovery accepts the new `scripts/` layout and legacy `zipsa-dist/`.
+
+    See `docs/superpowers/specs/2026-06-18-exec-skill-metadata.md`.
+    """
+
+    def _make_scripts_skill(self, root: Path, files: dict[str, str]) -> Path:
+        (root / "scripts").mkdir(parents=True)
+        for name, content in files.items():
+            (root / "scripts" / name).write_text(content)
+        (root / "SKILL.md").write_text("# test skill\n")
+        return root
+
+    def test_discovers_phases_in_scripts(self, tmp_path):
+        skill = self._make_scripts_skill(
+            tmp_path, {"1.fetch.py": "# fetch\n", "2.report.md": "# report\n"}
+        )
+        phases = discover_phases(skill)
+        assert [p.slug for p in phases] == ["fetch", "report"]
+        assert phases[0].path == skill / "scripts" / "1.fetch.py"
+
+    def test_still_discovers_phases_in_zipsa_dist(self, tmp_path):
+        # Legacy layout keeps working.
+        (tmp_path / "zipsa-dist").mkdir(parents=True)
+        (tmp_path / "zipsa-dist" / "1.fetch.py").write_text("# fetch\n")
+        (tmp_path / "SKILL.md").write_text("# test skill\n")
+        phases = discover_phases(tmp_path)
+        assert [p.slug for p in phases] == ["fetch"]
+        assert phases[0].path == tmp_path / "zipsa-dist" / "1.fetch.py"
+
+    def test_scripts_preferred_over_zipsa_dist(self, tmp_path):
+        # When both exist, scripts/ wins (it is the new canonical location).
+        self._make_scripts_skill(tmp_path, {"1.new.py": "# new\n"})
+        (tmp_path / "zipsa-dist").mkdir(parents=True)
+        (tmp_path / "zipsa-dist" / "1.old.py").write_text("# old\n")
+        phases = discover_phases(tmp_path)
+        assert [p.slug for p in phases] == ["new"]
