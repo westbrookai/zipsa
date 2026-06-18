@@ -1045,12 +1045,53 @@ def runs(
 def validate(
     name: Annotated[
         str,
-        typer.Argument(help="Installed skill name"),
+        typer.Argument(help="Installed skill name or path to a skill directory"),
     ],
 ):
-    """Validate a skill manifest."""
+    """Validate a skill.
+
+    Exec-format skills (SKILL.md + scripts/, no manifest.yaml) get a static
+    pre-flight: metadata schema, required frontmatter, phase structure, and
+    PEP 723 validity. Legacy manifest skills validate against the manifest
+    schema. The argument may be an installed name or a directory path.
+    """
+    # Dispatch on layout. A path argument that is an existing directory is
+    # used as-is (handy while authoring); otherwise resolve an installed name.
+    candidate = Path(name)
+    skill_dir: Optional[Path] = None
+    if candidate.is_dir():
+        skill_dir = candidate
+    else:
+        try:
+            skill_dir = resolve_skill(name)
+        except SkillNotInstalledError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+
+    if _is_exec_format(skill_dir):
+        from .core.exec_validate import validate_exec_skill
+
+        report = validate_exec_skill(skill_dir)
+        skill_name = report.skill.name if report.skill else skill_dir.name
+        if report.ok:
+            typer.echo(f"✓ Skill '{skill_name}' is valid")
+            if report.skill is not None:
+                typer.echo(f"  Version: {report.skill.version}")
+                if report.skill.description:
+                    typer.echo(f"  Description: {report.skill.description}")
+            typer.echo(f"  Phases: {len(report.phases)}")
+        else:
+            typer.echo(f"✗ Validation failed for '{skill_name}':", err=True)
+            for err in report.errors:
+                typer.echo(f"  {err}", err=True)
+        for warn in report.warnings:
+            typer.echo(f"  warning: {warn}", err=True)
+        if not report.ok:
+            raise typer.Exit(1)
+        return
+
     try:
-        skill = Skill.load(resolve_skill(name))
+        skill = Skill.load(skill_dir)
         typer.echo(f"✓ Skill '{skill.name}' is valid")
         typer.echo(f"  Version: {skill.manifest.metadata.version}")
         typer.echo(f"  Purpose: {skill.manifest.spec.purpose}")
