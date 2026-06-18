@@ -152,6 +152,40 @@ class TestMissingFields:
         assert "package.yaml" in str(exc.value)
 
 
+class TestMalformedYaml:
+    """Malformed YAML in either layer raises a clear ExecSkillError.
+
+    The guarantee is a clear error naming the layer, NOT a raw
+    `yaml.YAMLError` / traceback escaping to the caller.
+    """
+
+    def test_malformed_frontmatter_yaml_errors(self, tmp_path):
+        # Unbalanced bracket in a flow sequence is not valid YAML.
+        root = _make_skill(
+            tmp_path / "weather",
+            frontmatter="name: weather\ntags: [unclosed, list\n",
+            package_yaml="version: 0.1.0\n",
+        )
+        with pytest.raises(ExecSkillError) as exc:
+            load_exec_skill(root)
+        msg = str(exc.value)
+        assert "SKILL.md" in msg
+        assert "YAML" in msg
+
+    def test_malformed_package_yaml_errors(self, tmp_path):
+        # Unbalanced bracket in a flow mapping is not valid YAML.
+        root = _make_skill(
+            tmp_path / "weather",
+            frontmatter="name: weather\ndescription: x\n",
+            package_yaml="version: 0.1.0\ntags: [a, b\n",
+        )
+        with pytest.raises(ExecSkillError) as exc:
+            load_exec_skill(root)
+        msg = str(exc.value)
+        assert "package.yaml" in msg
+        assert "YAML" in msg
+
+
 class TestFrontmatterTools:
     """allowed-tools/disallowed-tools accept both string and list forms."""
 

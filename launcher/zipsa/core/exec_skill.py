@@ -34,7 +34,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class ExecSkillError(Exception):
@@ -62,7 +69,7 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
         return {}
     try:
         data = yaml.safe_load(match.group("body"))
-    except yaml.YAMLError as exc:  # pragma: no cover - defensive
+    except yaml.YAMLError as exc:
         raise ExecSkillError(f"SKILL.md frontmatter is not valid YAML: {exc}") from exc
     if data is None:
         return {}
@@ -187,7 +194,7 @@ class ExecSkill(BaseModel):
     author: Optional[str] = None
     tags: Optional[list[str]] = None
     limits: Optional[ExecLimits] = None
-    requires: dict[str, Requirement] = {}
+    requires: dict[str, Requirement] = Field(default_factory=dict)
 
 
 def load_exec_skill(skill_dir: Path) -> ExecSkill:
