@@ -723,6 +723,54 @@ class TestDiscoverCommand:
         assert result.exit_code == 0
         assert "No skills found" in result.output
 
+    def _make_exec_skill(self, root, name="exec-demo"):
+        d = root / name
+        (d / "scripts").mkdir(parents=True)
+        (d / "zipsa").mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Demo exec skill. Use when testing.\n---\n\n# {name}\n"
+        )
+        (d / "zipsa" / "package.yaml").write_text("version: 0.2.0\nauthor: tester\n")
+        (d / "scripts" / "1.fetch.py").write_text("print('{}')\n")
+        return d
+
+    def test_discover_finds_exec_skill(self, tmp_path):
+        """discover detects exec-format skills (no manifest.yaml)."""
+        self._make_exec_skill(tmp_path)
+        result = runner.invoke(app, ["discover", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "exec-demo" in result.output
+        assert "0.2.0" in result.output
+
+    def test_discover_lists_exec_and_legacy_together(self, tmp_path):
+        """Exec and legacy manifest skills are listed side by side."""
+        import yaml
+        legacy = tmp_path / "legacy-skill"
+        legacy.mkdir()
+        (legacy / "manifest.yaml").write_text(yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": "legacy-skill", "version": "1.0.0"},
+            "spec": {"purpose": "Legacy", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (legacy / "SKILL.md").write_text("# Legacy")
+        self._make_exec_skill(tmp_path, name="exec-demo")
+
+        result = runner.invoke(app, ["discover", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "legacy-skill" in result.output
+        assert "exec-demo" in result.output
+        assert "Found 2 skill(s)" in result.output
+
+    def test_discover_skips_broken_exec_skill(self, tmp_path):
+        """An exec dir missing its version is skipped, not a hard error."""
+        d = self._make_exec_skill(tmp_path, name="broken-exec")
+        (d / "zipsa" / "package.yaml").write_text("author: tester\n")  # no version
+        result = runner.invoke(app, ["discover", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "broken-exec" not in result.output
+
     def test_discover_nonexistent_dir_exits_nonzero(self, tmp_path):
         """discover exits 1 for non-existent directory."""
         result = runner.invoke(app, ["discover", str(tmp_path / "nonexistent")])
