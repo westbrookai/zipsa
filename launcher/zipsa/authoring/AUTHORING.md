@@ -9,20 +9,69 @@
 
 ```
 my-skill/
-├── SKILL.md            ← short intent prose, for humans (runtime never reads it)
-└── zipsa-dist/
-    ├── 1.fetch.py      ← phase 1 (Python)
-    ├── 2.report.md     ← phase 2 (LLM)
-    └── helper.py       ← non-phase files are ignored by discovery
+├── SKILL.md            ← YAML frontmatter (name/description) + intent prose
+├── scripts/            ← portable phase scripts (standard Agent-Skills location)
+│   ├── 1.fetch.py      ← phase 1 (Python)
+│   ├── 2.report.md     ← phase 2 (LLM)
+│   └── helper.py       ← non-phase files are ignored by discovery
+└── zipsa/              ← zipsa-only sidecar; plain Claude ignores it
+    ├── package.yaml    ← package manifest (version REQUIRED, author/tags/limits/requires)
+    └── INTENT.md       ← the "why" / original intent (forge provenance)
 ```
 
-- No metadata file. Skill name = directory basename.
-- A phase is any file in `zipsa-dist/` matching
-  `<int>.<kebab-slug>.<ext>`. Everything else is ignored — ship
-  helpers/readmes freely.
+- **Two-layer metadata, split by audience.** SKILL.md carries standard
+  Agent-Skills frontmatter (`name` + `description`, both required) that
+  plain Claude Code honors runtime-free; `zipsa/package.yaml` carries
+  zipsa-only fields (`version` required; `author`, `tags`, `limits`,
+  `requires` optional). Identity = frontmatter `name` + package `version`.
+- **`rm -rf zipsa/` must leave a valid, runnable Agent Skill** — the
+  litmus test for two-mode portability. Portable scripts live in the
+  standard `scripts/`; only zipsa-coupled metadata goes in `zipsa/`.
+- A phase is any file in `scripts/` matching `<int>.<kebab-slug>.<ext>`.
+  Everything else is ignored — ship helpers/readmes freely.
 - Phases run **sequentially by number**. Numbers sort numerically
   (`10` after `2`). Dotted sub-ids (`3.1`) are reserved for future
   branching — using them today is an error.
+
+### 1.1 SKILL.md frontmatter
+
+```yaml
+---
+name: my-skill                         # required; kebab-case, = identity
+description: <what it does + WHEN to use it>   # required; the discovery blurb
+allowed-tools: Bash(python3:*) Write   # optional (Claude Code honors it)
+model: claude-haiku-4-5-20251001       # optional (Claude Code honors it)
+---
+```
+
+`name` + `description` are the only fields the Agent-Skills standard
+requires; `description` absorbs the legacy `purpose` (what + when).
+Below the frontmatter, write 2–4 sentences of mechanism-agnostic intent
+prose + a run example.
+
+### 1.2 zipsa/package.yaml
+
+```yaml
+version: 0.1.0              # REQUIRED — (frontmatter name + this) = identity
+author: westbrookai        # optional — registry/discovery
+tags: [weather]            # optional — registry/discovery
+limits:                    # optional — zipsa runtime guardrails
+  timeout_seconds: 60
+requires:                  # optional — host dirs (prompt + save + mount, folded)
+  project_roots:
+    type: list[directory]  # v1 types: directory | list[directory]
+    prompt: "Which dirs contain your git projects?"
+    container_prefix: /projects/   # list → <prefix>/<basename>; single dir uses `container:`
+    mode: ro
+```
+
+### 1.3 zipsa/INTENT.md
+
+The skill's *why* — the original intent and acceptance criteria. Forge's
+input and the bar for its iterate-to-satisfied loop; gives humans
+provenance; optional extra context for the run-time LLM. Distinct from
+`description` (a short discovery blurb): INTENT.md is the longer-form
+requirements. It lives in `zipsa/` (not part of the portable payload).
 
 ## 2. Phase contract (language-agnostic)
 
@@ -153,27 +202,27 @@ Constraints:
 - Claude auth is injected automatically for `.md` phases (host
   `~/.zipsa/.env` → `CLAUDE_CODE_OAUTH_TOKEN`).
 
-### 5.1 Run-time LLM progress: `mcp__zipsa__report`
+### 5.1 Run-time progress — keep SKILL.md mechanism-agnostic
 
-The **run-time LLM** (the model that follows `SKILL.md` and calls
-scripts via `exec`) has access to a `report` MCP tool for non-blocking
-progress updates:
+For long-running or polling skills, SKILL.md may tell the run-time LLM
+to keep the user informed of progress. **Write this mechanism-agnostic:**
+say *"report progress to the user"* (e.g. "before each polling attempt,
+report the current status to the user"), NOT `mcp__zipsa__report`.
 
-```
-mcp__zipsa__report(message="Starting fetch phase...")
-```
+Why: a zipsa skill is one portable artifact with two execution modes.
+Under the zipsa runtime, "report progress" maps to the non-blocking
+`report` tool (fire-and-forget, unlike the blocking HITL tools); under
+plain Claude Code with no runtime, it maps to the agent just telling the
+user. Naming `mcp__zipsa__*` tools in SKILL.md breaks the runtime-free
+mode and couples the skill to zipsa. The rule: **SKILL.md states intent
+and references the scripts; it never names runtime-specific tools.**
 
-Unlike `ask`/`confirm`/`choose` (which block waiting for a human
-reply), `report` is fire-and-forget — it writes the message and returns
-immediately. Use it in `SKILL.md` instructions for long-running or
-polling skills to keep the user informed (e.g. "call `report` with
-the current status before each polling attempt"). This is distinct from
-the `.md` phase constraint above — `.md` phase files have no tools;
-`report` is called by the run-time LLM before/after it dispatches those
-phases.
+(This is distinct from the `.md` phase constraint above — `.md` phase
+files themselves have no tools; progress is reported by the run-time LLM
+before/after it dispatches those phases.)
 
 A good `.md` phase says: what the input means, what to produce, what
-keys go in the result. See `weather/zipsa-dist/2.report.md`.
+keys go in the result. See `weather/scripts/2.report.md`.
 
 ## 6. Credentials & secrets
 

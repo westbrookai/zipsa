@@ -1,3 +1,8 @@
+---
+name: dad-joke
+description: Fetch a random dad joke (optionally matching a search term) and present it with a warm intro in the user's language. Use when the user wants a joke, a laugh, or asks for a dad joke about a topic.
+---
+
 # dad-joke
 
 Fetch a random dad joke and serve it with a friendly intro. Phase 1

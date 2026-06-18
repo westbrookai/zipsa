@@ -1,3 +1,8 @@
+---
+name: hello-world
+description: Smoke test for the zipsa runtime — reports the container environment, then has an LLM greet the user and name its model. Use to verify the platform's deterministic and LLM halves are both alive.
+---
+
 # hello-world
 
 Smoke test for the zipsa runtime. Phase 1 (Python) reports the

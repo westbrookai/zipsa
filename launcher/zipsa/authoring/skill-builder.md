@@ -45,10 +45,11 @@ what exactly should happen, what's the input (`user_query`, empty-query
 behavior), what's the output, where's the boundary (what it does NOT
 do). Then restate the refined intent and confirm.
 
-Don't freeze `INTENT.md` yet — feasibility (Step 2) may reduce the
-scope. You capture INTENT.md once scope + prerequisites are settled (end
-of Step 2 / Step 4). It stays a first-class artifact: the *why* and the
-acceptance criteria (what "done" looks like) that travel with the skill.
+Don't freeze `zipsa/INTENT.md` yet — feasibility (Step 2) may reduce the
+scope. You capture `zipsa/INTENT.md` once scope + prerequisites are
+settled (end of Step 2 / Step 4). It stays a first-class artifact: the
+*why* and the acceptance criteria (what "done" looks like) that travel
+with the skill.
 
 ### 2. Check feasibility & gather prerequisites
 Before drafting anything, decide **whether** the intent is buildable as
@@ -107,15 +108,25 @@ step genuinely needs inference.
 split just reflects the agreed scope.)
 
 ### 4. Write the files
-Into the staging directory given in your prompt:
-- `INTENT.md` — the agreed requirements (scope from Steps 1–2): the *why*,
-  the acceptance criteria, and the prerequisites the skill depends on.
-- `SKILL.md` — 2–4 sentences of intent prose + a run example (incl. any
-  `--mount` the skill needs). The run-time LLM follows this to drive the
-  skill, so it must say what to do and which scripts to call.
-- `zipsa-dist/<n>.<slug>.<ext>` — real, working code. No TODO skeletons.
+Into the staging directory given in your prompt, in the layout from
+AUTHORING §1 (`scripts/` + `zipsa/`, NOT a single `zipsa-dist/`):
+- `SKILL.md` — YAML frontmatter (`name` + `description`, both required;
+  `description` = what it does + WHEN to use it) followed by 2–4
+  sentences of **mechanism-agnostic** intent prose + a run example
+  (incl. any `--mount` the skill needs). The run-time LLM follows this to
+  drive the skill, so it must say what to do and which scripts to call —
+  but never name `mcp__zipsa__*` tools (AUTHORING §5.1).
+- `scripts/<n>.<slug>.<ext>` — real, working code. No TODO skeletons.
   Follow the stdin/stdout contract (AUTHORING §2). Code scripts validate
   inputs and fail loudly (stderr + exit 1).
+- `zipsa/package.yaml` — `version` (required; start at `0.1.0`), plus
+  optional `author`, `tags`, `limits`, `requires` (AUTHORING §1.2).
+- `zipsa/INTENT.md` — the agreed requirements (scope from Steps 1–2): the
+  *why*, the acceptance criteria, and the prerequisites the skill depends
+  on.
+
+The litmus test for the layout: `rm -rf zipsa/` must leave a valid,
+runnable Agent Skill (SKILL.md + scripts/).
 
 ### 5. Test for real
 Iterate in two modes, narrow then whole:
@@ -146,5 +157,9 @@ kebab-case name based on what you built, confirm it, then call
 `mcp__zipsa__promote(name=...)`. Done means:
 - a real `mcp__zipsa__run` passes the happy path
 - the failure case exits non-zero with a clear message
-- `SKILL.md` matches what the skill actually does
+- `SKILL.md` matches what the skill actually does, with valid frontmatter
+  (`name` + `description`) and no `mcp__zipsa__*` tool names
+- `zipsa/package.yaml` has a `version`; `zipsa/INTENT.md` captures the why
+- the layout is `scripts/` + `zipsa/` (`rm -rf zipsa/` still leaves a
+  valid Agent Skill)
 - no dead files (no manifest.yaml, no pyproject.toml, no templates)
