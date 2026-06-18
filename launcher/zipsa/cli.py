@@ -382,7 +382,9 @@ def run(
 
     def _run_exec_format(skill_dir: Path) -> None:
         """Shared helper: reject unsupported flags then delegate to run_skill_llm."""
-        for flag, val in (("--dry-run", dry_run), ("--shell", shell), ("--env", env)):
+        # --dry-run is supported (#173). --shell / --env remain unsupported
+        # for exec-format skills (out of scope).
+        for flag, val in (("--shell", shell), ("--env", env)):
             if val:
                 typer.echo(
                     f"Error: {flag} is not supported for exec-format skills yet.",
@@ -392,6 +394,7 @@ def run(
         rc = run_skill_llm(
             skill_dir, user_input or "", image=image,
             extra_mounts=[_parse_mount_spec(m) for m in (mount or [])],
+            dry_run=dry_run,
         )
         raise typer.Exit(rc)
 
@@ -821,6 +824,10 @@ def exec_skill(
         Optional[int],
         typer.Option("--timeout", help="Per-phase timeout in seconds (overrides inline [tool.zipsa] timeout-seconds and the 600 s default)."),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the per-phase command(s) that would run, then exit without executing anything."),
+    ] = False,
 ):
     """Run a skill's phases deterministically (Phase 1).
 
@@ -848,6 +855,28 @@ def exec_skill(
         raise typer.Exit(1)
 
     skill_root = path.resolve()
+
+    # Dry run: print the per-phase command(s) and exit 0 without spawning
+    # anything or leaving a run record. run_phases(dry_run=True) prints each
+    # phase's would-run argv (docker, or the host runner with --local) in
+    # phase order; no artifacts dir / new_run_dir is allocated.
+    if dry_run:
+        try:
+            run_phases(
+                phases,
+                skill_name=skill_root.name,
+                user_query=user_query or "",
+                skill_root=skill_root,
+                docker_image=None if local else image,
+                extra_mounts=[_parse_mount_spec(m) for m in mount or []],
+                timeout_seconds=timeout,
+                dry_run=True,
+            )
+        except ExecRunnerError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+        raise typer.Exit(0)
+
     # One run dir per invocation holds result.json + stdout/stderr logs
     # + artifacts/ (unless --out redirects artifacts elsewhere).
     # Scheduled runs are otherwise invisible — this is the only record

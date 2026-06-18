@@ -2292,15 +2292,17 @@ class TestRunDispatch:
         assert called_input == "Sydney"
 
     @patch("zipsa.cli.run_skill_llm")
-    def test_dry_run_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):
-        # --dry-run on an exec-format skill must fail loudly, not silently
-        # do a real run.
+    def test_dry_run_threads_to_run_skill_llm(self, mock_run_llm, tmp_path, monkeypatch):
+        # --dry-run on an exec-format skill is now supported (#173): it is
+        # threaded through to run_skill_llm(dry_run=True), which prints the
+        # command and spawns nothing.
         monkeypatch.chdir(tmp_path)
         root = self._exec_skill(tmp_path)
+        mock_run_llm.return_value = 0
         res = runner.invoke(app, ["run", str(root), "--dry-run"])
-        assert res.exit_code == 2
-        assert "--dry-run" in res.output
-        assert not mock_run_llm.called
+        assert res.exit_code == 0, res.output
+        assert mock_run_llm.called
+        assert mock_run_llm.call_args.kwargs.get("dry_run") is True
 
     @patch("zipsa.cli.run_skill_llm")
     def test_shell_rejected_for_exec_format(self, mock_run_llm, tmp_path, monkeypatch):

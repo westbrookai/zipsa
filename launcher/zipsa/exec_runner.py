@@ -333,6 +333,18 @@ def _build_docker_argv(
     return argv
 
 
+def _print_phase_dry_run(phase_path: Path, mode: str, argv: list[str]) -> None:
+    """Print one phase's would-run command, mirroring the legacy
+    `_print_dry_run` shape: a per-phase header, the full command on one
+    line (so `docker run ...` / `uv run ...` reads at a glance), then one
+    arg per line so long argv stays scannable."""
+    print(f"=== phase {phase_path.name} ({mode}) ===")
+    print(" ".join(argv))
+    for i, arg in enumerate(argv):
+        print(f"  [{i:2d}] {arg}")
+    print()
+
+
 def run_phase(
     phase_path: Path,
     *,
@@ -344,6 +356,7 @@ def run_phase(
     prev: dict | None = None,
     extra_mounts: list[tuple[Path, str]] | None = None,
     timeout_seconds: int | None = None,
+    dry_run: bool = False,
 ) -> ExecResult:
     """Execute one phase file and return its outcome.
 
@@ -374,7 +387,21 @@ def run_phase(
         timeout_seconds = _inline_timeout_seconds(phase_path) or _DEFAULT_TIMEOUT
 
     if out_dir is None:
-        if docker_image is not None:
+        if dry_run:
+            # Dry run prints the would-run command and touches NOTHING.
+            # Use a stable, un-created placeholder path so the printed
+            # `-v <out_dir>:/out` mount is plausible without leaving an
+            # orphan temp dir behind on every invocation.
+            if docker_image is not None:
+                from .paths import zipsa_home
+
+                out_dir = zipsa_home() / "exec-out" / f"{skill_name}-DRYRUN"
+            else:
+                out_dir = (
+                    Path(tempfile.gettempdir())
+                    / f"zipsa-exec-{skill_name}-DRYRUN"
+                )
+        elif docker_image is not None:
             # System temp (/var/folders on macOS) is typically NOT in
             # Docker Desktop's file-sharing list — it would mount empty
             # and artifacts would be silently lost. ~/.zipsa sits under
@@ -397,7 +424,11 @@ def run_phase(
                 raise ExecRunnerError(
                     f"mount path does not exist: {host_path}"
                 )
-        _ensure_image(docker_image)
+        # Skip the image pre-pull under dry_run: it would call
+        # `docker image inspect` (a real subprocess) and dry-run must spawn
+        # nothing. The printed argv still shows the image that would be used.
+        if not dry_run:
+            _ensure_image(docker_image)
         mode = "docker"
         ctx_out_dir = _CONTAINER_OUT_DIR
         cwd = None
@@ -431,6 +462,21 @@ def run_phase(
             argv = list(_LLM_COMMAND)
         else:
             argv = [*_runner_for(phase_path), str(phase_path)]
+
+    if dry_run:
+        # Build argv only, print it, spawn nothing. The returned result is
+        # a no-op (exit_code 0) so run_phases can chain it like any success.
+        _print_phase_dry_run(phase_path, mode, argv)
+        return ExecResult(
+            skill_name=skill_name,
+            mode=mode,
+            result=None,
+            exit_code=0,
+            duration_ms=0,
+            out_dir=str(out_dir),
+            stdout="",
+            stderr="",
+        )
 
     ctx = {
         "skill_name": skill_name,
@@ -489,9 +535,14 @@ def run_phases(
     docker_image: str | None = None,
     extra_mounts: list[tuple[Path, str]] | None = None,
     timeout_seconds: int | None = None,
+    dry_run: bool = False,
 ) -> list[ExecResult]:
     """Run a skill's phases sequentially, chaining each result into the
     next phase's `prev`.
+
+    With `dry_run=True` every phase prints the command it *would* run (in
+    phase order) and nothing is spawned; each phase returns a no-op
+    success so the chain walks all phases without short-circuiting.
 
     `phases` is the ordered list from `phase_discovery.discover_phases`.
     All phases share one out_dir. A phase that exits non-zero stops the
@@ -511,9 +562,11 @@ def run_phases(
         if phase.kind != "md":
             _runner_for(phase.path)  # raises on unknown ext
 
-    if out_dir is None:
+    if out_dir is None and not dry_run:
         # Allocate once here so every phase shares it (run_phase would
-        # otherwise mint a fresh temp dir per phase).
+        # otherwise mint a fresh temp dir per phase). Skipped under dry_run:
+        # each phase resolves the same un-created placeholder, so no orphan
+        # temp dir is left behind.
         if docker_image is not None:
             from .paths import zipsa_home
 
@@ -538,6 +591,7 @@ def run_phases(
             prev=prev,
             extra_mounts=extra_mounts,
             timeout_seconds=timeout_seconds,
+            dry_run=dry_run,
         )
         results.append(outcome)
         if outcome.exit_code != 0:

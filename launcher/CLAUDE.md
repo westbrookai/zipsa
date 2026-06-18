@@ -307,8 +307,15 @@ uv run python
 
 ### Dry Run Mode
 ```bash
-# See what Docker command would be executed
+# See what Docker command would be executed (no container started)
 zipsa run my-skill "query" --dry-run
+
+# Exec-format skills support --dry-run on both paths:
+#   `run`  prints the orchestrator (claude) container command + mcp-config path
+#   `exec` prints the per-phase docker command(s) in phase order
+#          (with --local it prints the host runner invocation instead)
+zipsa run my-exec-skill "query" --dry-run
+zipsa exec ../skills/my-exec-skill --dry-run
 ```
 
 ### Interactive Shell in Container
