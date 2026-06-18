@@ -218,3 +218,85 @@ class TestRequiresStatus:
         h = check_install(d)
         assert h.requires_total == 2
         assert h.requires_set == 1
+
+
+class TestExecFormatHealth:
+    """check_install recognises exec-format skills (SKILL.md + scripts/ +
+    zipsa/package.yaml, no manifest.yaml) as healthy."""
+
+    @staticmethod
+    def _make_exec_skill(root: Path, name: str = "weather", version: str = "0.2.0") -> None:
+        """Create a minimal new-layout exec skill (no manifest.yaml)."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Test exec skill\n---\n\n# Skill\n"
+        )
+        (root / "scripts").mkdir()
+        (root / "scripts" / "1.fetch.py").write_text("# fetch\n")
+        (root / "zipsa").mkdir()
+        (root / "zipsa" / "package.yaml").write_text(f"version: {version}\n")
+
+    def test_exec_format_skill_is_healthy(self, tmp_path):
+        """New-layout exec skill (SKILL.md + scripts/ + zipsa/package.yaml)
+        must be reported as healthy — NOT 'manifest.yaml not found'."""
+        d = tmp_path / "weather"
+        self._make_exec_skill(d)
+        h = check_install(d)
+        assert h.ok is True
+        assert h.reason is None
+
+    def test_exec_format_via_symlink_is_healthy(self, tmp_path):
+        """Symlink pointing at a valid exec-format skill dir is also healthy."""
+        src = tmp_path / "src" / "weather"
+        self._make_exec_skill(src)
+        link = tmp_path / "installed" / "weather"
+        link.parent.mkdir()
+        link.symlink_to(src)
+        h = check_install(link)
+        assert h.ok is True
+
+    def test_exec_format_with_malformed_package_yaml_is_broken(self, tmp_path):
+        """An exec skill whose zipsa/package.yaml is malformed (missing
+        'version') must be reported as broken with a clear reason —
+        NOT 'manifest.yaml not found'."""
+        d = tmp_path / "bad-exec"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: bad-exec\ndescription: x\n---\n\n# x\n"
+        )
+        (d / "scripts").mkdir()
+        (d / "scripts" / "1.run.py").write_text("# run\n")
+        (d / "zipsa").mkdir()
+        # package.yaml present but missing required 'version' field
+        (d / "zipsa" / "package.yaml").write_text("author: someone\n")
+        h = check_install(d)
+        assert h.ok is False
+        assert h.reason is not None
+        assert "manifest.yaml" not in h.reason.lower()  # must NOT say "manifest not found"
+        # The reason should mention something about version or the loader error
+        assert "version" in h.reason.lower() or "package.yaml" in h.reason
+
+    def test_exec_format_with_invalid_yaml_package_is_broken(self, tmp_path):
+        """An exec skill whose zipsa/package.yaml has invalid YAML is broken."""
+        d = tmp_path / "bad-yaml-exec"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: bad-yaml-exec\ndescription: x\n---\n\n# x\n"
+        )
+        (d / "scripts").mkdir()
+        (d / "scripts" / "1.run.py").write_text("# run\n")
+        (d / "zipsa").mkdir()
+        (d / "zipsa" / "package.yaml").write_text("version: 0.1.0\ntags: [unclosed\n")
+        h = check_install(d)
+        assert h.ok is False
+        assert h.reason is not None
+        assert "manifest.yaml" not in h.reason.lower()
+
+    def test_dangling_symlink_still_broken_for_exec_skills(self, tmp_path):
+        """Dangling symlink is still broken regardless of skill format."""
+        gone = tmp_path / "removed-exec-source"
+        link = tmp_path / "weather"
+        link.symlink_to(gone)
+        h = check_install(link)
+        assert h.ok is False
+        assert "Linked source missing" in h.reason

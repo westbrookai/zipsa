@@ -2408,3 +2408,160 @@ class TestForgeCommand:
         res = runner.invoke(app, ["create", "x"])
         assert res.exit_code == 0, res.output
         assert mock_forge.called
+
+
+class TestListExecSkills:
+    """zipsa list must surface exec-format skills (SKILL.md + scripts/ +
+    zipsa/package.yaml, no manifest.yaml) as healthy entries, never
+    call Skill.load on them, and count run stats from the exec run-dir
+    layout (~/.zipsa/<name>/runs/<ts>/result.json)."""
+
+    @staticmethod
+    def _make_exec_skill(
+        root: Path, name: str, version: str = "0.2.0"
+    ) -> None:
+        """Write a minimal new-layout exec skill (no manifest.yaml)."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Exec test skill\n---\n\n# Body\n"
+        )
+        (root / "scripts").mkdir(exist_ok=True)
+        (root / "scripts" / "1.run.py").write_text("# run\n")
+        (root / "zipsa").mkdir(exist_ok=True)
+        (root / "zipsa" / "package.yaml").write_text(f"version: {version}\n")
+
+    @staticmethod
+    def _make_legacy_skill(root: Path, name: str, version: str = "1.0.0") -> None:
+        """Write a minimal legacy skill (root manifest.yaml)."""
+        import yaml as _yaml
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "manifest.yaml").write_text(_yaml.dump({
+            "apiVersion": "zipsa.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "version": version},
+            "spec": {"purpose": "Test", "instructions": "./SKILL.md",
+                     "mcp": [], "tools": {"builtin": []}},
+        }))
+        (root / "SKILL.md").write_text("# Legacy\n")
+
+    def test_exec_skill_appears_in_list(self, tmp_path, monkeypatch):
+        """An installed exec skill shows name@version and is NOT 'broken'."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_exec_skill(skills_dir / "weather", "weather", "0.2.0")
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0, result.output
+        assert "weather" in result.output
+        assert "0.2.0" in result.output
+        assert "broken" not in result.output.lower()
+        assert "manifest.yaml not found" not in result.output
+
+    def test_exec_skill_does_not_crash_list(self, tmp_path, monkeypatch):
+        """list must not raise an exception when an exec skill is present."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_exec_skill(skills_dir / "weather", "weather", "0.2.0")
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0, result.output
+
+    def test_legacy_skill_still_shows_version(self, tmp_path, monkeypatch):
+        """Legacy skills continue to display version from manifest."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_legacy_skill(skills_dir / "my-legacy", "my-legacy", "2.3.4")
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+        assert result.exit_code == 0, result.output
+        assert "my-legacy" in result.output
+        assert "2.3.4" in result.output
+
+    def test_mixed_install_renders_both(self, tmp_path, monkeypatch):
+        """Mixed install (one exec + one legacy) renders both correctly."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_exec_skill(skills_dir / "weather", "weather", "0.2.0")
+        self._make_legacy_skill(skills_dir / "my-legacy", "my-legacy", "1.5.0")
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0, result.output
+        assert "weather" in result.output
+        assert "0.2.0" in result.output
+        assert "my-legacy" in result.output
+        assert "1.5.0" in result.output
+        assert "broken" not in result.output.lower()
+
+    def test_exec_run_stats_counted_from_exec_runs_dir(self, tmp_path, monkeypatch):
+        """Exec skill run stats come from ~/.zipsa/<name>/runs/<ts>/result.json
+        (exit_code 0 = success), NOT from the legacy @version layout."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_exec_skill(skills_dir / "weather", "weather", "0.2.0")
+
+        # 3 exec runs: 2 exit_code 0 (success), 1 exit_code 1 (fail)
+        runs_base = zhome / "weather" / "runs"
+        cases = [
+            ("2026-06-18_100000_001", 0),
+            ("2026-06-18_100100_002", 0),
+            ("2026-06-18_100200_003", 1),
+        ]
+        for ts, exit_code in cases:
+            rd = runs_base / ts
+            rd.mkdir(parents=True)
+            (rd / "result.json").write_text(json.dumps({
+                "exit_code": exit_code,
+                "status": "ok" if exit_code == 0 else "error",
+            }))
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0, result.output
+        assert "3 run" in result.output  # "3 runs"
+        # 2 out of 3 = 66%
+        assert "66%" in result.output
+
+    def test_legacy_run_stats_still_use_legacy_layout(self, tmp_path, monkeypatch):
+        """Legacy skill run stats still come from ~/.zipsa/<name>@<version>/runs/
+        using summary.json status field."""
+        zhome = tmp_path / ".zipsa"
+        skills_dir = zhome / "skills"
+        self._make_legacy_skill(skills_dir / "my-legacy", "my-legacy", "1.0.0")
+
+        # 2 legacy runs via summary.json
+        runs_dir = zhome / "my-legacy@1.0.0" / "runs"
+        for ts, status in [
+            ("2026-06-18_100000_001", "ok"),
+            ("2026-06-18_100100_002", "failed"),
+        ]:
+            rd = runs_dir / ts
+            rd.mkdir(parents=True)
+            (rd / "summary.json").write_text(json.dumps({
+                "status": status, "exit_code": 0 if status == "ok" else 1,
+            }))
+
+        monkeypatch.setenv("ZIPSA_HOME", str(zhome))
+        monkeypatch.setattr("zipsa.paths.builtin_skills_root", lambda: tmp_path / "_no_builtins")
+
+        result = runner.invoke(app, ["list"])
+
+        assert result.exit_code == 0, result.output
+        assert "2 run" in result.output
+        assert "50%" in result.output

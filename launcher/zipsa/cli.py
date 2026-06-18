@@ -1095,6 +1095,59 @@ def list_installed():
         if not health.ok:
             broken.append((item.name, health.reason or "unknown reason"))
             return
+
+        install_json = item / "_install.json"
+        install_meta = {}
+        if install_json.exists():
+            try:
+                install_meta = json.loads(install_json.read_text())
+            except Exception:
+                pass
+
+        # Branch on layout: exec-format skills must NOT go through Skill.load.
+        if _is_exec_format(item):
+            from .core.exec_skill import load_exec_skill, ExecSkillError
+            try:
+                exec_skill = load_exec_skill(item)
+            except ExecSkillError as e:
+                broken.append((item.name, str(e).splitlines()[0]))
+                return
+
+            # Run stats for exec skills: ~/.zipsa/<name>/runs/<ts>/result.json
+            # exit_code 0 counts as success.
+            total_runs = 0
+            successful_runs = 0
+            exec_runs_dir = home / exec_skill.name / "runs"
+            if exec_runs_dir.is_dir():
+                for run_dir in exec_runs_dir.iterdir():
+                    if not run_dir.is_dir():
+                        continue
+                    result_file = run_dir / "result.json"
+                    if not result_file.exists():
+                        continue
+                    try:
+                        rec = json.loads(result_file.read_text())
+                    except Exception:
+                        continue
+                    total_runs += 1
+                    if rec.get("exit_code") == 0:
+                        successful_runs += 1
+
+            installed.append({
+                "exec_skill": exec_skill,
+                "skill": None,
+                "is_exec": True,
+                "meta": install_meta,
+                "total_runs": total_runs,
+                "successful_runs": successful_runs,
+                "is_link": item.is_symlink(),
+                "is_builtin": is_builtin,
+                "item": item,
+                "health": health,
+            })
+            return
+
+        # Legacy layout: use Skill.load as before.
         try:
             skill = Skill.load(item)
         except ValidationError as e:
@@ -1106,15 +1159,7 @@ def list_installed():
             broken.append((item.name, str(e).splitlines()[0]))
             return
 
-        install_json = item / "_install.json"
-        install_meta = {}
-        if install_json.exists():
-            try:
-                install_meta = json.loads(install_json.read_text())
-            except Exception:
-                pass
-
-        # Compute run stats (same logic as before)
+        # Compute run stats (legacy layout: ~/.zipsa/<name>@<version>/runs/)
         total_runs = 0
         successful_runs = 0
         for run_data_dir in home_subdirs:
@@ -1150,7 +1195,9 @@ def list_installed():
                         successful_runs += 1
 
         installed.append({
+            "exec_skill": None,
             "skill": skill,
+            "is_exec": False,
             "meta": install_meta,
             "total_runs": total_runs,
             "successful_runs": successful_runs,
@@ -1186,12 +1233,24 @@ def list_installed():
     typer.echo(f"Installed skills ({total_count}):\n")
 
     for entry in installed:
-        skill = entry["skill"]
         meta = entry["meta"]
         health = entry["health"]
 
-        name = typer.style(skill.name, fg=typer.colors.BRIGHT_CYAN, bold=True)
-        version = typer.style(f"@{skill.manifest.metadata.version}", fg=typer.colors.CYAN)
+        # Resolve identity — exec skills use load_exec_skill fields;
+        # legacy skills use Skill manifest fields.
+        if entry["is_exec"]:
+            exec_skill = entry["exec_skill"]
+            skill_name = exec_skill.name
+            skill_version = exec_skill.version
+            children_names: list[str] = []  # exec skills have no children concept
+        else:
+            skill = entry["skill"]
+            skill_name = skill.name
+            skill_version = skill.manifest.metadata.version
+            children_names = list(skill.manifest.spec.children or [])
+
+        name = typer.style(skill_name, fg=typer.colors.BRIGHT_CYAN, bold=True)
+        version = typer.style(f"@{skill_version}", fg=typer.colors.CYAN)
         if entry["is_builtin"]:
             label = typer.style(" (built-in)", fg=typer.colors.BLUE)
         elif entry["is_link"]:
@@ -1204,7 +1263,6 @@ def list_installed():
         # children with their installed versions lets the user spot
         # missing children before runtime (vs the exit-4 from #83
         # which only fires at `zipsa run`).
-        children_names: list[str] = list(skill.manifest.spec.children or [])
         orch_label = typer.style(" (orchestrator)", fg=typer.colors.BRIGHT_MAGENTA) if children_names else ""
 
         if health.requires_total > 0 and health.requires_set < health.requires_total:
