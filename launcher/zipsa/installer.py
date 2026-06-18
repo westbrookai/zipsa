@@ -223,6 +223,28 @@ def install_from_github(source_str: str, force: bool = False) -> str:
     return name
 
 
+def _is_exec_format_src(src: Path) -> bool:
+    """Return True when src looks like an exec-format skill.
+
+    Mirrors cli._is_exec_format but kept here so installer.py is self-contained
+    (avoids a circular import from cli.py).
+
+    Legacy new-structure skills (skill-builder output) have SKILL.md +
+    zipsa-dist/manifest.yaml but no root manifest.yaml. We distinguish them
+    from exec skills by checking zipsa-dist/manifest.yaml: its presence means
+    DockerExecutor owns the skill even if no root manifest.yaml exists.
+    """
+    return (
+        (src / "SKILL.md").is_file()
+        and (
+            (src / "scripts").is_dir()
+            or (src / "zipsa-dist").is_dir()
+        )
+        and not (src / "manifest.yaml").exists()
+        and not (src / "zipsa-dist" / "manifest.yaml").exists()
+    )
+
+
 def install_local(local_path: str, link: bool = False, force: bool = False) -> str:
     """Install a local skill by copy (default) or symlink. Returns skill name."""
     from .paths import skills_dir
@@ -233,15 +255,24 @@ def install_local(local_path: str, link: bool = False, force: bool = False) -> s
     if not src.exists():
         raise FileNotFoundError(f"Path not found: {src}")
 
-    try:
-        skill = Skill.load(src)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"No manifest.yaml found at: {src}")
-    except ValidationError as e:
-        raise ValueError(f"Install failed: invalid manifest — {e}")
-
-    name = skill.name
-    version = skill.manifest.metadata.version
+    if _is_exec_format_src(src):
+        # Exec-format skill — get identity from SKILL.md + zipsa/package.yaml.
+        from .core.exec_skill import ExecSkillError, load_exec_skill
+        try:
+            exec_skill = load_exec_skill(src)
+        except ExecSkillError as e:
+            raise ValueError(f"Install failed: {e}")
+        name = exec_skill.name
+        version = exec_skill.version
+    else:
+        try:
+            skill = Skill.load(src)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"No manifest.yaml found at: {src}")
+        except ValidationError as e:
+            raise ValueError(f"Install failed: invalid manifest — {e}")
+        name = skill.name
+        version = skill.manifest.metadata.version
 
     # Built-in name collision check: if the user tries to install a
     # skill with the same name as a built-in (skill-builder, etc.),
