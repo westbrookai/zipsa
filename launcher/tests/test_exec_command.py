@@ -500,3 +500,22 @@ class TestExecDryRun:
         # No run record persisted under ZIPSA_HOME for a dry run.
         runs = home / "quiet" / "runs"
         assert not runs.exists() or not any(runs.iterdir())
+
+    @patch("zipsa.exec_runner.subprocess.run")
+    def test_docker_dry_run_creates_no_exec_out_dir(
+        self, mock_run, tmp_path, monkeypatch
+    ):
+        # A docker-mode dry run must not touch disk. It previously allocated
+        # a real ~/.zipsa/exec-out/<skill>-<rand>/ temp dir (via mkdtemp)
+        # BEFORE the print-only early return, leaving an orphan behind on
+        # every invocation (#173).
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        skill = _make_skill(tmp_path, "hello", {"1.report.py": PY_PHASE})
+
+        result = runner.invoke(app, ["exec", str(skill), "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        exec_out = home / "exec-out"
+        assert not exec_out.exists() or not any(exec_out.iterdir())

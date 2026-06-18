@@ -212,12 +212,12 @@ def run_skill_llm(
         # Spawn nothing and bind no port: don't start the RunServer. The
         # mcp-config still needs a port/token to render — use placeholders
         # (the real values are only known once the server binds). The config
-        # is written so the printed path points at an inspectable file.
+        # is written so the printed path points at an inspectable file. A
+        # FIXED path (overwritten each run) — not a unique mkstemp — so dry
+        # runs never accumulate orphan config files.
         cfg_dir = zipsa_paths.zipsa_home() / "run"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        fd, cfg_path = tempfile.mkstemp(prefix="dry-run-", suffix=".mcp.json", dir=cfg_dir)
-        os.close(fd)
-        mcp_config_host = Path(cfg_path)
+        mcp_config_host = cfg_dir / "dry-run.mcp.json"
         mcp_config_host.write_text(json.dumps(build_mcp_config(0, "<token>")))
         argv = build_run_argv(
             image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,

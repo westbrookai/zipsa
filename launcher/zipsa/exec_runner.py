@@ -387,7 +387,21 @@ def run_phase(
         timeout_seconds = _inline_timeout_seconds(phase_path) or _DEFAULT_TIMEOUT
 
     if out_dir is None:
-        if docker_image is not None:
+        if dry_run:
+            # Dry run prints the would-run command and touches NOTHING.
+            # Use a stable, un-created placeholder path so the printed
+            # `-v <out_dir>:/out` mount is plausible without leaving an
+            # orphan temp dir behind on every invocation.
+            if docker_image is not None:
+                from .paths import zipsa_home
+
+                out_dir = zipsa_home() / "exec-out" / f"{skill_name}-DRYRUN"
+            else:
+                out_dir = (
+                    Path(tempfile.gettempdir())
+                    / f"zipsa-exec-{skill_name}-DRYRUN"
+                )
+        elif docker_image is not None:
             # System temp (/var/folders on macOS) is typically NOT in
             # Docker Desktop's file-sharing list — it would mount empty
             # and artifacts would be silently lost. ~/.zipsa sits under
@@ -548,9 +562,11 @@ def run_phases(
         if phase.kind != "md":
             _runner_for(phase.path)  # raises on unknown ext
 
-    if out_dir is None:
+    if out_dir is None and not dry_run:
         # Allocate once here so every phase shares it (run_phase would
-        # otherwise mint a fresh temp dir per phase).
+        # otherwise mint a fresh temp dir per phase). Skipped under dry_run:
+        # each phase resolves the same un-created placeholder, so no orphan
+        # temp dir is left behind.
         if docker_image is not None:
             from .paths import zipsa_home
 

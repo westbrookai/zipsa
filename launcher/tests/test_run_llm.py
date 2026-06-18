@@ -233,6 +233,30 @@ class TestRunSkillLlmDryRun:
             for rd in runs.iterdir():
                 assert not (rd / "result.json").exists()
 
+    @patch("zipsa.run_llm.subprocess.Popen")
+    @patch("zipsa.run_llm.RunServer")
+    def test_dry_run_leaves_no_orphan_mcp_config(
+        self, mock_server_cls, mock_popen, tmp_path, monkeypatch
+    ):
+        # Each dry run previously wrote a UNIQUE mkstemp dry-run-*.mcp.json
+        # into ~/.zipsa/run/ and never removed it — unbounded accumulation
+        # (#173). Two dry runs must leave at most one config file behind.
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        root = tmp_path / "weather"; (root / "zipsa-dist").mkdir(parents=True)
+        (root / "SKILL.md").write_text("# weather\n")
+        srv = MagicMock(); srv.port = 51117; srv.token = "tok"
+        mock_server_cls.return_value = srv
+
+        from zipsa.run_llm import run_skill_llm
+        run_skill_llm(root, "", image="img", dry_run=True)
+        run_skill_llm(root, "", image="img", dry_run=True)
+
+        mock_popen.assert_not_called()
+        run_dir = home / "run"
+        leftover = list(run_dir.glob("*.mcp.json")) if run_dir.exists() else []
+        assert len(leftover) <= 1, f"dry run accumulated configs: {leftover}"
+
 
 class TestRunSkillLlmLogging:
     """`zipsa run` (LLM path) persists a run record under ZIPSA_HOME so
