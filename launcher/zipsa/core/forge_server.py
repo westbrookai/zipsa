@@ -117,8 +117,12 @@ class ForgeServer:
                 raise RuntimeError(f"HITL_UNATTENDED: {e}") from e
 
         @mcp.tool()
-        def confirm(message: str, default: bool | None = None) -> bool:
-            """Ask the host user a yes/no question."""
+        def confirm(message: str, default: bool | None = None) -> str:
+            """Ask the host user a yes/no question.
+
+            Returns "yes"/"no" on a clean answer, or the user's literal text
+            when they answer with neither — treat that as a correction.
+            """
             try:
                 return confirm_h.run(message=message, default=default)
             except HitlUnattended as e:

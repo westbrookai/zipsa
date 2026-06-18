@@ -221,6 +221,16 @@ and references the scripts; it never names runtime-specific tools.**
 files themselves have no tools; progress is reported by the run-time LLM
 before/after it dispatches those phases.)
 
+### 5.2 Blocking HITL — `choose`/`confirm` may return literal text
+
+The blocking HITL tools are **lossless**: `choose`/`confirm` may return the
+user's literal text when they don't pick a listed option / answer yes-no
+(`confirm` returns `"yes"`/`"no"` or the raw text; `choose` returns the
+chosen option or the raw text). Treat a non-option / non-yes-no return as a
+**correction or new instruction** — re-evaluate, never ignore it. Prefer
+`ask` when a free-form correction is likely; reserve `choose` for genuinely
+closed sets.
+
 A good `.md` phase says: what the input means, what to produce, what
 keys go in the result. See `weather/scripts/2.report.md`.
 

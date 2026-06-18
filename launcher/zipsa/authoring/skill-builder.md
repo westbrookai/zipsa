@@ -16,6 +16,12 @@ staging directory — you never pass a staging path:
   If the tool returns an error or an empty answer, the operator is briefly
   away — **do not abandon the run.** Call the same tool again with the same
   question and keep waiting. Only stop when the user explicitly tells you to.
+  **`choose`/`confirm` may return the user's literal text** when they don't
+  pick a listed option / answer yes-no (`confirm` returns `"yes"`/`"no"` or
+  the raw text; `choose` returns the chosen option or the raw text). Treat a
+  non-option / non-yes-no return as a **correction or new instruction** —
+  re-evaluate, never ignore it. Prefer `ask` when a free-form correction is
+  likely; reserve `choose` for genuinely closed sets.
 - `mcp__zipsa__report(message=...)` — emit a **non-blocking** progress
   update (write-only, returns immediately, never waits for a reply).
   Use it to narrate what you are doing: build start, while writing files,
