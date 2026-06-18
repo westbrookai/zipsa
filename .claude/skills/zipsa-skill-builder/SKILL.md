@@ -1,6 +1,6 @@
 ---
 name: zipsa-skill-builder
-description: Author a zipsa skill (zipsa-dist/* phases) from a user's intent. Use whenever the user asks to create a new zipsa skill or migrate a legacy skill to the exec format — never hand-write zipsa-dist files without this workflow.
+description: Author a zipsa skill (SKILL.md + scripts/ + zipsa/ layout) from a user's intent. Use whenever the user asks to create a new zipsa skill or migrate a legacy skill to the exec format — never hand-write skill files without this workflow.
 ---
 
 # zipsa-skill-builder
