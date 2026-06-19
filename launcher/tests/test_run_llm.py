@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from zipsa.run_llm import build_run_prompt, build_run_argv
+from zipsa.run_llm import build_run_prompt
 
 
 def _fake_proc(*, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
@@ -56,41 +56,6 @@ class TestBuildRunPrompt:
         (root / "INTENT.md").write_text("Legacy only.\n")
         p = build_run_prompt(root, user_input="")
         assert "Legacy only." in p
-
-
-class TestBuildRunArgv:
-    def test_mounts_skill_ro_and_wires_mcp(self, tmp_path):
-        root = _skill(tmp_path)
-        argv = build_run_argv(
-            image="img", skill_root=root,
-            mcp_config_host=tmp_path / "m.json", prompt="P", env_file=None,
-        )
-        assert argv[:3] == ["docker", "run", "--rm"]
-        assert f"{root}:{root}:ro" in argv         # skill mounted read-only
-        # the mcp-config file is actually mounted into the container
-        assert f"{tmp_path / 'm.json'}:/tmp/zipsa-run-mcp.json:ro" in argv
-        assert "--mcp-config" in argv
-        assert "claude" in argv and "-p" in argv
-        assert "bypassPermissions" in argv
-
-    def test_env_file_added_when_given(self, tmp_path):
-        root = _skill(tmp_path)
-        ef = tmp_path / ".env"; ef.write_text("CLAUDE_CODE_OAUTH_TOKEN=t\n")
-        argv = build_run_argv(
-            image="img", skill_root=root,
-            mcp_config_host=tmp_path / "m.json", prompt="P", env_file=ef,
-        )
-        i = argv.index("--env-file")
-        assert argv[i + 1] == str(ef)
-
-    def test_extra_mounts_added_ro(self, tmp_path):
-        root = _skill(tmp_path)
-        argv = build_run_argv(
-            image="img", skill_root=root, mcp_config_host=tmp_path / "m.json",
-            prompt="P", env_file=None,
-            extra_mounts=[(Path("/host/c.json"), "/mnt/c.json")],
-        )
-        assert "/host/c.json:/mnt/c.json:ro" in argv
 
 
 class TestRunSkillLlm:

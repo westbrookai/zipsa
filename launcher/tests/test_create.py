@@ -16,7 +16,6 @@ import pytest
 
 from zipsa.create import (
     build_create_prompt,
-    build_docker_argv,
     build_mcp_config,
     run_create,
 )
@@ -71,52 +70,6 @@ class TestBuildMcpConfig:
         from zipsa.create import _MCP_TOOL_TIMEOUT_MS
         cfg = build_mcp_config(port=1, token="t")
         assert cfg["mcpServers"]["zipsa"]["timeout"] == _MCP_TOOL_TIMEOUT_MS
-
-
-class TestBuildDockerArgv:
-    def test_command_shape(self, tmp_path):
-        staging = tmp_path / ".zipsa" / "staging" / "abc"
-        staging.mkdir(parents=True)
-        mcpcfg = tmp_path / "mcp.json"
-        mcpcfg.write_text("{}")
-
-        argv = build_docker_argv(
-            image="img:test",
-            staging_path=staging,
-            mcp_config_host=mcpcfg,
-            prompt="do the thing",
-            env_file=None,
-        )
-
-        assert argv[0:2] == ["docker", "run"]
-        assert "--rm" in argv
-        assert "-i" not in argv and "-t" not in argv
-        assert f"{staging}:{staging}:rw" in argv
-        assert any(a.startswith(f"{mcpcfg}:") and a.endswith(":ro") for a in argv)
-        # no repo mount
-        assert not any(":ro" in a and "skills" in a and str(staging) not in a
-                       for a in argv if a.endswith(":ro"))
-        assert "img:test" in argv
-        ci = argv.index("claude")
-        assert argv[ci + 1] == "-p"
-        assert argv[ci + 2] == "do the thing"
-        assert "--strict-mcp-config" in argv
-        assert "bypassPermissions" in argv
-        # workdir = staging (no repo)
-        w = argv.index("-w")
-        assert argv[w + 1] == str(staging)
-
-    def test_env_file_added_when_present(self, tmp_path):
-        staging = tmp_path / "s"; staging.mkdir()
-        mcpcfg = tmp_path / "mcp.json"; mcpcfg.write_text("{}")
-        env_file = tmp_path / ".env"; env_file.write_text("X=1\n")
-
-        argv = build_docker_argv(
-            image="i", staging_path=staging, mcp_config_host=mcpcfg,
-            prompt="p", env_file=env_file,
-        )
-        i = argv.index("--env-file")
-        assert argv[i + 1] == str(env_file)
 
 
 class TestRunCreate:

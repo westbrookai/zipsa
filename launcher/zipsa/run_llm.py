@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import codecs
 import json
-import platform
 import subprocess
 import sys
 import threading
@@ -39,8 +38,6 @@ from .core.run_server import RunServer
 # reuse create's interactivity check; mcp-config + orchestration from shared core
 from .create import _is_interactive
 from .host_served_container import run_host_served_container
-
-_CONTAINER_MCP_CONFIG = "/tmp/zipsa-run-mcp.json"
 
 
 def build_run_prompt(skill_root: Path, user_input: str) -> str:
@@ -66,36 +63,6 @@ def build_run_prompt(skill_root: Path, user_input: str) -> str:
         "===== SKILL.md (constitution) =====\n"
         f"{skill_md}\n"
     )
-
-
-def build_run_argv(
-    *, image: str, skill_root: Path, mcp_config_host: Path,
-    prompt: str, env_file: Path | None,
-    extra_mounts: list[tuple[Path, str]] | None = None,
-) -> list[str]:
-    # Docker bind mounts require absolute host paths — resolve here so the
-    # function is safe to call with a relative skill_root in isolation.
-    skill_root = skill_root.resolve()
-    argv = ["docker", "run", "--rm"]
-    if env_file is not None:
-        argv += ["--env-file", str(env_file)]
-    if platform.system() == "Linux":
-        argv += ["--add-host", "host.docker.internal:host-gateway"]
-    argv += [
-        "-v", f"{skill_root}:{skill_root}:ro",
-        "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
-    ]
-    for host, container in extra_mounts or []:
-        argv += ["-v", f"{host}:{container}:ro"]
-    argv += [
-        "-w", str(skill_root),
-        image,
-        "claude", "-p", prompt,
-        "--mcp-config", _CONTAINER_MCP_CONFIG,
-        "--strict-mcp-config",
-        "--permission-mode", "bypassPermissions",
-    ]
-    return argv
 
 
 def _tee_stream(src: IO[bytes], live: IO[str], sink: list[bytes]) -> None:
@@ -160,20 +127,6 @@ def _write_run_record(
         (run_dir / "stderr.log").write_bytes(stderr_bytes)
     except OSError:
         pass
-
-
-def _print_run_dry_run(argv: list[str], mcp_config_host: Path) -> None:
-    """Print the orchestrator (claude) container command + mcp-config path,
-    mirroring the legacy `_print_dry_run` shape: the full command on one
-    line, then one arg per line so it stays scannable. The mcp-config path
-    is echoed so the user can inspect the generated config."""
-    print("=== DRY RUN (run, exec-format) ===")
-    print(f"MCP config: {mcp_config_host}")
-    print()
-    print("Orchestrator command:")
-    print(" ".join(str(a) for a in argv))
-    for i, arg in enumerate(argv):
-        print(f"  [{i:2d}] {arg}")
 
 
 def run_skill_llm(

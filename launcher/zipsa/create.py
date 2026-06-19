@@ -43,7 +43,6 @@ Gotchas:
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -57,7 +56,10 @@ def _is_interactive(stdin) -> bool:
 from .core.forge_server import ForgeServer
 from .core.promote_skill_handler import PromoteSkillHandler
 from .core.run_script_handler import RunScriptHandler
-from .host_served_container import build_mcp_config, run_host_served_container  # noqa: F401
+from .host_served_container import (  # noqa: E402
+    build_mcp_config,  # noqa: F401  (re-exported for back-compat)
+    run_host_served_container,
+)
 
 # RunDraftHandler is imported lazily inside run_forge: it pulls in run_llm,
 # which imports back from this module (_is_interactive, build_mcp_config),
@@ -67,7 +69,6 @@ from .host_served_container import build_mcp_config, run_host_served_container  
 # skill), so `zipsa create` works regardless of where skills live (repo
 # today, registry later). Inlined into the agent's prompt — no repo mount.
 _AUTHORING_DIR = Path(__file__).parent / "authoring"
-_CONTAINER_MCP_CONFIG = "/tmp/zipsa-create-mcp.json"
 
 
 def _bundled(name: str) -> str:
@@ -138,46 +139,6 @@ def build_forge_prompt(intent: str, staging_path: Path) -> str:
 #   - forge runs in the foreground and is Ctrl-C-able, so a truly stuck call
 #     is still recoverable by the operator.
 _MCP_TOOL_TIMEOUT_MS = 10_800_000
-
-
-def build_docker_argv(
-    *,
-    image: str,
-    staging_path: Path,
-    mcp_config_host: Path,
-    prompt: str,
-    env_file: Path | None,
-) -> list[str]:
-    """Build the headless `docker run` for the authoring session.
-
-    Pure function — unit-testable without docker. claude runs headless
-    (`-p`) — there is no interactive TTY into the container; the agent
-    converses with the host user via the ask/confirm/choose MCP tools.
-    No `-i`/`-t`: the container needs no stdin (the prompt is an arg,
-    the conversation is over MCP), and leaving stdin to the container
-    would race the host HITL reader for the user's keystrokes. The
-    container's stdout still streams back (subprocess inherits it).
-
-    The only mounts are the staging dir (rw, where the skill is written)
-    and the mcp-config (ro). No repo mount — the workflow + contract are
-    inlined into the prompt, so create needs nothing from any repo.
-    """
-    argv = ["docker", "run", "--rm"]
-    if env_file is not None:
-        argv += ["--env-file", str(env_file)]
-    if platform.system() == "Linux":
-        argv += ["--add-host", "host.docker.internal:host-gateway"]
-    argv += [
-        "-v", f"{staging_path}:{staging_path}:rw",
-        "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
-        "-w", str(staging_path),
-        image,
-        "claude", "-p", prompt,
-        "--mcp-config", _CONTAINER_MCP_CONFIG,
-        "--strict-mcp-config",
-        "--permission-mode", "bypassPermissions",
-    ]
-    return argv
 
 
 def run_forge(
