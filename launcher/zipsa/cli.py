@@ -756,6 +756,10 @@ def forge_skill(
             help="Where the finished skill is promoted (default: <repo>/skills in a git repo, else ~/.zipsa/skills)",
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the would-run command and exit without forging"),
+    ] = False,
 ):
     """Forge a new zipsa skill, with the user, in the runtime container.
 
@@ -782,7 +786,7 @@ def forge_skill(
     dest = skills_dir.resolve() if skills_dir is not None else default_forge_skills_dir()
     try:
         rc = run_forge(
-            intent, skills_dir=dest, image=image,
+            intent, skills_dir=dest, image=image, dry_run=dry_run,
         )
     except FileNotFoundError:
         typer.echo(

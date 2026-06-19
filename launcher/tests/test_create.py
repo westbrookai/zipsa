@@ -16,7 +16,6 @@ import pytest
 
 from zipsa.create import (
     build_create_prompt,
-    build_docker_argv,
     build_mcp_config,
     run_create,
 )
@@ -62,61 +61,15 @@ class TestBuildMcpConfig:
         """_MCP_TOOL_TIMEOUT_MS must be >= 10_800_000 (3 h) to survive a
         relayed or away-operator forge session without timing out ask/confirm/
         choose before the human responds."""
-        from zipsa.create import _MCP_TOOL_TIMEOUT_MS
+        from zipsa.host_served_container import _MCP_TOOL_TIMEOUT_MS
         assert _MCP_TOOL_TIMEOUT_MS >= 10_800_000
 
     def test_mcp_config_propagates_timeout_constant(self):
         """build_mcp_config must embed _MCP_TOOL_TIMEOUT_MS verbatim so the
         container claude's tool calls respect the human-latency bound."""
-        from zipsa.create import _MCP_TOOL_TIMEOUT_MS
+        from zipsa.host_served_container import _MCP_TOOL_TIMEOUT_MS
         cfg = build_mcp_config(port=1, token="t")
         assert cfg["mcpServers"]["zipsa"]["timeout"] == _MCP_TOOL_TIMEOUT_MS
-
-
-class TestBuildDockerArgv:
-    def test_command_shape(self, tmp_path):
-        staging = tmp_path / ".zipsa" / "staging" / "abc"
-        staging.mkdir(parents=True)
-        mcpcfg = tmp_path / "mcp.json"
-        mcpcfg.write_text("{}")
-
-        argv = build_docker_argv(
-            image="img:test",
-            staging_path=staging,
-            mcp_config_host=mcpcfg,
-            prompt="do the thing",
-            env_file=None,
-        )
-
-        assert argv[0:2] == ["docker", "run"]
-        assert "--rm" in argv
-        assert "-i" not in argv and "-t" not in argv
-        assert f"{staging}:{staging}:rw" in argv
-        assert any(a.startswith(f"{mcpcfg}:") and a.endswith(":ro") for a in argv)
-        # no repo mount
-        assert not any(":ro" in a and "skills" in a and str(staging) not in a
-                       for a in argv if a.endswith(":ro"))
-        assert "img:test" in argv
-        ci = argv.index("claude")
-        assert argv[ci + 1] == "-p"
-        assert argv[ci + 2] == "do the thing"
-        assert "--strict-mcp-config" in argv
-        assert "bypassPermissions" in argv
-        # workdir = staging (no repo)
-        w = argv.index("-w")
-        assert argv[w + 1] == str(staging)
-
-    def test_env_file_added_when_present(self, tmp_path):
-        staging = tmp_path / "s"; staging.mkdir()
-        mcpcfg = tmp_path / "mcp.json"; mcpcfg.write_text("{}")
-        env_file = tmp_path / ".env"; env_file.write_text("X=1\n")
-
-        argv = build_docker_argv(
-            image="i", staging_path=staging, mcp_config_host=mcpcfg,
-            prompt="p", env_file=env_file,
-        )
-        i = argv.index("--env-file")
-        assert argv[i + 1] == str(env_file)
 
 
 class TestRunCreate:
@@ -158,3 +111,44 @@ class TestIsInteractive:
         class _P:
             def isatty(self): return False
         assert _is_interactive(_P()) is True
+
+
+class TestRunForgeDryRun:
+    """`run_forge(dry_run=True)` prints the would-run command + mcp-config
+    path and returns 0 WITHOUT starting a ForgeServer (no bound port),
+    spawning the container, or leaving an orphan staging dir / config (#175)."""
+
+    @patch("zipsa.create.subprocess.run")
+    @patch("zipsa.create.ForgeServer")
+    def test_dry_run_spawns_nothing(self, mock_forge_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        srv = MagicMock(); srv.port = 5; srv.token = "t"
+        mock_forge_cls.return_value = srv
+
+        from zipsa.create import run_forge
+        rc = run_forge("make a thing", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+
+        assert rc == 0
+        mock_run.assert_not_called()
+        srv.start.assert_not_called()
+
+    @patch("zipsa.create.subprocess.run")
+    @patch("zipsa.create.ForgeServer")
+    def test_dry_run_leaves_no_orphan_staging_or_config(
+        self, mock_forge_cls, mock_run, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        srv = MagicMock(); srv.port = 5; srv.token = "t"
+        mock_forge_cls.return_value = srv
+
+        from zipsa.create import run_forge
+        run_forge("x", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+        run_forge("x", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+
+        staging = home / "staging"
+        drafts = list(staging.glob("draft-*")) if staging.exists() else []
+        # the placeholder dir is never created on disk
+        assert all(not d.is_dir() for d in drafts)
+        cfgs = list(staging.glob("*.mcp.json")) if staging.exists() else []
+        assert len(cfgs) <= 1

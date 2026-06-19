@@ -42,9 +42,7 @@ Gotchas:
 
 from __future__ import annotations
 
-import json
 import os
-import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -58,6 +56,10 @@ def _is_interactive(stdin) -> bool:
 from .core.forge_server import ForgeServer
 from .core.promote_skill_handler import PromoteSkillHandler
 from .core.run_script_handler import RunScriptHandler
+from .host_served_container import (  # noqa: E402
+    build_mcp_config,  # noqa: F401  (re-exported for back-compat)
+    run_host_served_container,
+)
 
 # RunDraftHandler is imported lazily inside run_forge: it pulls in run_llm,
 # which imports back from this module (_is_interactive, build_mcp_config),
@@ -67,7 +69,6 @@ from .core.run_script_handler import RunScriptHandler
 # skill), so `zipsa create` works regardless of where skills live (repo
 # today, registry later). Inlined into the agent's prompt — no repo mount.
 _AUTHORING_DIR = Path(__file__).parent / "authoring"
-_CONTAINER_MCP_CONFIG = "/tmp/zipsa-create-mcp.json"
 
 
 def _bundled(name: str) -> str:
@@ -123,101 +124,20 @@ def build_forge_prompt(intent: str, staging_path: Path) -> str:
     )
 
 
-# Per-call timeout (ms) for the forge MCP server's tools.
-#
-# ask/confirm/choose legitimately block on a human (including a relayed forge
-# where the operator steps away and returns). 30 min (1_800_000) was too short
-# for those cases — a late answer aborted the whole session.
-#
-# 3 h (10_800_000) is the new cap:
-#   - HITL tools only ever reach this bound when a human is present; unattended
-#     runs raise HitlUnattended immediately (no block), so this larger value
-#     does not mask hangs in CI or non-interactive contexts.
-#   - exec/run are bounded by their own inline timeout-seconds; the MCP call
-#     returns when the phase finishes regardless of this outer cap.
-#   - forge runs in the foreground and is Ctrl-C-able, so a truly stuck call
-#     is still recoverable by the operator.
-_MCP_TOOL_TIMEOUT_MS = 10_800_000
-
-
-def build_mcp_config(port: int, token: str) -> dict:
-    """The --mcp-config the container claude uses to reach the host
-    ForgeServer. Container → host via host.docker.internal; token
-    embedded directly (the file is host-private and mounted ro)."""
-    return {
-        "mcpServers": {
-            "zipsa": {
-                "type": "http",
-                "url": f"http://host.docker.internal:{port}/mcp",
-                "headersHelper": (
-                    f'echo \'{{"Authorization": "Bearer {token}"}}\''
-                ),
-                "timeout": _MCP_TOOL_TIMEOUT_MS,
-            }
-        }
-    }
-
-
-def build_docker_argv(
-    *,
-    image: str,
-    staging_path: Path,
-    mcp_config_host: Path,
-    prompt: str,
-    env_file: Path | None,
-) -> list[str]:
-    """Build the headless `docker run` for the authoring session.
-
-    Pure function — unit-testable without docker. claude runs headless
-    (`-p`) — there is no interactive TTY into the container; the agent
-    converses with the host user via the ask/confirm/choose MCP tools.
-    No `-i`/`-t`: the container needs no stdin (the prompt is an arg,
-    the conversation is over MCP), and leaving stdin to the container
-    would race the host HITL reader for the user's keystrokes. The
-    container's stdout still streams back (subprocess inherits it).
-
-    The only mounts are the staging dir (rw, where the skill is written)
-    and the mcp-config (ro). No repo mount — the workflow + contract are
-    inlined into the prompt, so create needs nothing from any repo.
-    """
-    argv = ["docker", "run", "--rm"]
-    if env_file is not None:
-        argv += ["--env-file", str(env_file)]
-    if platform.system() == "Linux":
-        argv += ["--add-host", "host.docker.internal:host-gateway"]
-    argv += [
-        "-v", f"{staging_path}:{staging_path}:rw",
-        "-v", f"{mcp_config_host}:{_CONTAINER_MCP_CONFIG}:ro",
-        "-w", str(staging_path),
-        image,
-        "claude", "-p", prompt,
-        "--mcp-config", _CONTAINER_MCP_CONFIG,
-        "--strict-mcp-config",
-        "--permission-mode", "bypassPermissions",
-    ]
-    return argv
-
-
 def run_forge(
     intent: str,
     *,
     skills_dir: Path,
     image: str,
     env_file: Path | None = None,
+    dry_run: bool = False,
 ) -> int:
-    """Forge a skill via a headless container session. Returns the
-    container claude's exit code.
+    """Forge a skill via a host-served headless container session. Returns
+    the container claude's exit code.
 
-    Starts a host ForgeServer (ask/confirm/choose + path-scoped exec +
-    run + promote), spins up a fresh staging dir, writes the mcp-config,
-    runs the headless forge container, and tears the server down
-    afterwards. `skills_dir` is where promote lands the finished skill.
-
-    Unlike create's exec=run_phases model, forge gives the agent two
-    test tools: exec (one script, fast debug) via RunScriptHandler and
-    run (the whole draft through the real run-time) via RunDraftHandler.
-    Both are scoped to the staging dir by the ForgeServer, so the agent
-    never names a staging path.
+    With `dry_run=True` the would-run command + mcp-config path are printed
+    and 0 is returned WITHOUT starting the ForgeServer (no bound port),
+    spawning the container, or creating a staging dir.
     """
     import sys
     import threading
@@ -231,46 +151,44 @@ def run_forge(
 
     staging_root = zipsa_paths.zipsa_home() / "staging"
     staging_root.mkdir(parents=True, exist_ok=True)
-    staging_path = Path(tempfile.mkdtemp(prefix="draft-", dir=staging_root))
 
-    # HITL routes the agent's ask/confirm/choose to the host terminal —
-    # the conversation channel (claude runs headless in the container).
-    # ZIPSA_FORCE_INTERACTIVE=1 lets a non-TTY driver (web UI, or a relay
-    # feeding answers via a pipe) act as the user, same hook the executor
-    # uses for the legacy run path.
-    hitl_io = HitlIO(
-        stdin=sys.stdin,
-        stdout=sys.stdout,
-        stdout_lock=threading.Lock(),
-        is_interactive=_is_interactive(sys.stdin),
-    )
-    server = ForgeServer(
-        hitl_io,
-        exec_handler=RunScriptHandler(docker_image=image, skill_root=staging_path),
-        run_handler=RunDraftHandler(image=image, skill_root=staging_path),
-        promote_handler=PromoteSkillHandler(dest_root=skills_dir),
-        staging_path=str(staging_path),
-    )
-    server.start()
-    try:
-        mcp_config = build_mcp_config(server.port, server.token)
-        mcp_config_host = staging_root / f"{staging_path.name}.mcp.json"
-        mcp_config_host.write_text(json.dumps(mcp_config))
+    def _work_dir(dry: bool) -> Path:
+        if dry:
+            # Placeholder — NOT created on disk; the printed mount is plausible
+            # but a dry run leaves no orphan staging dir.
+            return staging_root / "draft-DRYRUN"
+        return Path(tempfile.mkdtemp(prefix="draft-", dir=staging_root))
 
-        argv = build_docker_argv(
-            image=image,
-            staging_path=staging_path,
-            mcp_config_host=mcp_config_host,
-            prompt=build_forge_prompt(intent, staging_path),
-            env_file=env_file if env_file.exists() else None,
+    def _server(work_dir: Path):
+        hitl_io = HitlIO(
+            stdin=sys.stdin, stdout=sys.stdout,
+            stdout_lock=threading.Lock(), is_interactive=_is_interactive(sys.stdin),
         )
-        # stdin=DEVNULL: the host terminal's stdin belongs exclusively to
-        # the HITL reader (ForgeServer's ask/confirm/choose), not the
-        # container. stdout/stderr inherit so the agent's progress shows.
-        proc = subprocess.run(argv, stdin=subprocess.DEVNULL)
-        return proc.returncode
-    finally:
-        server.stop()
+        return ForgeServer(
+            hitl_io,
+            exec_handler=RunScriptHandler(docker_image=image, skill_root=work_dir),
+            run_handler=RunDraftHandler(image=image, skill_root=work_dir),
+            promote_handler=PromoteSkillHandler(dest_root=skills_dir),
+            staging_path=str(work_dir),
+        )
+
+    def _execute(argv: list[str]) -> int:
+        # stdin DEVNULL: the host terminal's stdin belongs to the HITL reader,
+        # not the container. stdout/stderr inherit so progress shows.
+        return subprocess.run(argv, stdin=subprocess.DEVNULL).returncode
+
+    return run_host_served_container(
+        image=image,
+        env_file=env_file,
+        work_dir_factory=_work_dir,
+        mode="rw",
+        extra_mounts=None,
+        server_factory=_server,
+        prompt_factory=lambda wd: build_forge_prompt(intent, wd),
+        execute=_execute,
+        mcp_subdir="staging",
+        dry_run=dry_run,
+    )
 
 
 def run_create(

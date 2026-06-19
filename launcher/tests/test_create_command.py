@@ -11,7 +11,7 @@ cwd-relative. Both `create` and `forge` delegate to `run_forge`.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -119,3 +119,21 @@ class TestForgeCommand:
 
         assert mock_run.call_args.kwargs["skills_dir"] == explicit.resolve()
         mock_default.assert_not_called()
+
+    @patch("zipsa.cli.default_forge_skills_dir")
+    @patch("zipsa.create.subprocess.run")
+    @patch("zipsa.create.ForgeServer")
+    def test_forge_dry_run_prints_and_runs_nothing(
+        self, mock_forge_cls, mock_run, mock_default, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        mock_default.return_value = tmp_path / "skills"
+        srv = MagicMock(); srv.port = 5; srv.token = "t"
+        mock_forge_cls.return_value = srv
+
+        result = runner.invoke(app, ["forge", "make a thing", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        srv.start.assert_not_called()
+        assert "docker run" in result.output
