@@ -30,6 +30,39 @@ There are **two parallel execution engines**:
 
 **The central question of this review:** what is the migration path off `DockerExecutor`, and what can be unified/retired now vs. what must wait for legacy-skill deprecation.
 
+### Decision (2026-06-19): DockerExecutor is on the **deprecation path**
+
+Direction confirmed: legacy manifest-based execution is sunsetting; exec-format
+is canonical. We do **not** invest in `executor.py` beyond keeping it alive; we
+consolidate the **new** stack and plan the executor's sunset.
+
+**Evidence it may already be near-dead in production:** every skill in `skills/`
+(12) carries exec-format markers (`SKILL.md`/`scripts/`), so `zipsa run` on them
+short-circuits to `run_skill_llm` (cli.py:405-418) — `DockerExecutor` is never
+reached. 7 of them *also* still carry a vestigial `manifest.yaml` (migration
+leftover, unused at run time because the exec path wins). The only pure-legacy
+`manifest.yaml`-only skills are **test fixtures**. So `DockerExecutor`'s live
+exercise is essentially the test suite plus any externally-installed legacy
+skills a user may have.
+
+**What this re-frames in §4:**
+- T2 (shared docker-argv): unify the **two new** builders (`exec_runner` +
+  `host_served_container`); leave `executor`'s builder to die with it — do NOT
+  merge legacy into the shared base.
+- T3 (MCP server base): consolidate the **new** servers (`RunServer` +
+  `ForgeServer`); `HitlServer` + `CreateServer` are legacy/dead and sunset with
+  the executor — don't include them in the base.
+- T1/E (decompose `executor.py`): **downgrade** — don't refactor code we're
+  retiring. Instead: a sunset plan (confirm no prod route, clean hybrid
+  `manifest.yaml`, migrate executor-dependent tests, then remove).
+- T4 (delete dead code) and the §4 sunset of the legacy stack become the spine
+  of the work; the rest (cli split, dedup, paths SSOT) proceeds on the new stack.
+
+**Open question for the spine discussion:** do any real (non-test) users still
+run pure-legacy `manifest.yaml` skills via `DockerExecutor`? And can the 7
+hybrid skills drop their vestigial `manifest.yaml`? Those answers set how fast
+the executor can actually be removed.
+
 ---
 
 ## §2 Cross-cutting themes
