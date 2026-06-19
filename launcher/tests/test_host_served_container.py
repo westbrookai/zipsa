@@ -75,3 +75,98 @@ class TestBuildMcpConfig:
         srv = cfg["mcpServers"]["zipsa"]
         assert "51111" in srv["url"]
         assert "tok" in srv["headersHelper"]
+
+
+from unittest.mock import MagicMock
+
+
+class TestRunHostServedContainer:
+    def _common(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        ef = tmp_path / ".env"  # absent → env_file None branch
+        return ef
+
+    def test_dry_run_spawns_nothing_and_no_server(self, tmp_path, monkeypatch, capsys):
+        from zipsa.host_served_container import run_host_served_container
+        ef = self._common(tmp_path, monkeypatch)
+        server_factory = MagicMock()
+        execute = MagicMock()
+
+        rc = run_host_served_container(
+            image="img", env_file=ef,
+            work_dir_factory=lambda dry: tmp_path / "wd",
+            mode="rw", extra_mounts=None,
+            server_factory=server_factory,
+            prompt_factory=lambda wd: "PROMPT",
+            execute=execute,
+            mcp_subdir="staging",
+            dry_run=True,
+        )
+
+        assert rc == 0
+        server_factory.assert_not_called()
+        execute.assert_not_called()
+        out = capsys.readouterr().out
+        assert "docker run" in out
+        assert "PROMPT" in out
+        assert ".mcp.json" in out
+        # un-created work dir; single fixed config
+        assert not (tmp_path / "wd").exists()
+        cfgs = list((tmp_path / "home" / "staging").glob("*.mcp.json"))
+        assert [c.name for c in cfgs] == ["dry-run.mcp.json"]
+
+    def test_dry_run_config_is_single_fixed_file(self, tmp_path, monkeypatch):
+        from zipsa.host_served_container import run_host_served_container
+        ef = self._common(tmp_path, monkeypatch)
+        for _ in range(2):
+            run_host_served_container(
+                image="img", env_file=ef,
+                work_dir_factory=lambda dry: tmp_path / "wd",
+                mode="ro", extra_mounts=None,
+                server_factory=MagicMock(), prompt_factory=lambda wd: "P",
+                execute=MagicMock(), mcp_subdir="run", dry_run=True,
+            )
+        cfgs = list((tmp_path / "home" / "run").glob("*.mcp.json"))
+        assert len(cfgs) == 1
+
+    def test_real_path_starts_stops_server_and_runs_execute(self, tmp_path, monkeypatch):
+        from zipsa.host_served_container import run_host_served_container
+        ef = self._common(tmp_path, monkeypatch)
+        srv = MagicMock(); srv.port = 51120; srv.token = "tok"
+        captured = {}
+        def execute(argv):
+            captured["argv"] = argv
+            return 7
+
+        rc = run_host_served_container(
+            image="img", env_file=ef,
+            work_dir_factory=lambda dry: tmp_path / "wd",
+            mode="ro", extra_mounts=None,
+            server_factory=lambda wd: srv,
+            prompt_factory=lambda wd: "P",
+            execute=execute, mcp_subdir="run", dry_run=False,
+        )
+
+        assert rc == 7
+        srv.start.assert_called_once()
+        srv.stop.assert_called_once()
+        assert captured["argv"][:2] == ["docker", "run"]
+
+    def test_real_path_stops_server_even_when_execute_raises(self, tmp_path, monkeypatch):
+        from zipsa.host_served_container import run_host_served_container
+        ef = self._common(tmp_path, monkeypatch)
+        srv = MagicMock(); srv.port = 1; srv.token = "t"
+        def boom(argv):
+            raise RuntimeError("x")
+
+        import pytest
+        with pytest.raises(RuntimeError):
+            run_host_served_container(
+                image="img", env_file=ef,
+                work_dir_factory=lambda dry: tmp_path / "wd",
+                mode="ro", extra_mounts=None,
+                server_factory=lambda wd: srv,
+                prompt_factory=lambda wd: "P",
+                execute=boom, mcp_subdir="run", dry_run=False,
+            )
+        srv.stop.assert_called_once()

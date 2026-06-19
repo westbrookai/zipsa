@@ -23,8 +23,8 @@ import json
 import os
 import platform
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import paths as zipsa_paths
 
@@ -58,7 +58,7 @@ def build_host_served_argv(
     mcp_config_host: Path,
     prompt: str,
     env_file: Path | None,
-    extra_mounts: "list[tuple[Path, str]] | None" = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
 ) -> list[str]:
     """Build the headless `docker run … claude -p …` for a host-served
     session. Pure — unit-testable without docker. `mode` is "ro" (run:
@@ -85,3 +85,87 @@ def build_host_served_argv(
         "--permission-mode", "bypassPermissions",
     ]
     return argv
+
+
+def _config_dir(subdir: str) -> Path:
+    d = zipsa_paths.zipsa_home() / subdir
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _write_dry_run_config(subdir: str) -> Path:
+    """A single FIXED dry-run.mcp.json (overwritten each run) with
+    placeholder port/token — dry runs never accumulate config files."""
+    cfg = _config_dir(subdir) / "dry-run.mcp.json"
+    cfg.write_text(json.dumps(build_mcp_config(0, "<token>")))
+    return cfg
+
+
+def _write_run_config(subdir: str, port: int, token: str) -> Path:
+    """Real-path config: a unique temp file (preserves run's current
+    behavior; real-path accumulation is pre-existing and out of scope)."""
+    fd, path = tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=_config_dir(subdir))
+    os.close(fd)
+    cfg = Path(path)
+    cfg.write_text(json.dumps(build_mcp_config(port, token)))
+    return cfg
+
+
+def _print_dry_run(argv: list[str], mcp_config_host: Path) -> None:
+    """Mirror #173's dry-run shape: the full command on one line, then one
+    arg per line (scannable), plus the mcp-config path."""
+    print("=== DRY RUN (host-served container) ===")
+    print(f"MCP config: {mcp_config_host}")
+    print()
+    print(" ".join(str(a) for a in argv))
+    for i, arg in enumerate(argv):
+        print(f"  [{i:2d}] {arg}")
+
+
+def run_host_served_container(
+    *,
+    image: str,
+    env_file: Path | None,
+    work_dir_factory: Callable[[bool], Path],
+    mode: str,
+    extra_mounts: list[tuple[Path, str]] | None,
+    server_factory: Callable[[Path], object],
+    prompt_factory: Callable[[Path], str],
+    execute: Callable[[list[str]], int],
+    mcp_subdir: str,
+    dry_run: bool = False,
+) -> int:
+    """Run (or, under dry_run, describe) a host-served claude container.
+
+    Seams: `work_dir_factory(dry_run)` resolves the mount dir (creating it
+    only on the real path); `server_factory(work_dir)` builds the host MCP
+    server (called ONLY on the real path); `prompt_factory(work_dir)` the
+    prompt; `execute(argv)` runs the container and returns its exit code.
+    `mcp_subdir` is the ~/.zipsa subdir for the config file.
+    """
+    work_dir = work_dir_factory(dry_run)
+    prompt = prompt_factory(work_dir)
+    ef = env_file if (env_file is not None and env_file.exists()) else None
+
+    if dry_run:
+        cfg = _write_dry_run_config(mcp_subdir)
+        argv = build_host_served_argv(
+            image=image, work_dir=work_dir, mode=mode,
+            mcp_config_host=cfg, prompt=prompt, env_file=ef,
+            extra_mounts=extra_mounts,
+        )
+        _print_dry_run(argv, cfg)
+        return 0
+
+    server = server_factory(work_dir)
+    server.start()
+    try:
+        cfg = _write_run_config(mcp_subdir, server.port, server.token)
+        argv = build_host_served_argv(
+            image=image, work_dir=work_dir, mode=mode,
+            mcp_config_host=cfg, prompt=prompt, env_file=ef,
+            extra_mounts=extra_mounts,
+        )
+        return execute(argv)
+    finally:
+        server.stop()
