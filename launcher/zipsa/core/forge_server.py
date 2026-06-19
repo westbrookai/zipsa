@@ -11,8 +11,8 @@ Design decisions:
 - tool_names() returns a literal list matching the registrations; deriving from
   the FastMCP instance is fragile (internal API), so it's documented explicitly.
 
-Follow-up: this is the 3rd copy of the FastMCP/uvicorn boilerplate
-(RunServer/CreateServer/ForgeServer) — a shared base is deferred (out of scope).
+Follow-up: this shares FastMCP/uvicorn boilerplate with RunServer —
+a shared base is deferred (out of scope).
 """
 
 from __future__ import annotations
