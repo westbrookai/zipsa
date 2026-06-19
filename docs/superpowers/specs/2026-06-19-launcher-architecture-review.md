@@ -36,14 +36,30 @@ Direction confirmed: legacy manifest-based execution is sunsetting; exec-format
 is canonical. We do **not** invest in `executor.py` beyond keeping it alive; we
 consolidate the **new** stack and plan the executor's sunset.
 
-**Evidence it may already be near-dead in production:** every skill in `skills/`
-(12) carries exec-format markers (`SKILL.md`/`scripts/`), so `zipsa run` on them
-short-circuits to `run_skill_llm` (cli.py:405-418) — `DockerExecutor` is never
-reached. 7 of them *also* still carry a vestigial `manifest.yaml` (migration
-leftover, unused at run time because the exec path wins). The only pure-legacy
-`manifest.yaml`-only skills are **test fixtures**. So `DockerExecutor`'s live
-exercise is essentially the test suite plus any externally-installed legacy
-skills a user may have.
+**CORRECTION (investigated 2026-06-19): DockerExecutor is the LIVE engine for
+7 of the 12 skills — it is NOT near-dead.** An earlier draft of this section
+assumed the exec path wins for hybrid skills; that was wrong. The actual
+predicate `is_exec_format` (`exec_skill.py:248-256`) returns **False** when a
+`manifest.yaml` exists at the root OR at `zipsa-dist/manifest.yaml` — so the
+presence of `manifest.yaml` **forces** the legacy `DockerExecutor` path
+(cli.py:401-419 → construct at cli.py:510). The 7 `skills/` entries that still
+carry `manifest.yaml` — `agenthud-report`, `bip-daily-x`, `daily-bip-tweet`,
+`daily-notion-log`, `daily-progress`, `notion-page-write`, `x-post` — therefore
+**run on DockerExecutor today**. The 5 manifest-free skills route to
+`run_skill_llm`. Child-skill subprocesses (`RunSkillHandler`) re-enter the same
+discriminator and route by the child's own format.
+
+**Sole production construction site:** `cli.py:510`. Test construction sites:
+`test_executor.py` (~93), `test_cli.py` (~21 patches), `test_run_logger.py` (5),
+`test_exec_install_run.py` (1 explicit legacy-routing test).
+
+**Therefore the executor sunset has a hard prerequisite:** migrate those 7
+hybrid skills to pure exec-format (drop `manifest.yaml` + `zipsa-dist/manifest.yaml`,
+ensure `SKILL.md` + `scripts/` + `zipsa/package.yaml` works for each — some
+hybrids lack `scripts/` and need it created). That is a **skills-side workstream**,
+separate from the launcher refactor. Only once all 7 are migrated does the
+`cli.py:510` route become dead and `DockerExecutor` (+ `HitlServer` + legacy
+model path + ~120 test constructions) become removable.
 
 **What this re-frames in §4:**
 - T2 (shared docker-argv): unify the **two new** builders (`exec_runner` +
