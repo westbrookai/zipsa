@@ -55,7 +55,7 @@ class TestRunScriptHandler:
         h = RunScriptHandler(docker_image="img", skill_root=root)
         h.run(script="1.do", mounts=[("/host/creds.json", "/mnt/creds.json")])
         # Host path threads through as a Path (exec_runner does
-        # f"{host_path}:..." and build_run_argv expects Path host paths).
+        # f"{host_path}:..." and build_host_served_argv expects Path host paths).
         assert captured["extra_mounts"] == [(Path("/host/creds.json"), "/mnt/creds.json")]
 
     def test_tilde_mount_is_expanded(self, tmp_path, monkeypatch):

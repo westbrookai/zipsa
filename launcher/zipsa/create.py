@@ -124,23 +124,6 @@ def build_forge_prompt(intent: str, staging_path: Path) -> str:
     )
 
 
-# Per-call timeout (ms) for the forge MCP server's tools.
-#
-# ask/confirm/choose legitimately block on a human (including a relayed forge
-# where the operator steps away and returns). 30 min (1_800_000) was too short
-# for those cases — a late answer aborted the whole session.
-#
-# 3 h (10_800_000) is the new cap:
-#   - HITL tools only ever reach this bound when a human is present; unattended
-#     runs raise HitlUnattended immediately (no block), so this larger value
-#     does not mask hangs in CI or non-interactive contexts.
-#   - exec/run are bounded by their own inline timeout-seconds; the MCP call
-#     returns when the phase finishes regardless of this outer cap.
-#   - forge runs in the foreground and is Ctrl-C-able, so a truly stuck call
-#     is still recoverable by the operator.
-_MCP_TOOL_TIMEOUT_MS = 10_800_000
-
-
 def run_forge(
     intent: str,
     *,

@@ -61,13 +61,13 @@ class TestBuildMcpConfig:
         """_MCP_TOOL_TIMEOUT_MS must be >= 10_800_000 (3 h) to survive a
         relayed or away-operator forge session without timing out ask/confirm/
         choose before the human responds."""
-        from zipsa.create import _MCP_TOOL_TIMEOUT_MS
+        from zipsa.host_served_container import _MCP_TOOL_TIMEOUT_MS
         assert _MCP_TOOL_TIMEOUT_MS >= 10_800_000
 
     def test_mcp_config_propagates_timeout_constant(self):
         """build_mcp_config must embed _MCP_TOOL_TIMEOUT_MS verbatim so the
         container claude's tool calls respect the human-latency bound."""
-        from zipsa.create import _MCP_TOOL_TIMEOUT_MS
+        from zipsa.host_served_container import _MCP_TOOL_TIMEOUT_MS
         cfg = build_mcp_config(port=1, token="t")
         assert cfg["mcpServers"]["zipsa"]["timeout"] == _MCP_TOOL_TIMEOUT_MS
 
