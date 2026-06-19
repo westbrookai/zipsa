@@ -102,8 +102,8 @@ def _write_dry_run_config(subdir: str) -> Path:
 
 
 def _write_run_config(subdir: str, port: int, token: str) -> Path:
-    """Real-path config: a unique temp file (preserves run's current
-    behavior; real-path accumulation is pre-existing and out of scope)."""
+    """Real-path config: a unique temp file the caller unlinks after the
+    session ends (it carries the bearer token — never left on disk)."""
     fd, path = tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=_config_dir(subdir))
     os.close(fd)
     cfg = Path(path)
@@ -159,6 +159,7 @@ def run_host_served_container(
 
     server = server_factory(work_dir)
     server.start()
+    cfg: Path | None = None
     try:
         cfg = _write_run_config(mcp_subdir, server.port, server.token)
         argv = build_host_served_argv(
@@ -169,3 +170,7 @@ def run_host_served_container(
         return execute(argv)
     finally:
         server.stop()
+        # The mcp-config carries the bearer token — don't leave it on disk
+        # once the session ends (parity with the pre-refactor run path).
+        if cfg is not None:
+            cfg.unlink(missing_ok=True)

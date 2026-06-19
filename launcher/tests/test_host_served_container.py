@@ -170,3 +170,19 @@ class TestRunHostServedContainer:
                 execute=boom, mcp_subdir="run", dry_run=False,
             )
         srv.stop.assert_called_once()
+
+    def test_real_path_unlinks_bearer_token_config(self, tmp_path, monkeypatch):
+        from zipsa.host_served_container import run_host_served_container
+        ef = self._common(tmp_path, monkeypatch)
+        srv = MagicMock(); srv.port = 9; srv.token = "secret"
+
+        run_host_served_container(
+            image="img", env_file=ef,
+            work_dir_factory=lambda dry: tmp_path / "wd",
+            mode="ro", extra_mounts=None,
+            server_factory=lambda wd: srv,
+            prompt_factory=lambda wd: "P",
+            execute=lambda argv: 0, mcp_subdir="run", dry_run=False,
+        )
+        # the bearer-token config must NOT persist after a real run
+        assert not list((tmp_path / "home" / "run").glob("run-*.mcp.json"))
