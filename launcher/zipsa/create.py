@@ -27,10 +27,6 @@ runtime image and zipsa version evolve independently).
 The skill name is decided LAST (via promote); until then the draft
 lives in a temp staging dir and the repo is untouched.
 
-`run_create` remains as a deprecated alias of `run_forge` for backward
-compatibility, so `zipsa create` + the relay workflow (and the docs
-that reference `zipsa create`) still work.
-
 Gotchas:
 - Staging is mounted into the container at its own host path, so files
   the agent writes are host-valid as-is.
@@ -75,39 +71,17 @@ def _bundled(name: str) -> str:
     return (_AUTHORING_DIR / name).read_text()
 
 
-def build_create_prompt(intent: str, staging_path: Path) -> str:
-    """The prompt handed to the in-container authoring claude.
-
-    The workflow + contract are bundled with the launcher and inlined
-    here, so the agent needs nothing from any repo — just this prompt,
-    the MCP tools, and the staging dir.
-    """
-    return (
-        "You are authoring a new zipsa skill, with the user, via the zipsa\n"
-        "MCP tools. Follow the WORKFLOW and honor the CONTRACT below.\n\n"
-        f"User's rough intent: {intent}\n"
-        f"Staging directory (write the skill files here): {staging_path}\n"
-        f"Test with mcp__zipsa__exec(staging_path=\"{staging_path}\", ...);\n"
-        f"finalize with mcp__zipsa__promote(staging_path=\"{staging_path}\",\n"
-        "name=...). The name is decided LAST, after the user is happy.\n\n"
-        "===== WORKFLOW =====\n"
-        f"{_bundled('skill-builder.md')}\n"
-        "===== CONTRACT (AUTHORING guide) =====\n"
-        f"{_bundled('AUTHORING.md')}\n"
-    )
-
-
 def build_forge_prompt(intent: str, staging_path: Path) -> str:
     """The prompt handed to the in-container forge authoring claude.
 
-    Like build_create_prompt, but drives the full forge loop: clarify
-    intent, check feasibility & gather prerequisites, draft (writing
-    INTENT.md once scope is settled), exec-debug individual scripts, run
-    the WHOLE draft through the real run-time, iterate, and promote LAST.
+    Drives the full forge loop: clarify intent, check feasibility &
+    gather prerequisites, draft (writing INTENT.md once scope is
+    settled), exec-debug individual scripts, run the WHOLE draft through
+    the real run-time, iterate, and promote LAST.
 
     Forge tools are PATH-SCOPED — the server injects the staging path, so
-    the agent calls exec/run/promote WITHOUT a staging_path arg (unlike
-    create). The staging dir is still where the agent writes files.
+    the agent calls exec/run/promote WITHOUT a staging_path arg. The
+    staging dir is still where the agent writes files.
     """
     return (
         "You are authoring (forging) a new zipsa skill, with the user, via\n"
@@ -189,16 +163,3 @@ def run_forge(
         mcp_subdir="staging",
         dry_run=dry_run,
     )
-
-
-def run_create(
-    intent: str,
-    *,
-    skills_dir: Path,
-    image: str,
-    env_file: Path | None = None,
-) -> int:
-    """Deprecated alias of run_forge, kept for library/external callers
-    after the create→forge rename. (The `zipsa create` CLI command calls
-    run_forge directly; it does not route through this wrapper.)"""
-    return run_forge(intent, skills_dir=skills_dir, image=image, env_file=env_file)

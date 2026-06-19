@@ -9,40 +9,11 @@ mcp-config (ro).
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from zipsa.create import (
-    build_create_prompt,
     build_mcp_config,
-    run_create,
 )
-
-
-class TestBuildCreatePrompt:
-    def test_inlines_bundled_workflow_and_contract(self, tmp_path):
-        staging = tmp_path / ".zipsa" / "staging" / "abc"
-        prompt = build_create_prompt("umbrella alert at 8am", staging)
-
-        assert "umbrella alert at 8am" in prompt
-        assert str(staging) in prompt
-        # Bundled workflow + contract are inlined (markers from each)
-        assert "WORKFLOW" in prompt and "CONTRACT" in prompt
-        assert "skill-builder workflow" in prompt          # skill-builder.md
-        assert "Phase contract" in prompt                  # AUTHORING.md
-        assert "mcp__zipsa__exec" in prompt
-        assert "mcp__zipsa__promote" in prompt
-        assert "feasibility" in prompt.lower()
-        assert "prerequisite" in prompt.lower()
-
-    def test_no_repo_paths_referenced(self, tmp_path):
-        """The prompt must not tell the agent to read repo files — those
-        won't exist once skills live in a registry."""
-        prompt = build_create_prompt("x", tmp_path / "s")
-        assert ".claude/skills" not in prompt
-        assert "skills/AUTHORING.md" not in prompt
 
 
 class TestBuildMcpConfig:
@@ -70,25 +41,6 @@ class TestBuildMcpConfig:
         from zipsa.host_served_container import _MCP_TOOL_TIMEOUT_MS
         cfg = build_mcp_config(port=1, token="t")
         assert cfg["mcpServers"]["zipsa"]["timeout"] == _MCP_TOOL_TIMEOUT_MS
-
-
-class TestRunCreate:
-    @patch("zipsa.create.run_forge")
-    def test_delegates_to_run_forge(self, mock_forge, tmp_path):
-        mock_forge.return_value = 0
-        rc = run_create("make a thing", skills_dir=tmp_path / "skills",
-                        image="img:test")
-        assert rc == 0
-        mock_forge.assert_called_once()
-        # same intent + skills_dir + image forwarded
-        assert mock_forge.call_args.args[0] == "make a thing"
-        assert mock_forge.call_args.kwargs["skills_dir"] == tmp_path / "skills"
-        assert mock_forge.call_args.kwargs["image"] == "img:test"
-
-    @patch("zipsa.create.run_forge")
-    def test_propagates_exit_code(self, mock_forge, tmp_path):
-        mock_forge.return_value = 7
-        assert run_create("x", skills_dir=tmp_path / "s", image="i") == 7
 
 
 class TestIsInteractive:

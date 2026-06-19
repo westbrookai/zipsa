@@ -1,5 +1,5 @@
 """Host MCP server for the run-time: exposes exec + HITL to the in-container
-LLM that runs a skill. Sibling of CreateServer, minus promote.
+LLM that runs a skill. Counterpart of ForgeServer, without promote.
 
 Design decisions:
 - Registers exactly exec + ask + confirm + choose; no promote, no memory, no
