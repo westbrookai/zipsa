@@ -158,3 +158,44 @@ class TestIsInteractive:
         class _P:
             def isatty(self): return False
         assert _is_interactive(_P()) is True
+
+
+class TestRunForgeDryRun:
+    """`run_forge(dry_run=True)` prints the would-run command + mcp-config
+    path and returns 0 WITHOUT starting a ForgeServer (no bound port),
+    spawning the container, or leaving an orphan staging dir / config (#175)."""
+
+    @patch("zipsa.create.subprocess.run")
+    @patch("zipsa.create.ForgeServer")
+    def test_dry_run_spawns_nothing(self, mock_forge_cls, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("ZIPSA_HOME", str(tmp_path / "home"))
+        srv = MagicMock(); srv.port = 5; srv.token = "t"
+        mock_forge_cls.return_value = srv
+
+        from zipsa.create import run_forge
+        rc = run_forge("make a thing", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+
+        assert rc == 0
+        mock_run.assert_not_called()
+        srv.start.assert_not_called()
+
+    @patch("zipsa.create.subprocess.run")
+    @patch("zipsa.create.ForgeServer")
+    def test_dry_run_leaves_no_orphan_staging_or_config(
+        self, mock_forge_cls, mock_run, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        monkeypatch.setenv("ZIPSA_HOME", str(home))
+        srv = MagicMock(); srv.port = 5; srv.token = "t"
+        mock_forge_cls.return_value = srv
+
+        from zipsa.create import run_forge
+        run_forge("x", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+        run_forge("x", skills_dir=tmp_path / "skills", image="img", dry_run=True)
+
+        staging = home / "staging"
+        drafts = list(staging.glob("draft-*")) if staging.exists() else []
+        # the placeholder dir is never created on disk
+        assert all(not d.is_dir() for d in drafts)
+        cfgs = list(staging.glob("*.mcp.json")) if staging.exists() else []
+        assert len(cfgs) <= 1

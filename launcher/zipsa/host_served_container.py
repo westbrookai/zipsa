@@ -29,7 +29,10 @@ from pathlib import Path
 from . import paths as zipsa_paths
 
 _CONTAINER_MCP_CONFIG = "/tmp/zipsa-mcp.json"
-_MCP_TOOL_TIMEOUT_MS = 600_000
+# 3 h — ask/confirm/choose legitimately block on a human (relayed forge,
+# away operator). Unattended runs raise HitlUnattended immediately, so this
+# larger value does not mask hangs in CI or non-interactive contexts.
+_MCP_TOOL_TIMEOUT_MS = 10_800_000
 
 
 def build_mcp_config(port: int, token: str) -> dict:
