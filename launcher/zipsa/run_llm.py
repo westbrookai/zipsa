@@ -22,11 +22,9 @@ from __future__ import annotations
 
 import codecs
 import json
-import os
 import platform
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -34,11 +32,13 @@ from typing import IO
 
 from . import exec_runner
 from . import paths as zipsa_paths
-# reuse create's container mcp-config shape + interactivity check
-from .create import _is_interactive, build_mcp_config
 from .core.hitl_mcp import HitlIO
-from .core.run_server import RunServer
 from .core.run_script_handler import RunScriptHandler
+from .core.run_server import RunServer
+
+# reuse create's interactivity check; mcp-config + orchestration from shared core
+from .create import _is_interactive
+from .host_served_container import run_host_served_container
 
 _CONTAINER_MCP_CONFIG = "/tmp/zipsa-run-mcp.json"
 
@@ -71,7 +71,7 @@ def build_run_prompt(skill_root: Path, user_input: str) -> str:
 def build_run_argv(
     *, image: str, skill_root: Path, mcp_config_host: Path,
     prompt: str, env_file: Path | None,
-    extra_mounts: "list[tuple[Path, str]] | None" = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
 ) -> list[str]:
     # Docker bind mounts require absolute host paths — resolve here so the
     # function is safe to call with a relative skill_root in isolation.
@@ -98,7 +98,7 @@ def build_run_argv(
     return argv
 
 
-def _tee_stream(src: "IO[bytes]", live: "IO[str]", sink: list[bytes]) -> None:
+def _tee_stream(src: IO[bytes], live: IO[str], sink: list[bytes]) -> None:
     """Pump bytes from `src` to both the live text stream and a byte buffer.
 
     Reads raw bytes (claude streams UTF-8, incl. multi-byte Korean). The
@@ -179,9 +179,9 @@ def _print_run_dry_run(argv: list[str], mcp_config_host: Path) -> None:
 def run_skill_llm(
     skill_root: Path, user_input: str, *,
     image: str, env_file: Path | None = None,
-    extra_mounts: "list[tuple[Path, str]] | None" = None,
-    stdout: "IO[str] | None" = None,
-    stderr: "IO[str] | None" = None,
+    extra_mounts: list[tuple[Path, str]] | None = None,
+    stdout: IO[str] | None = None,
+    stderr: IO[str] | None = None,
     dry_run: bool = False,
 ) -> int:
     """Execute a skill as an LLM following SKILL.md, calling scripts via
@@ -195,10 +195,9 @@ def run_skill_llm(
     code (the container claude's).
 
     With `dry_run=True` the orchestrator container command + mcp-config
-    path are printed and the function returns 0 WITHOUT starting the
-    RunServer (no bound port), spawning the container, or writing a run
-    record. The mcp-config is built with a placeholder port/token since no
-    server is running — it only documents the config shape.
+    path are printed and the function returns 0 without starting the
+    RunServer, spawning the container, or writing a run record. Dry-run
+    is handled by the shared `run_host_served_container` core.
     """
     if stdout is None:
         stdout = sys.stdout
@@ -208,63 +207,27 @@ def run_skill_llm(
         env_file = zipsa_paths.global_env_file()
     skill_root = skill_root.resolve()
 
-    if dry_run:
-        # Spawn nothing and bind no port: don't start the RunServer. The
-        # mcp-config still needs a port/token to render — use placeholders
-        # (the real values are only known once the server binds). The config
-        # is written so the printed path points at an inspectable file. A
-        # FIXED path (overwritten each run) — not a unique mkstemp — so dry
-        # runs never accumulate orphan config files.
-        cfg_dir = zipsa_paths.zipsa_home() / "run"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        mcp_config_host = cfg_dir / "dry-run.mcp.json"
-        mcp_config_host.write_text(json.dumps(build_mcp_config(0, "<token>")))
-        argv = build_run_argv(
-            image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
-            prompt=build_run_prompt(skill_root, user_input),
-            env_file=env_file if env_file.exists() else None,
+    def _server(work_dir: Path):
+        hitl_io = HitlIO(
+            stdin=sys.stdin, stdout=sys.stdout,
+            stdout_lock=threading.Lock(), is_interactive=_is_interactive(sys.stdin),
         )
-        _print_run_dry_run(argv, mcp_config_host)
-        return 0
-
-    run_dir = exec_runner.new_run_dir(skill_root.name)
-    try:
-        (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-
-    hitl_io = HitlIO(
-        stdin=sys.stdin, stdout=sys.stdout,
-        stdout_lock=threading.Lock(), is_interactive=_is_interactive(sys.stdin),
-    )
-    # extra_mounts (skill creds, etc.) go to the SCRIPT's exec sub-container via
-    # RunScriptHandler.default_mounts — NOT into the run-time (claude) container.
-    # The claude container only needs Claude auth (env_file); mounting skill creds
-    # there would be incorrect and a security concern.
-    handler = RunScriptHandler(
-        docker_image=image, skill_root=skill_root, default_mounts=extra_mounts,
-    )
-    server = RunServer(hitl_io, handler)
-    server.start()
-    mcp_config_host: Path | None = None
-    try:
-        mcp_config = build_mcp_config(server.port, server.token)
-        cfg_dir = zipsa_paths.zipsa_home() / "run"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        fd, cfg_path = tempfile.mkstemp(prefix="run-", suffix=".mcp.json", dir=cfg_dir)
-        os.close(fd)  # mkstemp opens the file; we only need the path
-        mcp_config_host = Path(cfg_path)
-        mcp_config_host.write_text(json.dumps(mcp_config))
-        argv = build_run_argv(
-            image=image, skill_root=skill_root, mcp_config_host=mcp_config_host,
-            prompt=build_run_prompt(skill_root, user_input),
-            env_file=env_file if env_file.exists() else None,
-            # Skill creds are NOT passed here — the claude container gets only
-            # Claude auth. Mounts reach the script via RunScriptHandler above.
+        # extra_mounts (skill creds) go to the SCRIPT's exec sub-container via
+        # RunScriptHandler.default_mounts — NOT the claude container.
+        handler = RunScriptHandler(
+            docker_image=image, skill_root=work_dir, default_mounts=extra_mounts,
         )
+        return RunServer(hitl_io, handler)
+
+    def _execute(argv: list[str]) -> int:
+        run_dir = exec_runner.new_run_dir(skill_root.name)
+        try:
+            (run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         started = time.monotonic()
-        # stdin stays DEVNULL — the relay FIFO feeds the MCP HITL tools, not
-        # claude's stdin. stdout/stderr are PIPEd so we can tee them.
+        # stdin DEVNULL — HITL goes over MCP, not claude's stdin. stdout/stderr
+        # PIPEd so we can tee them to the terminal AND the run record.
         proc = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -283,7 +246,6 @@ def run_skill_llm(
         t_out.join()
         t_err.join()
         duration_ms = int((time.monotonic() - started) * 1000)
-
         _write_run_record(
             run_dir,
             skill_name=skill_root.name,
@@ -294,10 +256,16 @@ def run_skill_llm(
             stderr_bytes=b"".join(err_chunks),
         )
         return exit_code
-    finally:
-        server.stop()
-        # The mcp-config carries the bearer token — don't leave it lying
-        # around once the session ends. (One file per run would otherwise
-        # accumulate under ~/.zipsa/run/.)
-        if mcp_config_host is not None:
-            mcp_config_host.unlink(missing_ok=True)
+
+    return run_host_served_container(
+        image=image,
+        env_file=env_file,
+        work_dir_factory=lambda _dry: skill_root,
+        mode="ro",
+        extra_mounts=None,  # claude container; creds reach the script handler
+        server_factory=_server,
+        prompt_factory=lambda wd: build_run_prompt(wd, user_input),
+        execute=_execute,
+        mcp_subdir="run",
+        dry_run=dry_run,
+    )
